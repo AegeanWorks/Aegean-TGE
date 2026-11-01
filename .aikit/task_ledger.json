@@ -1,37 +1,16 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-PROFILE",
+    "task_id": "TGE-VNNI",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793522034.9647815,
+    "updated_at": 1793525613.0855494,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-COMPARE",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 30/30 tests; decode 30-33 t/s vs llama.cpp 15.2 t/s on identical Q8_0 weights",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793497880.1376762,
-      "timestamp_str": "2026-11-01 04:51:20",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-COMPARE",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-HARDEN' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793518816.5081666,
-      "timestamp_str": "2026-11-01 10:40:16",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-HARDEN",
       "phase": "phase 1",
@@ -252,6 +231,27 @@
       "status": "superseded",
       "timestamp": 1793522034.9647815,
       "timestamp_str": "2026-11-01 11:33:54",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-VNNI",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; VNNI kernel faster in isolation (284/342 GFLOPS) but slower end-to-end (150.9 vs 186.0); reverted; 45/45 tests, parity intact",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793525613.0855494,
+      "timestamp_str": "2026-11-01 12:33:33",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PROFILE",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-VNNI' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793525613.0855494,
+      "timestamp_str": "2026-11-01 12:33:33",
       "agent": "unidentified"
     }
   ]

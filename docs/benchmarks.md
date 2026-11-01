@@ -257,6 +257,32 @@ same idea is not tried twice on intuition alone.
 | `_MM_HINT_NTA` on the GEMV prefetch | 16T median 29.8 vs 28.4 for T0, inside the noise band | Rejected: no measurable difference |
 | Align the 64-token prompt chunk to the six-token group | prefill median 185.4 vs 191.6 | Rejected: measured worse, so the tail stays on the single-token path |
 | **Integer inner loop for prefill** (quantize activations, `maddubs`, no widening) | prefill median **150.0 t/s** (145.9 / 150.0 / 152.1) vs **186.0** float (five samples, 150.3-201.7) | Rejected: **22 percent slower** |
+| **AVX-VNNI `dpbusd` inner loop** | kernel in isolation **faster** (283.96 vs 267.88 GFLOPS on ffn, 342.03 vs 262.20 on the output projection) but end-to-end prefill **150.9 vs 186.0 t/s** | Rejected: the faster kernel does not survive integration |
+
+The VNNI attempt is the most useful negative result so far, because it separates
+the two layers cleanly.
+
+The kernel itself was genuinely faster. `dpbusd` moves the integer dot onto the
+FMA ports, which is exactly what the `maddubs` attempt lacked: that version was
+fighting `psignb` for the single port that issues it. Weights are biased into
+unsigned bytes with `xor 0x80`, and because the activation is the biased operand
+the correction term is per-lane and depends only on the weights, so it is
+computed once per block and shared by every token in the group.
+
+Getting there exposed a real bug worth recording: `dpbusd` spreads 32 products
+across eight int32 lanes, so the bias correction must be applied per lane. The
+first version subtracted a block-wide total from every lane and produced errors
+of 178-1890; the per-lane correction brought that to 0.06-1.2, which is ordinary
+activation-quantization noise.
+
+But end-to-end it lost, and the reason is not in the kernel: quantizing the
+activations allocates two vectors on every `matvec` call, and the model makes
+roughly 150 of those per chunk. The isolated benchmark has the same quantization
+cost but amortizes it over one huge matrix instead of many small ones.
+
+So the kernel-level idea is sound and the integration is what failed. The next
+attempt should keep a reusable activation buffer per worker instead of
+allocating per call, then re-measure with `tge bench batch` and end to end.
 
 The integer prefill kernel is the most instructive rejection. It was built
 exactly as planned — activations quantized once per call, `sign` + `maddubs` +
