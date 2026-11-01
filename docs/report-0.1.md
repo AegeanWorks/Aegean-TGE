@@ -25,6 +25,12 @@ first tests for it, guards the decoder's public entry points, and records a
 rejected optimization: the integer-domain Q8 inner loop measured flat and was
 reverted (ADR-0006).
 
+Revision 6 (same day) closes two of the stated caveats. Prompt processing is now
+batched: **11 to 170.9 t/s**, 60 percent of llama.cpp instead of 4 percent, and
+token-identical across chunk boundaries. Sampling is implemented: temperature,
+top-k, top-p, min-p, repetition penalty and seed. Tokenizer and quantized types
+other than Q8_0 remain open.
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -165,7 +171,7 @@ Full description: `docs/architecture.md`.
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (35 cases) | `tests/` | 35/35 passing |
+| Test harness (43 cases) | `tests/` | 43/43 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
@@ -226,14 +232,14 @@ In the order that matters:
 
 ## 9. Known limitations
 
-- **Prompt processing is not batched.** TGE feeds prompt tokens one at a time
-  (~11 t/s) against llama.cpp's batched ~279 t/s. Decode, the metric this
-  milestone targeted, is where the comparison is valid.
+- Prompt processing is batched and measured at 170.9 t/s against llama.cpp's
+  285.3 on the same weights. The gap is arithmetic: the batch kernel sustains
+  about 207 GFLOPS against llama.cpp's 358.
 - No tokenizer. Tokens are supplied and returned as ids. This matches how
   `llama-bench` measures and is the reason a speed comparison was possible at
   all, but it is not a usable end-user path yet.
-- Greedy sampling only; no temperature, top-k, top-p, min-p or repetition
-  penalty.
+- Sampling supports temperature, top-k, top-p, min-p, repetition penalty and a
+  seed. The benchmarks use greedy so their numbers are reproducible.
 - Context is capped at 2048 tokens by allocation, not by the model.
 - Only Q8_0 and F32 weights are supported. Q4_K, Q5_K and Q6_K are parsed and
   identified but not executable.

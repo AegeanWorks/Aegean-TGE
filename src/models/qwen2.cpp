@@ -17,6 +17,11 @@ namespace {
 // metadata advertises far more than this decoder needs to demonstrate decode.
 constexpr int kMaxContext = 2048;
 
+// Prompt chunk. The batch kernel re-reads the activation rows once per output
+// row, so the chunk has to stay small enough that they live in cache. 64 rows
+// of the widest activation (4864 floats) is about 1.2 MiB per worker.
+constexpr int kPrefillChunk = 64;
+
 float silu(float value) { return value / (1.0F + std::exp(-value)); }
 
 }  // namespace
@@ -117,6 +122,19 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error) 
     model->logits_.assign(static_cast<std::size_t>(config.vocab_size), 0.0F);
     model->scores_.assign(static_cast<std::size_t>(model->context_), 0.0F);
 
+    const std::size_t prefill_rows = static_cast<std::size_t>(
+        std::min(kPrefillChunk, model->context_));
+    model->batch_x_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
+    model->batch_h_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
+    model->batch_q_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
+    model->batch_attn_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
+    model->batch_k_.assign(prefill_rows * static_cast<std::size_t>(kv_dim), 0.0F);
+    model->batch_v_.assign(prefill_rows * static_cast<std::size_t>(kv_dim), 0.0F);
+    model->batch_gate_.assign(
+        prefill_rows * static_cast<std::size_t>(config.feed_forward_length), 0.0F);
+    model->batch_up_.assign(
+        prefill_rows * static_cast<std::size_t>(config.feed_forward_length), 0.0F);
+
     model->rope_freq_.resize(static_cast<std::size_t>(config.head_dim / 2));
     for (int index = 0; index < config.head_dim / 2; ++index) {
       model->rope_freq_[static_cast<std::size_t>(index)] =
@@ -208,6 +226,43 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
   throw std::runtime_error("matvec: unsupported weight type");
 }
 
+void Qwen2::batch_matvec(const Matrix& weight, const float* input,
+                         float* output, int tokens) const {
+  if (tokens <= 0) {
+    return;
+  }
+  // Prompt processing is compute-bound, so it takes every logical processor
+  // rather than the smaller decode pool.
+  const int workers = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
+  const cpu::GemvConfig config{workers};
+
+  if (weight.type == gguf::TensorType::Q8_0) {
+    cpu::Q8BatchArgs args;
+    args.data = weight.data;
+    args.rows = weight.rows;
+    args.cols = weight.cols;
+    args.input = input;
+    args.tokens = tokens;
+    args.out = output;
+    kernels().gemv_q8_batch(args, config);
+    return;
+  }
+  if (weight.type == gguf::TensorType::F32) {
+    cpu::GemvArgs args;
+    args.rows = weight.rows;
+    args.cols = weight.cols;
+    args.matrix = reinterpret_cast<const float*>(weight.data);
+    args.ldm = weight.cols;
+    for (int token = 0; token < tokens; ++token) {
+      args.vector = input + static_cast<std::size_t>(token) * weight.cols;
+      args.out = output + static_cast<std::size_t>(token) * weight.rows;
+      kernels().gemv_f32(args, config);
+    }
+    return;
+  }
+  throw std::runtime_error("batch_matvec: unsupported weight type");
+}
+
 void Qwen2::dequant_row(const Matrix& weight, int row, float* output) const {
   if (row < 0 || row >= weight.rows) {
     throw std::runtime_error("embedding row out of range");
@@ -268,7 +323,8 @@ void Qwen2::apply_rope(float* values, int heads, int position) const {
   }
 }
 
-void Qwen2::attention(int layer, int position) {
+void Qwen2::attention(int layer, int position, const float* queries,
+                      float* out_buffer) {
   const int heads = config_.head_count;
   const int kv_heads = config_.head_count_kv;
   const int head_dim = config_.head_dim;
@@ -283,7 +339,7 @@ void Qwen2::attention(int layer, int position) {
   const float* v_base = v_cache_.data() + layer_base;
 
   for (int head = 0; head < heads; ++head) {
-    const float* query = q_.data() + static_cast<std::size_t>(head) * head_dim;
+    const float* query = queries + static_cast<std::size_t>(head) * head_dim;
     const int kv_head = head / group;
     const std::size_t kv_head_offset = static_cast<std::size_t>(kv_head) * head_dim;
 
@@ -308,7 +364,7 @@ void Qwen2::attention(int layer, int position) {
     }
     const float inverse = 1.0F / total;
 
-    float* out = attn_.data() + static_cast<std::size_t>(head) * head_dim;
+    float* out = out_buffer + static_cast<std::size_t>(head) * head_dim;
     for (int index = 0; index < head_dim; ++index) {
       out[index] = 0.0F;
     }
@@ -365,7 +421,7 @@ const float* Qwen2::forward(int token, int position) {
     std::memcpy(v_cache_.data() + slot, v_.data(),
                 sizeof(float) * static_cast<std::size_t>(kv_dim));
 
-    attention(index, position);
+    attention(index, position, q_.data(), attn_.data());
 
     matvec(layer.wo, attn_.data(), h_.data());
     for (int axis = 0; axis < dim; ++axis) {
@@ -385,6 +441,130 @@ const float* Qwen2::forward(int token, int position) {
     }
   }
 
+  rms_norm(h_.data(), x_.data(), output_norm_);
+  matvec(output_, h_.data(), logits_.data());
+  return logits_.data();
+}
+
+const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
+  if (tokens == nullptr || count <= 0) {
+    throw std::runtime_error("prefill: empty prompt");
+  }
+  if (start_position < 0 || start_position + count > context_) {
+    throw std::runtime_error("prefill: prompt does not fit in the context");
+  }
+  for (int index = 0; index < count; ++index) {
+    if (tokens[index] < 0 || tokens[index] >= config_.vocab_size) {
+      throw std::runtime_error("prefill: token outside the vocabulary");
+    }
+  }
+
+  const int dim = config_.embedding_length;
+  const int kv_dim = config_.kv_dim();
+  const int ffn = config_.feed_forward_length;
+  const int capacity = static_cast<int>(batch_x_.size() / static_cast<std::size_t>(dim));
+
+  int consumed = 0;
+  int last_rows = 0;
+  while (consumed < count) {
+    const int chunk = std::min(capacity, count - consumed);
+    const int* chunk_tokens = tokens + consumed;
+    const int chunk_start = start_position + consumed;
+    last_rows = chunk;
+
+    for (int token = 0; token < chunk; ++token) {
+      dequant_row(token_embd_, chunk_tokens[token],
+                  batch_x_.data() + static_cast<std::size_t>(token) * dim);
+    }
+
+    for (int index = 0; index < config_.block_count; ++index) {
+      const Layer& layer = layers_[static_cast<std::size_t>(index)];
+
+      for (int token = 0; token < chunk; ++token) {
+        rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+                 batch_x_.data() + static_cast<std::size_t>(token) * dim,
+                 layer.attn_norm);
+      }
+
+      batch_matvec(layer.wq, batch_h_.data(), batch_q_.data(), chunk);
+      batch_matvec(layer.wk, batch_h_.data(), batch_k_.data(), chunk);
+      batch_matvec(layer.wv, batch_h_.data(), batch_v_.data(), chunk);
+
+      for (int token = 0; token < chunk; ++token) {
+        float* q = batch_q_.data() + static_cast<std::size_t>(token) * dim;
+        float* k = batch_k_.data() + static_cast<std::size_t>(token) * kv_dim;
+        float* v = batch_v_.data() + static_cast<std::size_t>(token) * kv_dim;
+        for (int axis = 0; axis < dim; ++axis) {
+          q[axis] += layer.q_bias[axis];
+        }
+        for (int axis = 0; axis < kv_dim; ++axis) {
+          k[axis] += layer.k_bias[axis];
+          v[axis] += layer.v_bias[axis];
+        }
+
+        const int position = chunk_start + token;
+        apply_rope(q, config_.head_count, position);
+        apply_rope(k, config_.head_count_kv, position);
+
+        const std::size_t slot =
+            static_cast<std::size_t>(index) * context_ * kv_dim +
+            static_cast<std::size_t>(position) * kv_dim;
+        std::memcpy(k_cache_.data() + slot, k,
+                    sizeof(float) * static_cast<std::size_t>(kv_dim));
+        std::memcpy(v_cache_.data() + slot, v,
+                    sizeof(float) * static_cast<std::size_t>(kv_dim));
+      }
+
+      // Every key and value in this chunk is in the cache before attention
+      // runs, so each token sees exactly the causal prefix it should.
+      for (int token = 0; token < chunk; ++token) {
+        attention(index, chunk_start + token,
+                  batch_q_.data() + static_cast<std::size_t>(token) * dim,
+                  batch_attn_.data() + static_cast<std::size_t>(token) * dim);
+      }
+
+      batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), chunk);
+      for (int token = 0; token < chunk; ++token) {
+        float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
+        const float* residual =
+            batch_h_.data() + static_cast<std::size_t>(token) * dim;
+        for (int axis = 0; axis < dim; ++axis) {
+          x[axis] += residual[axis];
+        }
+      }
+
+      for (int token = 0; token < chunk; ++token) {
+        rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+                 batch_x_.data() + static_cast<std::size_t>(token) * dim,
+                 layer.ffn_norm);
+      }
+
+      batch_matvec(layer.w_gate, batch_h_.data(), batch_gate_.data(), chunk);
+      batch_matvec(layer.w_up, batch_h_.data(), batch_up_.data(), chunk);
+      const std::size_t activation_elements =
+          static_cast<std::size_t>(chunk) * static_cast<std::size_t>(ffn);
+      for (std::size_t position = 0; position < activation_elements; ++position) {
+        batch_gate_[position] = silu(batch_gate_[position]) * batch_up_[position];
+      }
+
+      batch_matvec(layer.w_down, batch_gate_.data(), batch_h_.data(), chunk);
+      for (int token = 0; token < chunk; ++token) {
+        float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
+        const float* residual =
+            batch_h_.data() + static_cast<std::size_t>(token) * dim;
+        for (int axis = 0; axis < dim; ++axis) {
+          x[axis] += residual[axis];
+        }
+      }
+    }
+
+    consumed += chunk;
+  }
+
+  // Only the final prompt token needs logits to seed decoding.
+  const std::size_t last = static_cast<std::size_t>(last_rows - 1) * dim;
+  std::memcpy(x_.data(), batch_x_.data() + last,
+              sizeof(float) * static_cast<std::size_t>(dim));
   rms_norm(h_.data(), x_.data(), output_norm_);
   matvec(output_, h_.data(), logits_.data());
   return logits_.data();

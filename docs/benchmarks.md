@@ -145,6 +145,27 @@ llama-bench -m <q8_0.gguf> -p 128 -n 128 -t 6 -r 5
 hardware.** Both engines lose badly at 16 threads, which is the same phenomenon
 in both: synchronisation and E-core contention outweigh the extra bandwidth.
 
+### Prompt processing, now that it is batched
+
+Prompt processing used to feed tokens one at a time, re-reading every weight per
+token. It now runs through a batched kernel that reuses one weight row across a
+group of tokens, which is the only reason prefill and decode differ by more than
+an order of magnitude.
+
+| Engine | Threads | Prompt (pp512) | Decode (tg128) |
+|---|---|---|---|
+| TGE | 6 / all | **170.9 t/s** (median of 3) | **23.4 t/s** (median of 3) |
+| llama.cpp | 6 | 285.3 ± 22.8 t/s | 17.9 ± 1.2 t/s |
+
+Both measured with a 510-token context resident, so decode numbers here are
+lower than the short-context figures above: attention has more keys to walk.
+
+That is **11 t/s to 171 t/s, a 15x improvement**, and prefill is now 60 percent
+of llama.cpp rather than 4 percent. Decode remains faster than llama.cpp.
+
+The remaining prefill gap is arithmetic: TGE's batch kernel sustains about
+207 GFLOPS, llama.cpp's quantized GEMM about 358 GFLOPS on the same six cores.
+
 ### Correctness, not just speed
 
 A fast decoder producing the wrong tokens would be worthless, so the greedy
@@ -160,14 +181,15 @@ llama.cpp on every position of that span.
 
 ### Honest caveats
 
-- **Prompt processing is not comparable.** TGE feeds prompt tokens one at a
-  time and reports ~11 t/s; llama.cpp batches the prompt and reports ~279 t/s.
-  Batched prefill is not implemented. Decode is the metric this milestone
-  targeted, and prefill will be addressed separately.
+- The batched prefill path reproduces greedy output token for token against
+  llama.cpp, including across chunk boundaries (verified on a 136-token prompt,
+  which crosses two 64-token chunks).
 - Context is capped at 2048 tokens in this build, not the model's 32768.
-- Greedy sampling only; no temperature, top-k, top-p or repetition penalty.
-- No tokenizer. Token ids are supplied and returned directly, which is exactly
-  what `llama-bench` does as well.
+- Sampling supports temperature, top-k, top-p, min-p and repetition penalty, but
+  the comparison above uses greedy so the numbers are reproducible.
+- There is no tokenizer. Token ids are supplied and returned directly, which is
+  exactly what `llama-bench` does as well.
+- Only Q8_0 weights are executable; Q4_K, Q5_K and Q6_K are parsed but rejected.
 
 ## 7. Rejected: integer-domain Q8 inner loop
 

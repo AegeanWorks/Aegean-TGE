@@ -16,6 +16,7 @@
 #include "tge/memory/system_ram.hpp"
 #include "tge/models/gguf.hpp"
 #include "tge/models/qwen2.hpp"
+#include "tge/models/sampling.hpp"
 #include "tge/tensor/ops.hpp"
 
 namespace {
@@ -53,6 +54,12 @@ void print_usage() {
       "        --tokens \"a b c\"  prompt token ids\n"
       "        --n N            tokens to generate (default 32)\n"
       "        --threads N      worker threads (default: all logical)\n"
+      "        --temp T         sampling temperature; 0 is greedy (default 0)\n"
+      "        --top-k N        keep the N best tokens (default off)\n"
+      "        --top-p P        nucleus probability mass (default 1.0)\n"
+      "        --min-p P        drop tokens below this fraction of the best\n"
+      "        --repeat-penalty R  penalty for already seen tokens (default 1)\n"
+      "        --seed N         random seed for sampling\n"
       "        --print-ids      print generated token ids\n"
       "  version              print the engine version\n",
       TGE_VERSION);
@@ -378,7 +385,8 @@ int command_gguf(const char* path) {
 }
 
 int command_generate(const std::string& path, const std::vector<int>& prompt,
-                     int count, int threads, bool print_ids) {
+                     int count, int threads, bool print_ids,
+                     const tge::models::SamplingParams& sampling) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -418,10 +426,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt,
               config.head_count, config.head_count_kv, config.vocab_size);
 
   const auto prefill_start = Clock::now();
-  const float* logits = nullptr;
-  for (std::size_t index = 0; index < prompt.size(); ++index) {
-    logits = model->forward(prompt[index], static_cast<int>(index));
-  }
+  const float* logits = model->prefill(prompt.data(),
+                                       static_cast<int>(prompt.size()), 0);
   const auto prefill_end = Clock::now();
   const double prefill_seconds =
       std::chrono::duration<double>(prefill_end - prefill_start).count();
@@ -431,13 +437,27 @@ int command_generate(const std::string& path, const std::vector<int>& prompt,
               static_cast<double>(prompt.size()) / prefill_seconds);
 
   std::vector<int> generated;
-  generated.push_back(tge::models::Qwen2::argmax(logits, model->vocab_size()));
+  std::vector<int> history = prompt;
+  std::vector<float> scores;
+  std::vector<int> order;
+  std::uint32_t random_state = sampling.seed != 0 ? sampling.seed : 0x9E3779B9u;
+
+  const int vocabulary = model->vocab_size();
+  const auto draw = [&]() {
+    const int token = tge::models::sample_token(
+        logits, vocabulary, sampling, history.data(),
+        static_cast<int>(history.size()), scores, order, random_state);
+    history.push_back(token);
+    return token;
+  };
+
+  generated.push_back(draw());
 
   int position = static_cast<int>(prompt.size());
   const auto decode_start = Clock::now();
   for (int index = 1; index < count; ++index) {
     logits = model->forward(generated.back(), position++);
-    generated.push_back(tge::models::Qwen2::argmax(logits, model->vocab_size()));
+    generated.push_back(draw());
   }
   const auto decode_end = Clock::now();
   const double decode_seconds =
@@ -521,12 +541,24 @@ std::vector<int> parse_token_list(const char* text) {
   return tokens;
 }
 
+bool parse_float(const char* text, float& value) {
+  char* end = nullptr;
+  const double parsed = std::strtod(text, &end);
+  if (end == text || *end != '\0') {
+    return false;
+  }
+  value = static_cast<float>(parsed);
+  return true;
+}
+
 int run_generate(int argc, char** argv) {
   std::string model_path;
   std::vector<int> prompt;
   int count = 32;
   int threads = 0;
   bool print_ids = false;
+  tge::models::SamplingParams sampling;
+  int seed = 0;
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--print-ids") == 0) {
@@ -548,6 +580,18 @@ int run_generate(int argc, char** argv) {
       ok = parse_int(value, count);
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
+    } else if (std::strcmp(flag, "--seed") == 0) {
+      ok = parse_int(value, seed);
+    } else if (std::strcmp(flag, "--top-k") == 0) {
+      ok = parse_int(value, sampling.top_k);
+    } else if (std::strcmp(flag, "--temp") == 0) {
+      ok = parse_float(value, sampling.temperature);
+    } else if (std::strcmp(flag, "--top-p") == 0) {
+      ok = parse_float(value, sampling.top_p);
+    } else if (std::strcmp(flag, "--min-p") == 0) {
+      ok = parse_float(value, sampling.min_p);
+    } else if (std::strcmp(flag, "--repeat-penalty") == 0) {
+      ok = parse_float(value, sampling.repeat_penalty);
     } else {
       std::fprintf(stderr, "generate: unknown option '%s'\n", flag);
       return 2;
@@ -562,7 +606,9 @@ int run_generate(int argc, char** argv) {
     std::fprintf(stderr, "generate: --model is required\n");
     return 2;
   }
-  return command_generate(model_path, prompt, count, threads, print_ids);
+  sampling.seed = static_cast<std::uint32_t>(seed);
+  return command_generate(model_path, prompt, count, threads, print_ids,
+                          sampling);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {

@@ -1,6 +1,10 @@
 # Aegean TGE
 
-[![Built with AIKit](https://img.shields.io/badge/built%20with-AIKit-6f42c1)](https://github.com/AegeanWorks/AIKit)
+<!-- aegean:media:start -->
+<p align="center"><img src="assets/social-preview.svg" alt="Aegean-Tge social preview" width="100%"></p>
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-AL--1.1-2f9e44" alt="License"></a> <a href="https://github.com/AegeanWorks/AIKit"><img src="https://img.shields.io/badge/AIKit-integrated-6f42c1" alt="AIKit Integrated"></a></p>
+<!-- aegean:media:end -->
+
 
 Native Windows hybrid CPU and GPU LLM inference engine in C++20 that treats system RAM and GPU VRAM as one coordinated memory tier.
 
@@ -92,14 +96,15 @@ aegean-tge/
 | RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
 | **Decode, Qwen2.5-0.5B Q8_0** | **30-33 t/s (llama.cpp: 15.2 t/s, same file, same threads)** |
+| **Prompt, 510 tokens** | **170.9 t/s (llama.cpp: 285.3 t/s)** |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| Tests | 35 cases, all passing |
+| Tests | 43 cases, all passing |
 
-Decode output was validated token for token against llama.cpp on the same model.
-Prompt processing is **not** comparable yet: TGE feeds prompt tokens one at a
-time (~11 t/s) while llama.cpp batches them (~279 t/s). Details and caveats:
-[docs/benchmarks.md](docs/benchmarks.md).
+Decode and prompt output were both validated token for token against llama.cpp
+on the same model, including across prefill chunk boundaries. Sampling supports
+temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
+greedy so they are reproducible. Details: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 
@@ -109,6 +114,12 @@ time (~11 t/s) while llama.cpp batches them (~279 t/s). Details and caveats:
 | Phase 4: every gate | `python aikit.py check aegean-tge` |
 | Repair memory and map, then check | `python aikit.py fix aegean-tge` |
 | Resume an interrupted task | `python aikit.py resume aegean-tge` |
+
+<!-- aegean:brand-assets:start -->
+## 🎨 Brand Assets
+
+> **AI-Generated Brand Artwork.** The banner and logo are **AI-generated brand assets**. They are illustrative and may not literally depict every feature or the full project scope.
+<!-- aegean:brand-assets:end -->
 
 ## 📜 License
 

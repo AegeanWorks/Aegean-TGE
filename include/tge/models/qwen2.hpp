@@ -45,6 +45,13 @@ class Qwen2 {
   /// pointer is owned by the model and valid until the next call.
   const float* forward(int token, int position);
 
+  /// Processes a prompt in one pass and returns the logits for its last token.
+  ///
+  /// Each weight is read once per chunk instead of once per token, which is the
+  /// difference between prompt processing at tens and at hundreds of tokens per
+  /// second. Attention itself stays per-token.
+  const float* prefill(const int* tokens, int count, int start_position);
+
   void reset_cache();
 
   static int argmax(const float* values, int count);
@@ -77,11 +84,13 @@ class Qwen2 {
   Matrix matrix(const char* name) const;
   const float* vector(const char* name, int expected) const;
   void matvec(const Matrix& weight, const float* input, float* output) const;
+  void batch_matvec(const Matrix& weight, const float* input, float* output,
+                    int tokens) const;
   void dequant_row(const Matrix& weight, int row, float* output) const;
 
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
-  void attention(int layer, int position);
+  void attention(int layer, int position, const float* queries, float* out);
 
   gguf::File file_;
   Qwen2Config config_;
@@ -107,6 +116,16 @@ class Qwen2 {
   std::vector<float> logits_;
   std::vector<float> scores_;
   std::vector<float> rope_freq_;
+
+  // Prefill workspace, sized for one chunk of prompt tokens.
+  std::vector<float> batch_x_;
+  std::vector<float> batch_h_;
+  std::vector<float> batch_q_;
+  std::vector<float> batch_k_;
+  std::vector<float> batch_v_;
+  std::vector<float> batch_attn_;
+  std::vector<float> batch_gate_;
+  std::vector<float> batch_up_;
 };
 
 }  // namespace tge::models

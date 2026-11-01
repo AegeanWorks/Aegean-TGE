@@ -72,6 +72,27 @@ using Q8GemvFn = void (*)(const Q8GemvArgs& args, const GemvConfig& config);
 void gemv_q8_0_avx2(const Q8GemvArgs& args, const GemvConfig& config);
 void gemv_q8_0_scalar(const Q8GemvArgs& args, const GemvConfig& config);
 
+/// Batched Q8_0 projection: out[tokens][rows] = input[tokens][cols] * W[rows][cols]^T.
+///
+/// This is prompt processing, and it is why prefill is not the same problem as
+/// decode. Decoding one token reads every weight; processing a prompt of P
+/// tokens one token at a time reads every weight P times. Reusing one weight
+/// row across a group of tokens turns that into a single pass, which is the
+/// entire difference between tens and hundreds of tokens per second.
+struct Q8BatchArgs {
+  const std::uint8_t* data = nullptr;  // [rows][cols], Q8_0 blocks
+  int rows = 0;
+  int cols = 0;
+  const float* input = nullptr;        // [tokens][cols], row stride = cols
+  int tokens = 0;
+  float* out = nullptr;                // [tokens][rows], row stride = rows
+};
+
+using Q8BatchFn = void (*)(const Q8BatchArgs& args, const GemvConfig& config);
+
+void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config);
+void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& config);
+
 /// Bytes occupied by one Q8_0 block: 2-byte scale plus 32 signed bytes.
 inline constexpr std::size_t kQ8BlockBytes = 34;
 inline constexpr int kQ8BlockElements = 32;

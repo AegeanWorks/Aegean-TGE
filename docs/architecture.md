@@ -182,6 +182,23 @@ this version. No gain, and it broke token parity with llama.cpp, so it was
 reverted. Decode here is limited by locality and per-call barriers, not by the
 conversion. See `docs/decisions/ADR-0006-q8-stays-in-float.md`.
 
+### Prompt processing and sampling
+
+`gemv_q8_batch_avx2` reuses one weight row across a group of four tokens. That
+is the whole difference between prefill and decode: decoding one token reads
+every weight once, so processing P tokens one at a time reads them P times. The
+kernel is the same data in the same layout, folded over four activation rows
+before the weight block is dropped.
+
+`Qwen2::prefill` runs a prompt in 64-token chunks. Chunk size is a cache
+decision, not a numerical one: the batch kernel re-reads the activation rows once
+per output row, so the chunk has to stay resident. Attention still runs per
+token, because every token has a different causal prefix.
+
+`models::sample_token` draws from the logits with temperature, top-k, top-p,
+min-p and a repetition penalty. Defaults are greedy, which is what every
+benchmark used, so adding sampling did not change any measured number.
+
 ### `tge::memory` — RAM as a first-class tier
 
 - `query_system_memory` reports installed, visible and available physical memory,
