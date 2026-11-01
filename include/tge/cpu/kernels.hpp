@@ -93,6 +93,43 @@ using Q8BatchFn = void (*)(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& config);
 
+/// Quantized formats with a super-block layout. Q8_0 has its own fused kernels;
+/// these three share one dequantize-then-dot path because their per-row decode
+/// is cheap enough to run once and reuse across a token group.
+enum class QuantKind : int {
+  Q8_0 = 0,
+  Q4_K = 1,
+  Q5_K = 2,
+  Q6_K = 3,
+  Q4_0 = 4,
+  Q5_0 = 5,
+};
+
+std::size_t quant_row_bytes(QuantKind kind, int cols);
+
+/// Expands one row of quantized weights into floats. Written once per row and
+/// reused by every token in the group, so the cost is amortized.
+void dequantize_row(QuantKind kind, const std::uint8_t* source, float* destination,
+                    int cols);
+
+struct DequantBatchArgs {
+  const std::uint8_t* data = nullptr;
+  QuantKind kind = QuantKind::Q4_K;
+  int rows = 0;
+  int cols = 0;
+  const float* input = nullptr;  // [tokens][cols]
+  int tokens = 0;
+  float* out = nullptr;          // [tokens][rows]
+};
+
+using DequantBatchFn = void (*)(const DequantBatchArgs& args,
+                                const GemvConfig& config);
+
+void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
+                             const GemvConfig& config);
+void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
+                               const GemvConfig& config);
+
 /// Bytes occupied by one Q8_0 block: 2-byte scale plus 32 signed bytes.
 inline constexpr std::size_t kQ8BlockBytes = 34;
 inline constexpr int kQ8BlockElements = 32;

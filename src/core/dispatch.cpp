@@ -22,6 +22,8 @@ KernelSet build(const cpu::Features& features) {
     set.gemv_q8_name = "avx2-fma";
     set.gemv_q8_batch = &cpu::gemv_q8_batch_avx2;
     set.gemv_q8_batch_name = "avx2-fma";
+    set.gemv_dequant_batch = &cpu::gemv_dequant_batch_avx2;
+    set.gemv_dequant_name = "avx2-fma";
     set.copy_stream = &cpu::copy_stream_avx2;
     set.sum_stream = &cpu::sum_stream_avx2;
     set.stream_name = "avx2";
@@ -34,6 +36,8 @@ KernelSet build(const cpu::Features& features) {
     set.gemv_q8_name = "scalar";
     set.gemv_q8_batch = &cpu::gemv_q8_batch_scalar;
     set.gemv_q8_batch_name = "scalar";
+    set.gemv_dequant_batch = &cpu::gemv_dequant_batch_scalar;
+    set.gemv_dequant_name = "scalar";
     set.copy_stream = &cpu::copy_stream_scalar;
     set.sum_stream = &cpu::sum_stream_scalar;
     set.stream_name = "scalar";

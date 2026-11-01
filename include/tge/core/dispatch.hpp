@@ -25,6 +25,9 @@ struct KernelSet {
   cpu::Q8BatchFn gemv_q8_batch = nullptr;
   std::string gemv_q8_batch_name;
 
+  cpu::DequantBatchFn gemv_dequant_batch = nullptr;
+  std::string gemv_dequant_name;
+
   cpu::CopyStreamFn copy_stream = nullptr;
   cpu::SumStreamFn sum_stream = nullptr;
   std::string stream_name;

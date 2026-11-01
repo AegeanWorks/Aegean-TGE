@@ -199,6 +199,23 @@ token, because every token has a different causal prefix.
 min-p and a repetition penalty. Defaults are greedy, which is what every
 benchmark used, so adding sampling did not change any measured number.
 
+### Quantized formats and tokenization
+
+Q8_0 keeps a fused kernel: 34-byte blocks, int8 widened to float inside the
+inner loop. The legacy formats (Q4_0, Q5_0) and the super-block formats (Q4_K,
+Q5_K, Q6_K) share one dequantize-then-dot path, because a decoded row is cheap
+to produce once and reuse across every token in a batch.
+
+`quant_row_bytes` derives the stride from the type. That matters because
+"Q4_K_M" is not one format: it is a recipe that mixes Q5_0, Q4_K, Q6_K and Q8_0
+in the same file, so assuming any single layout for the embedding table silently
+decodes garbage.
+
+`models::Tokenizer` decodes ids back to text. GGUF stores vocabulary entries in
+the GPT-2 byte-level representation, so decoding is a table lookup per character
+rather than a BPE search. Encoding is the other half and is not implemented: it
+needs the merge table and a pre-tokenizer that matches the model family.
+
 ### `tge::memory` — RAM as a first-class tier
 
 - `query_system_memory` reports installed, visible and available physical memory,

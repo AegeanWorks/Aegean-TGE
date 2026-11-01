@@ -12,10 +12,11 @@
 namespace tge::models {
 namespace {
 
-// Context is allocated up front for both caches. 2048 tokens keeps 24 layers of
-// KV under 60 MiB total, which matters on a machine with 2 GB free; the model
-// metadata advertises far more than this decoder needs to demonstrate decode.
-constexpr int kMaxContext = 2048;
+// Context is allocated up front for both caches. The default keeps the KV cache
+// small enough to coexist with other applications on a 16 GiB machine; callers
+// that want more ask for it, and the request is capped by the model itself.
+constexpr int kDefaultContext = 4096;
+constexpr int kHardMaxContext = 32768;
 
 // Prompt chunk. The batch kernel re-reads the activation rows once per output
 // row, so the chunk has to stay small enough that they live in cache. 64 rows
@@ -24,9 +25,34 @@ constexpr int kPrefillChunk = 64;
 
 float silu(float value) { return value / (1.0F + std::exp(-value)); }
 
+/// Maps a supported weight type onto the kernel's quant kind. Q8_0 has fused
+/// kernels of its own, so it is not routed through this path.
+bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {
+  switch (type) {
+    case gguf::TensorType::Q4_K:
+      kind = cpu::QuantKind::Q4_K;
+      return true;
+    case gguf::TensorType::Q5_K:
+      kind = cpu::QuantKind::Q5_K;
+      return true;
+    case gguf::TensorType::Q6_K:
+      kind = cpu::QuantKind::Q6_K;
+      return true;
+    case gguf::TensorType::Q4_0:
+      kind = cpu::QuantKind::Q4_0;
+      return true;
+    case gguf::TensorType::Q5_0:
+      kind = cpu::QuantKind::Q5_0;
+      return true;
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
-std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error) {
+std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
+                                   int context_limit) {
   std::unique_ptr<Qwen2> model(new Qwen2());
   try {
     model->file_ = gguf::File::open(path);
@@ -70,9 +96,13 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error) 
                                         config.embedding_length);
     config.vocab_size = model->output_.rows;
 
-    model->context_ = std::min(config.context_length > 0 ? config.context_length
-                                                         : kMaxContext,
-                               kMaxContext);
+    const int model_context =
+        config.context_length > 0 ? config.context_length : kDefaultContext;
+    const int requested = context_limit > 0 ? context_limit : kDefaultContext;
+    model->context_ = std::min(model_context, std::min(requested, kHardMaxContext));
+    if (model->context_ < 1) {
+      throw std::runtime_error("model reports no usable context length");
+    }
 
     model->layers_.resize(static_cast<std::size_t>(config.block_count));
     char name[96];
@@ -169,12 +199,13 @@ Qwen2::Matrix Qwen2::matrix(const char* name) const {
   result.rows = static_cast<int>(info->shape[1]);
   result.type = info->type;
 
-  // The Q8 kernel works in whole 32-element blocks; a row that is not a
-  // multiple of the block size would silently lose its tail.
-  if (result.type == gguf::TensorType::Q8_0 &&
-      result.cols % cpu::kQ8BlockElements != 0) {
-    throw std::runtime_error(std::string("row width is not a Q8_0 block "
-                                         "multiple: ") + name);
+  // The Q8 kernel works in whole 32-element blocks and the K-quants in whole
+  // 256-element super-blocks; a row that is not a multiple would silently lose
+  // its tail.
+  const int block = gguf::type_block_size(result.type);
+  if (block == 0 || result.cols % block != 0) {
+    throw std::runtime_error(std::string("row width is not a whole ") +
+                             gguf::type_name(result.type) + " block: " + name);
   }
   return result;
 }
@@ -212,6 +243,19 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
     kernels().gemv_q8(args, config);
     return;
   }
+  cpu::QuantKind kind;
+  if (to_quant_kind(weight.type, kind)) {
+    cpu::DequantBatchArgs args;
+    args.data = weight.data;
+    args.kind = kind;
+    args.rows = weight.rows;
+    args.cols = weight.cols;
+    args.input = input;
+    args.tokens = 1;
+    args.out = output;
+    kernels().gemv_dequant_batch(args, config);
+    return;
+  }
   if (weight.type == gguf::TensorType::F32) {
     cpu::GemvArgs args;
     args.rows = weight.rows;
@@ -247,6 +291,19 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     kernels().gemv_q8_batch(args, config);
     return;
   }
+  cpu::QuantKind kind;
+  if (to_quant_kind(weight.type, kind)) {
+    cpu::DequantBatchArgs args;
+    args.data = weight.data;
+    args.kind = kind;
+    args.rows = weight.rows;
+    args.cols = weight.cols;
+    args.input = input;
+    args.tokens = tokens;
+    args.out = output;
+    kernels().gemv_dequant_batch(args, config);
+    return;
+  }
   if (weight.type == gguf::TensorType::F32) {
     cpu::GemvArgs args;
     args.rows = weight.rows;
@@ -274,21 +331,25 @@ void Qwen2::dequant_row(const Matrix& weight, int row, float* output) const {
     return;
   }
 
-  const int blocks = weight.cols / cpu::kQ8BlockElements;
-  const std::size_t row_bytes = static_cast<std::size_t>(blocks) * cpu::kQ8BlockBytes;
-  const std::uint8_t* row_data = weight.data + static_cast<std::size_t>(row) * row_bytes;
-
-  for (int block = 0; block < blocks; ++block) {
-    const std::uint8_t* entry = row_data + block * cpu::kQ8BlockBytes;
-    std::uint16_t scale_bits = 0;
-    std::memcpy(&scale_bits, entry, sizeof(scale_bits));
-    const float scale = cpu::half_to_float(scale_bits);
-    const auto* values = reinterpret_cast<const std::int8_t*>(entry + 2);
-    float* destination = output + block * cpu::kQ8BlockElements;
-    for (int index = 0; index < cpu::kQ8BlockElements; ++index) {
-      destination[index] = static_cast<float>(values[index]) * scale;
-    }
+  // The embedding table can be any supported format, and "Q4_K_M" deliberately
+  // mixes them, so the row stride has to come from the type rather than from an
+  // assumed Q8_0 block.
+  cpu::QuantKind kind = cpu::QuantKind::Q8_0;
+  switch (weight.type) {
+    case gguf::TensorType::Q8_0:
+      kind = cpu::QuantKind::Q8_0;
+      break;
+    default:
+      if (!to_quant_kind(weight.type, kind)) {
+        throw std::runtime_error("embedding has an unsupported type");
+      }
+      break;
   }
+
+  const std::size_t row_bytes = cpu::quant_row_bytes(kind, weight.cols);
+  cpu::dequantize_row(kind,
+                      weight.data + static_cast<std::size_t>(row) * row_bytes,
+                      output, weight.cols);
 }
 
 void Qwen2::rms_norm(float* out, const float* in, const float* weight) const {

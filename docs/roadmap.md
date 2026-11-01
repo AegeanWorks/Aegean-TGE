@@ -37,11 +37,13 @@ Remaining for 0.1:
 - [x] End-to-end decode benchmark: ~2x llama.cpp on identical Q8_0 weights
 - [x] Batched prompt processing (170.9 t/s against llama.cpp's 285.3)
 - [x] Sampling: temperature, top-k, top-p, min-p, repetition penalty, seed
-- [ ] Tokenizer: encode and detokenize
-- [ ] Additional quantized types: Q4_K, Q5_K, Q6_K
+- [x] Quantized formats: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K
+- [x] Detokenizer: token ids to text
+- [x] Context selectable up to 32768, default 4096
+- [ ] Tokenizer encoding: text to token ids (BPE merges and pre-tokenization)
 - [x] Integer-domain Q8 x Q8 inner loop — measured, no gain, reverted (ADR-0006)
+- [ ] Weight packing and register blocking across output rows for prefill
 - [ ] Fuse QKV and gate/up into single parallel regions to cut per-token barriers
-- [ ] Context beyond the 2048 tokens this build allocates
 
 ## 0.3 — System RAM and memory manager
 

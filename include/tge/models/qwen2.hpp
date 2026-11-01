@@ -31,12 +31,19 @@ struct Qwen2Config {
 /// no batching. Prompt tokens are fed through the same single-token path.
 class Qwen2 {
  public:
+  /// `context_limit` caps the KV cache allocation. 0 selects the default; the
+  /// result is always the smaller of that and the model's own context length.
   static std::unique_ptr<Qwen2> load(const std::string& path,
-                                     std::string& error);
+                                     std::string& error,
+                                     int context_limit = 0);
 
   const Qwen2Config& config() const { return config_; }
   int max_context() const { return context_; }
   int vocab_size() const { return config_.vocab_size; }
+
+  /// The mapped model file, so a caller can build a tokenizer from the same
+  /// vocabulary without reopening it.
+  const gguf::File& file() const { return file_; }
 
   /// Worker threads used by every matrix-vector call. 0 selects the default.
   void set_threads(int threads) { threads_ = threads; }

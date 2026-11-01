@@ -17,6 +17,7 @@
 #include "tge/models/gguf.hpp"
 #include "tge/models/qwen2.hpp"
 #include "tge/models/sampling.hpp"
+#include "tge/models/tokenizer.hpp"
 #include "tge/tensor/ops.hpp"
 
 namespace {
@@ -54,6 +55,7 @@ void print_usage() {
       "        --tokens \"a b c\"  prompt token ids\n"
       "        --n N            tokens to generate (default 32)\n"
       "        --threads N      worker threads (default: all logical)\n"
+      "        --context N      KV cache length (default 4096, capped by model)\n"
       "        --temp T         sampling temperature; 0 is greedy (default 0)\n"
       "        --top-k N        keep the N best tokens (default off)\n"
       "        --top-p P        nucleus probability mass (default 1.0)\n"
@@ -61,6 +63,7 @@ void print_usage() {
       "        --repeat-penalty R  penalty for already seen tokens (default 1)\n"
       "        --seed N         random seed for sampling\n"
       "        --print-ids      print generated token ids\n"
+      "        --text           detokenize and print the generated text\n"
       "  version              print the engine version\n",
       TGE_VERSION);
 }
@@ -386,7 +389,8 @@ int command_gguf(const char* path) {
 
 int command_generate(const std::string& path, const std::vector<int>& prompt,
                      int count, int threads, bool print_ids,
-                     const tge::models::SamplingParams& sampling) {
+                     const tge::models::SamplingParams& sampling,
+                     int context_limit, bool print_text) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -394,7 +398,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt,
 
   std::string error;
   std::unique_ptr<tge::models::Qwen2> model =
-      tge::models::Qwen2::load(path, error);
+      tge::models::Qwen2::load(path, error, context_limit);
   if (!model) {
     std::fprintf(stderr, "generate: %s\n", error.c_str());
     return 1;
@@ -476,6 +480,17 @@ int command_generate(const std::string& path, const std::vector<int>& prompt,
     }
     std::printf("\n");
   }
+
+  if (print_text) {
+    std::string tokenizer_error;
+    std::unique_ptr<tge::models::Tokenizer> tokenizer =
+        tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error);
+    if (!tokenizer) {
+      std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
+    } else {
+      std::printf("text     : %s\n", tokenizer->decode(generated).c_str());
+    }
+  }
   return 0;
 }
 
@@ -556,13 +571,19 @@ int run_generate(int argc, char** argv) {
   std::vector<int> prompt;
   int count = 32;
   int threads = 0;
+  int context_limit = 0;
   bool print_ids = false;
+  bool print_text = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--print-ids") == 0) {
       print_ids = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--text") == 0) {
+      print_text = true;
       continue;
     }
     if (index + 1 >= argc) {
@@ -580,6 +601,8 @@ int run_generate(int argc, char** argv) {
       ok = parse_int(value, count);
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
+    } else if (std::strcmp(flag, "--context") == 0) {
+      ok = parse_int(value, context_limit);
     } else if (std::strcmp(flag, "--seed") == 0) {
       ok = parse_int(value, seed);
     } else if (std::strcmp(flag, "--top-k") == 0) {
@@ -608,7 +631,7 @@ int run_generate(int argc, char** argv) {
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
   return command_generate(model_path, prompt, count, threads, print_ids,
-                          sampling);
+                          sampling, context_limit, print_text);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {

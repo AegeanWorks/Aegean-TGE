@@ -31,6 +31,12 @@ token-identical across chunk boundaries. Sampling is implemented: temperature,
 top-k, top-p, min-p, repetition penalty and seed. Tokenizer and quantized types
 other than Q8_0 remain open.
 
+Revision 7 (same day) closes two more. **Q8_0, Q5_0, Q4_0, Q4_K, Q5_K and Q6_K
+are all executable**, validated by running a Q4_K_M model — which mixes four of
+them — and reproducing llama.cpp's output token for token. **Context is
+selectable** (`--context`, default 4096, up to 32768). Token ids now **decode to
+text**. Two items remain: text-to-ids encoding, and the prefill arithmetic gap.
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -171,7 +177,7 @@ Full description: `docs/architecture.md`.
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (43 cases) | `tests/` | 43/43 passing |
+| Test harness (44 cases) | `tests/` | 44/44 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
@@ -240,13 +246,13 @@ In the order that matters:
   all, but it is not a usable end-user path yet.
 - Sampling supports temperature, top-k, top-p, min-p, repetition penalty and a
   seed. The benchmarks use greedy so their numbers are reproducible.
-- Context is capped at 2048 tokens by allocation, not by the model.
-- Only Q8_0 and F32 weights are supported. Q4_K, Q5_K and Q6_K are parsed and
-  identified but not executable.
-- The Q8 kernel widens int8 to float per element. An integer-domain variant was
-  implemented and measured flat (31.0 vs 30.3-34.0 t/s median), so decode is not
-  arithmetic-bound here; see ADR-0006. The remaining levers are structural —
-  batched prefill and fewer per-token barriers.
+- Context defaults to 4096 tokens and is selectable with `--context` up to the
+  model's own maximum (32768 hard cap), not the 2048 this build used to allocate.
+- Quantized formats supported: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K. Validated by
+  running a Q4_K_M model, which mixes four of them, and reproducing llama.cpp's
+  output token for token.
+- Token ids decode to text (`--text`). Encoding text to ids is **not**
+  implemented, so prompts are still supplied as ids.
 - Three robustness gaps were closed in the GGUF reader: an array length that
   could exhaust memory before it was validated, pointer arithmetic that could
   overflow on a corrupt length field, and row widths that are not whole Q8

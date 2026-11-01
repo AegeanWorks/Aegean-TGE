@@ -100,12 +100,16 @@ aegean-tge/
 | **Prompt, 510 tokens** | **170.9 t/s (llama.cpp: 285.3 t/s)** |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| Tests | 43 cases, all passing |
+| Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
+| Context | 4096 by default, `--context` up to 32768 |
+| Tests | 44 cases, all passing |
 
-Decode and prompt output were both validated token for token against llama.cpp
-on the same model, including across prefill chunk boundaries. Sampling supports
-temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
-greedy so they are reproducible. Details: [docs/benchmarks.md](docs/benchmarks.md).
+Decode and prompt output were both validated token for token against llama.cpp,
+on Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). Sampling
+supports temperature, top-k, top-p, min-p and repetition penalty; the benchmarks
+use greedy so they are reproducible. Generated ids decode to text with `--text`.
+Text-to-ids encoding is not implemented yet, so prompts are supplied as ids.
+Details: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 

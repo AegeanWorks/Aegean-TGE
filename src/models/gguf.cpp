@@ -252,8 +252,18 @@ std::uint32_t type_block_bytes(TensorType type) {
 }
 
 bool type_supported(TensorType type) {
-  return type == TensorType::F32 || type == TensorType::F16 ||
-         type == TensorType::Q8_0;
+  switch (type) {
+    case TensorType::F32:
+    case TensorType::Q8_0:
+    case TensorType::Q4_0:
+    case TensorType::Q5_0:
+    case TensorType::Q4_K:
+    case TensorType::Q5_K:
+    case TensorType::Q6_K:
+      return true;
+    default:
+      return false;
+  }
 }
 
 std::uint64_t Value::as_u64() const {

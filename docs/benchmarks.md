@@ -184,12 +184,20 @@ llama.cpp on every position of that span.
 - The batched prefill path reproduces greedy output token for token against
   llama.cpp, including across chunk boundaries (verified on a 136-token prompt,
   which crosses two 64-token chunks).
-- Context is capped at 2048 tokens in this build, not the model's 32768.
+- **Quantized formats**: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K and Q6_K are all
+  executable. The Q4_K_M model mixes four of them (Q5_0 for embeddings, Q4_K and
+  Q6_K for blocks, Q8_0 for the output projection), and it reproduces llama.cpp's
+  greedy output token for token — one test that exercises every dequantizer at
+  once.
+- **Context** defaults to 4096 tokens and is selectable with `--context`, capped
+  by the model's own maximum and a 32768 hard limit.
+- **Tokenization is half done**: ids decode to text, so output is readable.
+  Encoding text to ids is not implemented, so prompts are still supplied as ids.
 - Sampling supports temperature, top-k, top-p, min-p and repetition penalty, but
   the comparison above uses greedy so the numbers are reproducible.
-- There is no tokenizer. Token ids are supplied and returned directly, which is
-  exactly what `llama-bench` does as well.
-- Only Q8_0 weights are executable; Q4_K, Q5_K and Q6_K are parsed but rejected.
+- Prefill arithmetic is still behind: the batch kernel sustains about 207 GFLOPS
+  against llama.cpp's 358. Closing that needs weight packing and register
+  blocking across output rows, which is a kernel rewrite rather than a tweak.
 
 ## 7. Rejected: integer-domain Q8 inner loop
 

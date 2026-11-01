@@ -1,11 +1,11 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-PREFILL",
+    "task_id": "TGE-FORMATS",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793519296.5076916,
+    "updated_at": 1793519885.928665,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
@@ -189,6 +189,44 @@
       "status": "in_progress",
       "timestamp": 1793519296.5076916,
       "timestamp_str": "2026-11-01 10:48:16",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PREFILL",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-FORMATS' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793519885.386864,
+      "timestamp_str": "2026-11-01 10:58:05",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-FORMATS",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/1] Quantized formats, selectable context, detokenizer",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793519885.386864,
+      "timestamp_str": "2026-11-01 10:58:05",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "Only Q8_0 ran, context was fixed at 2048, and output was ids only",
+        "benefits": "Q4_K_M and similar models run correctly; text output; configurable KV",
+        "risks": "Wrong dequant math decodes plausible garbage; per-type row strides",
+        "mitigation": "Validated against llama.cpp on a Q4_K_M file that mixes four formats; row stride derived from type"
+      }
+    },
+    {
+      "task_id": "TGE-FORMATS",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; 44/44 tests; Q4_K_M matches llama.cpp token for token; context 8192 verified",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793519885.928665,
+      "timestamp_str": "2026-11-01 10:58:05",
       "agent": "unidentified"
     }
   ]
