@@ -41,6 +41,20 @@ cmake --build --preset release
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
 ```
 
+**Before touching anything, take a snapshot** (project guideline G-001):
+
+```powershell
+.\scripts\measure.ps1 > before.txt
+# ... make the change ...
+.\scripts\measure.ps1 > after.txt
+Compare-Object (Get-Content before.txt) (Get-Content after.txt)
+```
+
+`measure.ps1` prints the selected kernels and one line per benchmark, so the
+diff shows exactly what moved. It is a single snapshot; this machine varies by
+up to 20 percent run to run, so take two or three before believing a small
+delta.
+
 `tge info` prints the detected CPU, its instruction sets, the P/E core split, the
 cache hierarchy, system memory, and the resulting memory budget.
 

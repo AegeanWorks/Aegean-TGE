@@ -3,6 +3,23 @@
 Every number here was measured on the development machine. Nothing is
 estimated.
 
+**Method (project guideline G-001).** A baseline snapshot is taken before the
+first edit of a task and again after every change, with
+`scripts\measure.ps1`. Changes that lose are recorded with their numbers rather
+than their intent — which is why section 7 has five rejected entries and no
+orphaned good ideas.
+
+```powershell
+.\scripts\measure.ps1 > before.txt
+# ... change ...
+.\scripts\measure.ps1 > after.txt
+Compare-Object (Get-Content before.txt) (Get-Content after.txt)
+```
+
+A snapshot is one sample. This machine swings by up to 20 percent between runs
+because other applications hold 3 GB of the 16 GB, so a small delta needs two or
+three snapshots before it means anything.
+
 **Measurement caveat.** This machine runs with 2–5 GB free of 16 GB while the
 benchmark runs, with VS Code, Defender and Memory Compression holding roughly
 3 GB. Background memory pressure moved single-run results by up to 2x. Every
