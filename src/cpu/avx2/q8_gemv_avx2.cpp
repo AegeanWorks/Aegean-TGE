@@ -16,6 +16,13 @@ namespace {
 /// Per 34-byte block: a half-precision scale, then 32 signed bytes. The int8
 /// payload is widened to int32 and then to float so the multiply stays in the
 /// vector unit; the scale is applied once per block rather than per element.
+///
+/// An integer-domain variant (quantize the activation too, then `maddubs` with
+/// no widening at all) was implemented and measured: 31.0 tokens/s median
+/// against 30.3-34.0 for this version, which is inside the noise band on this
+/// machine. It was reverted because it costs exact token parity with llama.cpp
+/// and buys nothing measurable. Decode here is limited by memory and per-call
+/// synchronisation, not by the widening chain.
 inline float dot_row_q8(const std::uint8_t* row, const float* vector,
                         int blocks) {
   __m256 total = _mm256_setzero_ps();

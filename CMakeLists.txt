@@ -84,6 +84,7 @@ if(TGE_BUILD_TESTS)
   add_executable(tge_tests
     tests/run_tests.cpp
     tests/test_cpu.cpp
+    tests/test_gguf.cpp
     tests/test_memory.cpp
     tests/test_q8.cpp
     tests/test_tensor.cpp

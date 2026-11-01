@@ -1,11 +1,11 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-COMPARE",
+    "task_id": "TGE-HARDEN",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793497880.1376762,
+    "updated_at": 1793518816.8560202,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
@@ -113,6 +113,44 @@
       "status": "in_progress",
       "timestamp": 1793497880.1376762,
       "timestamp_str": "2026-11-01 04:51:20",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-COMPARE",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-HARDEN' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793518816.5081666,
+      "timestamp_str": "2026-11-01 10:40:16",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-HARDEN",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/1] Harden GGUF reader and decoder, test the parser, evaluate integer Q8 kernel",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793518816.5081666,
+      "timestamp_str": "2026-11-01 10:40:16",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "New model-layer code had no tests and several unchecked inputs",
+        "benefits": "Malformed files cannot exhaust memory; parser and decoder guards are covered by tests",
+        "risks": "Rejecting a valid but unusual file; changing numerics by optimization",
+        "mitigation": "Round-trip test built from the format spec; integer kernel measured then reverted to preserve token parity"
+      }
+    },
+    {
+      "task_id": "TGE-HARDEN",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 35/35 tests; token parity with llama.cpp restored; no performance change",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793518816.8560202,
+      "timestamp_str": "2026-11-01 10:40:16",
       "agent": "unidentified"
     }
   ]

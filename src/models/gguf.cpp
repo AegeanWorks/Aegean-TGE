@@ -1,5 +1,6 @@
 #include "tge/models/gguf.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -51,9 +52,18 @@ class Cursor {
     return static_cast<std::uint64_t>(position_ - begin_);
   }
 
+  /// Bytes still available. Used to reject lengths that cannot possibly be
+  /// honest before anything is allocated for them.
+  std::uint64_t remaining() const {
+    return static_cast<std::uint64_t>(end_ - position_);
+  }
+
  private:
   void require(std::uint64_t bytes) const {
-    if (position_ + bytes > end_) {
+    // Compare against the remaining count, never by adding to the pointer: a
+    // corrupt length field would otherwise overflow the pointer before the
+    // comparison could fail.
+    if (bytes > remaining()) {
       throw std::runtime_error("gguf: file truncated while reading");
     }
   }
@@ -109,6 +119,32 @@ Value read_scalar(Cursor& cursor, ValueType type) {
   return value;
 }
 
+/// Smallest number of bytes one element of `type` can occupy. A string is at
+/// least an 8-byte length prefix; every scalar is its own width.
+std::uint64_t element_min_bytes(ValueType type) {
+  switch (type) {
+    case ValueType::Uint8:
+    case ValueType::Int8:
+    case ValueType::Bool:
+      return 1;
+    case ValueType::Uint16:
+    case ValueType::Int16:
+      return 2;
+    case ValueType::Uint32:
+    case ValueType::Int32:
+    case ValueType::Float32:
+      return 4;
+    case ValueType::Uint64:
+    case ValueType::Int64:
+    case ValueType::Float64:
+    case ValueType::String:
+      return 8;
+    case ValueType::Array:
+      return 12;  // element type tag plus a length field
+  }
+  return 1;
+}
+
 Value read_value(Cursor& cursor) {
   const auto type = static_cast<ValueType>(cursor.read<std::uint32_t>());
   if (type != ValueType::Array) {
@@ -119,9 +155,17 @@ Value read_value(Cursor& cursor) {
   value.type = ValueType::Array;
   const auto element_type = static_cast<ValueType>(cursor.read<std::uint32_t>());
   const std::uint64_t count = cursor.read<std::uint64_t>();
-  // Every element has a known minimum size, so a corrupt count is caught by the
-  // cursor bounds rather than by allocating first.
-  value.elements.reserve(static_cast<std::size_t>(count));
+
+  // A count that cannot physically fit in the bytes that remain is corrupt.
+  // Rejecting it here is what stops a malformed file from turning into a
+  // multi-gigabyte allocation before the first read fails.
+  const std::uint64_t minimum = element_min_bytes(element_type);
+  if (count > cursor.remaining() / minimum) {
+    throw std::runtime_error("gguf: array length exceeds the remaining file");
+  }
+
+  value.elements.reserve(
+      static_cast<std::size_t>(std::min<std::uint64_t>(count, 4096)));
   for (std::uint64_t index = 0; index < count; ++index) {
     value.elements.push_back(read_scalar(cursor, element_type));
   }

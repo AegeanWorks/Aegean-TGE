@@ -20,6 +20,11 @@ Revision 4 (same day) adds GGUF loading and a Qwen2 decoder so the engine can be
 compared against llama.cpp end to end. Decode is about **2x faster**, validated
 token for token. Prompt processing is not comparable yet: it is not batched.
 
+Revision 5 (same day) hardens the GGUF reader against malformed files, adds the
+first tests for it, guards the decoder's public entry points, and records a
+rejected optimization: the integer-domain Q8 inner loop measured flat and was
+reverted (ADR-0006).
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -160,7 +165,7 @@ Full description: `docs/architecture.md`.
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (30 cases) | `tests/` | 30/30 passing |
+| Test harness (35 cases) | `tests/` | 35/35 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
@@ -232,8 +237,14 @@ In the order that matters:
 - Context is capped at 2048 tokens by allocation, not by the model.
 - Only Q8_0 and F32 weights are supported. Q4_K, Q5_K and Q6_K are parsed and
   identified but not executable.
-- The Q8 kernel widens int8 to float every element; an integer-domain inner loop
-  and AVX-VNNI are the next arithmetic lever.
+- The Q8 kernel widens int8 to float per element. An integer-domain variant was
+  implemented and measured flat (31.0 vs 30.3-34.0 t/s median), so decode is not
+  arithmetic-bound here; see ADR-0006. The remaining levers are structural —
+  batched prefill and fewer per-token barriers.
+- Three robustness gaps were closed in the GGUF reader: an array length that
+  could exhaust memory before it was validated, pointer arithmetic that could
+  overflow on a corrupt length field, and row widths that are not whole Q8
+  blocks. The parser now has round-trip tests, including the failure paths.
 - The AVX2 GEMM is packed, blocked and threaded, but has no per-thread scratch
   reuse. At 512 cubed single-threaded it is about 14 percent slower than the
   simpler kernel it replaced.

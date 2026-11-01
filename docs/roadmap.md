@@ -38,7 +38,8 @@ Remaining for 0.1:
 - [ ] Batched prompt processing (currently one token at a time)
 - [ ] Tokenizer: encode and detokenize
 - [ ] Additional quantized types: Q4_K, Q5_K, Q6_K
-- [ ] Integer-domain Q8 x Q8 inner loop, then AVX-VNNI
+- [x] Integer-domain Q8 x Q8 inner loop — measured, no gain, reverted (ADR-0006)
+- [ ] Fuse QKV and gate/up into single parallel regions to cut per-token barriers
 - [ ] Sampling: temperature, top-k, top-p, min-p, repetition penalty
 - [ ] Context beyond the 2048 tokens this build allocates
 

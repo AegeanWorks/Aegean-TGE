@@ -169,18 +169,33 @@ llama.cpp on every position of that span.
 - No tokenizer. Token ids are supplied and returned directly, which is exactly
   what `llama-bench` does as well.
 
-## 7. Where the remaining decode time goes
+## 7. Rejected: integer-domain Q8 inner loop
 
 Single-threaded decode reaches 16.6 t/s, which is about 8.3 GB/s of weight
-traffic. A standalone GEMV on the same machine reaches 18.4 GB/s on one thread.
-So the Q8 kernel is spending roughly half its time outside memory: it widens
-every int8 to int32 and then to float before multiplying.
+traffic, while a standalone f32 GEMV reaches 18.4 GB/s on one thread. That gap
+looked like the cost of widening every int8 to int32 and then to float, so the
+obvious fix was to quantize the activation too and keep the inner loop in
+integer domain.
 
-That is the next lever, and it is an arithmetic one rather than a bandwidth one:
-quantize the activation vector to int8 as well, so the inner loop stays in
-integer domain (`maddubs`/`dpbusd`) and the widen-convert chain disappears. It
-also makes AVX-VNNI, which this CPU supports and does not yet use, directly
-applicable.
+It was implemented with `sign` + `maddubs` + `madd`, with lane accumulation and
+one horizontal reduction per row. Measured over 128 generated tokens:
+
+| Kernel | Decode |
+|---|---|
+| Float activation | 30.3 / 28.9 / 33.1 t/s |
+| Integer activation | 31.0 / 30.4 / 32.9 t/s |
+
+No measurable gain, and it broke exact token parity with llama.cpp at position
+14 of 16. Reverted; see `decisions/ADR-0006-q8-stays-in-float.md`.
+
+**The lesson is the more useful result.** A token is not one GEMV: it is 24
+layers of two norms, six projections, an attention pass and a 151,936-row output
+projection, with roughly 150 barriers between the calls. Comparing whole-token
+throughput against a single-kernel number measured the wrong thing. Decode is
+structural here — locality and synchronisation — not arithmetic.
+
+That redirects the remaining work to structure: batch the prompt, fuse QKV into
+one parallel region, fuse gate and up.
 
 ## 8. What to measure next
 

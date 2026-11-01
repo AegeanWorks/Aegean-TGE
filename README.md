@@ -94,7 +94,7 @@ aegean-tge/
 | **Decode, Qwen2.5-0.5B Q8_0** | **30-33 t/s (llama.cpp: 15.2 t/s, same file, same threads)** |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| Tests | 30 cases, all passing |
+| Tests | 35 cases, all passing |
 
 Decode output was validated token for token against llama.cpp on the same model.
 Prompt processing is **not** comparable yet: TGE feeds prompt tokens one at a

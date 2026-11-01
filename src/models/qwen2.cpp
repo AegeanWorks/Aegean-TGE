@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 
@@ -149,6 +150,14 @@ Qwen2::Matrix Qwen2::matrix(const char* name) const {
   result.cols = static_cast<int>(info->shape[0]);
   result.rows = static_cast<int>(info->shape[1]);
   result.type = info->type;
+
+  // The Q8 kernel works in whole 32-element blocks; a row that is not a
+  // multiple of the block size would silently lose its tail.
+  if (result.type == gguf::TensorType::Q8_0 &&
+      result.cols % cpu::kQ8BlockElements != 0) {
+    throw std::runtime_error(std::string("row width is not a Q8_0 block "
+                                         "multiple: ") + name);
+  }
   return result;
 }
 
@@ -315,6 +324,15 @@ void Qwen2::attention(int layer, int position) {
 }
 
 const float* Qwen2::forward(int token, int position) {
+  // Guard the public entry point: an out-of-range position would write past the
+  // KV cache, and an out-of-range token would read past the embedding table.
+  if (token < 0 || token >= config_.vocab_size) {
+    throw std::runtime_error("forward: token outside the vocabulary");
+  }
+  if (position < 0 || position >= context_) {
+    throw std::runtime_error("forward: position outside the allocated context");
+  }
+
   const int dim = config_.embedding_length;
   const int kv_dim = config_.kv_dim();
 

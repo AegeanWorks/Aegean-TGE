@@ -174,11 +174,13 @@ Q8_0 stores each 32 weights as a 34-byte block: one fp16 scale and 32 signed
 bytes. The kernel widens each group of eight int8 values to int32, converts to
 float, and accumulates with FMA, applying the block scale once.
 
-That widening chain is the current bottleneck: single-threaded decode reaches
-about 8.3 GB/s against 18.4 GB/s for the f32 GEMV, so roughly half the time is
-spent converting rather than streaming. The fix is to quantize the activation
-vector as well and keep the inner loop in integer domain; see
-`docs/benchmarks.md` section 7.
+That widening chain looked like the bottleneck and was investigated: single
+threaded decode reaches about 8.3 GB/s against 18.4 GB/s for the f32 GEMV. An
+integer-domain variant (quantize the activation too, then `maddubs` with no
+widening) was implemented and measured at 31.0 t/s median against 30.3-34.0 for
+this version. No gain, and it broke token parity with llama.cpp, so it was
+reverted. Decode here is limited by locality and per-call barriers, not by the
+conversion. See `docs/decisions/ADR-0006-q8-stays-in-float.md`.
 
 ### `tge::memory` — RAM as a first-class tier
 
