@@ -5,40 +5,40 @@
   "has_ui": false,
   "ui_kind": "library",
   "palette": [
-    "#07120d",
-    "#123030",
-    "#66f5bc",
-    "#8eaaf5"
+    "#070f13",
+    "#121a30",
+    "#5eb7f3",
+    "#c590f4"
   ],
-  "motif": "grid",
+  "motif": "stack",
   "layout": "split",
   "assets": {
     "logo": {
       "path": "assets/logo.svg",
       "status": "approved",
       "commit": "",
-      "generated_at": "2026-11-01T10:44:42",
+      "generated_at": "2026-11-02T00:57:01",
       "review": {
         "status": "approved",
-        "reviewer": "agent:gemini",
+        "reviewer": "agent:kilo",
         "method": "structural",
-        "notes": "Aegean TGE logo matches C++20 inference engine brand",
-        "score": null,
-        "reviewed_at": "2026-11-01T10:44:53"
+        "notes": "Aegean TGE display plus Aegean-TGE repo URL per origin remote; stack mark unchanged and verified.",
+        "score": 88,
+        "reviewed_at": "2026-11-02T00:57:31"
       }
     },
     "social_preview": {
       "path": "assets/social-preview.svg",
       "status": "approved",
       "commit": "",
-      "generated_at": "2026-11-01T10:44:42",
+      "generated_at": "2026-11-02T00:57:01",
       "review": {
         "status": "approved",
-        "reviewer": "agent:gemini",
+        "reviewer": "agent:kilo",
         "method": "structural",
-        "notes": "Aegean TGE social preview with terminal and tensor layout",
-        "score": null,
-        "reviewed_at": "2026-11-01T10:44:54"
+        "notes": "Split card with correct Aegean TGE title and remote-matching repo URL, verified in render.",
+        "score": 88,
+        "reviewed_at": "2026-11-02T00:57:31"
       }
     }
   },
