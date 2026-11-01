@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "aegean-tge",
-  "test_command": "ctest --test-dir build --output-on-failure",
+  "test_command": "scripts\\test.cmd",
   "topics": [
     "aikit",
     "aikit-integrated",
@@ -12,5 +12,10 @@
   "gates": {},
   "ui_required": false,
   "mechanics_required": false,
-  "created": "2026-11-01"
+  "created": "2026-11-01",
+  "has_ui": false,
+  "ui_kind": "library",
+  "ui_evidence": [],
+  "ui_checked_at": "2026-11-01",
+  "ui_source": "detected"
 }

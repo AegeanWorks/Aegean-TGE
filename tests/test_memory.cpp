@@ -1,0 +1,87 @@
+#include <cstdint>
+#include <utility>
+
+#include "harness.hpp"
+#include "tge/memory/allocator.hpp"
+#include "tge/memory/budget.hpp"
+#include "tge/memory/system_ram.hpp"
+
+TGE_TEST(aligned_buffer_respects_requested_alignment) {
+  const std::size_t alignments[] = {16, 32, 64, 128, 256};
+  for (const std::size_t alignment : alignments) {
+    tge::memory::AlignedBuffer buffer(4096, alignment);
+    TGE_REQUIRE(!buffer.empty());
+    TGE_CHECK(buffer.size() == 4096);
+    TGE_CHECK(reinterpret_cast<std::uintptr_t>(buffer.data()) % alignment == 0);
+  }
+}
+
+TGE_TEST(aligned_buffer_zero_size_is_empty) {
+  tge::memory::AlignedBuffer buffer(0);
+  TGE_CHECK(buffer.empty());
+  TGE_CHECK(buffer.size() == 0);
+  TGE_CHECK(buffer.data() == nullptr);
+}
+
+TGE_TEST(aligned_buffer_move_transfers_ownership) {
+  tge::memory::AlignedBuffer source(256);
+  const void* address = source.data();
+  tge::memory::AlignedBuffer moved(std::move(source));
+  TGE_CHECK(moved.data() == address);
+  TGE_CHECK(source.empty());
+}
+
+TGE_TEST(alignment_normalization_rounds_up) {
+  TGE_CHECK(tge::memory::normalize_alignment(0) == tge::memory::kCacheLine);
+  TGE_CHECK(tge::memory::normalize_alignment(1) == tge::memory::kCacheLine);
+  TGE_CHECK(tge::memory::normalize_alignment(64) == 64);
+  TGE_CHECK(tge::memory::normalize_alignment(65) == 128);
+}
+
+TGE_TEST(system_memory_reports_physical_ram) {
+  const tge::memory::SystemMemory memory = tge::memory::query_system_memory();
+  TGE_CHECK(memory.total_physical > 0);
+  TGE_CHECK(memory.installed_physical > 0);
+  TGE_CHECK(memory.available_physical <= memory.total_physical);
+  TGE_CHECK(memory.page_size >= 4096);
+}
+
+TGE_TEST(budget_pool_limits_fit_inside_usable_budget) {
+  const tge::memory::MemoryBudget budget;
+  const tge::memory::BudgetSnapshot snapshot = budget.snapshot();
+  std::uint64_t total = 0;
+  for (int pool = 0; pool < tge::memory::kPoolCount; ++pool) {
+    total += snapshot.pools[pool].limit;
+  }
+  TGE_CHECK(total <= snapshot.usable);
+  TGE_CHECK(snapshot.reserved_for_os > 0);
+}
+
+TGE_TEST(budget_refuses_reservations_beyond_a_pool_limit) {
+  tge::memory::MemoryBudget budget;
+  const tge::memory::BudgetSnapshot snapshot = budget.snapshot();
+  const int scratch = static_cast<int>(tge::memory::Pool::Scratch);
+  const std::uint64_t limit = snapshot.pools[scratch].limit;
+  if (limit == 0) {
+    std::printf("    scratch pool is empty, skipping\n");
+    return;
+  }
+
+  TGE_CHECK(!budget.try_reserve(tge::memory::Pool::Scratch, limit + 1));
+  const std::uint64_t half = limit / 2;
+  TGE_REQUIRE(budget.try_reserve(tge::memory::Pool::Scratch, half));
+  TGE_CHECK(budget.available(tge::memory::Pool::Scratch) == limit - half);
+  budget.release(tge::memory::Pool::Scratch, half);
+  TGE_CHECK(budget.available(tge::memory::Pool::Scratch) == limit);
+}
+
+TGE_TEST(budget_admission_respects_total_usage) {
+  tge::memory::MemoryBudget budget;
+  const tge::memory::BudgetSnapshot snapshot = budget.snapshot();
+  if (snapshot.usable == 0) {
+    std::printf("    usable budget is zero, skipping\n");
+    return;
+  }
+  TGE_CHECK(budget.admit(snapshot.usable));
+  TGE_CHECK(!budget.admit(snapshot.usable + 1));
+}

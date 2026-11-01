@@ -6,3 +6,14 @@
 __pycache__/
 *.py[cod]
 node_modules/
+
+# Build output
+build/
+out/
+.cache/
+compile_commands.json
+
+# Models and measurement artifacts are never committed
+models/
+*.gguf
+benchmarks/results/*.json
