@@ -1,43 +1,16 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-INT-PREFILL",
+    "task_id": "TGE-PROFILE",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793521196.4295173,
+    "updated_at": 1793522034.9647815,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-DECODE",
-      "phase": "superseded",
-      "phase_num": 1,
-      "description": "Superseded by 'TGE-COMPARE' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793497879.809646,
-      "timestamp_str": "2026-11-01 04:51:19",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-COMPARE",
-      "phase": "phase 1",
-      "phase_num": 1,
-      "description": "[1/1] End-to-end decode: GGUF loader, Qwen2 decoder, Q8_0 GEMV, measured against llama.cpp",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793497879.809646,
-      "timestamp_str": "2026-11-01 04:51:19",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "A speed claim needs an end-to-end measurement on identical weights",
-        "benefits": "2x llama.cpp decode, validated token for token",
-        "risks": "Numerics diverge if RoPE layout or biases are wrong; thread oversubscription",
-        "mitigation": "Greedy output diffed against llama.cpp; measured thread sweep produced a decode thread policy"
-      }
-    },
     {
       "task_id": "TGE-COMPARE",
       "phase": "phase 4",
@@ -258,6 +231,27 @@
       "status": "superseded",
       "timestamp": 1793521196.4295173,
       "timestamp_str": "2026-11-01 11:19:56",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PROFILE",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; added bench batch isolation; kernel 227-268 GFLOPS; llama pp512 varies 220.7-285.3 between runs",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793522034.9647815,
+      "timestamp_str": "2026-11-01 11:33:54",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-INT-PREFILL",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-PROFILE' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793522034.9647815,
+      "timestamp_str": "2026-11-01 11:33:54",
       "agent": "unidentified"
     }
   ]

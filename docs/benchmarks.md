@@ -210,6 +210,41 @@ llama.cpp on every position of that span.
   so it was reverted (section 7); the remaining gap needs port-level analysis,
   not more instruction counting.
 
+### The kernel measured in isolation
+
+`tge bench batch` times one prefill matrix-vector kernel on synthetic weights, so
+the forward pass around it cannot hide anything:
+
+| Shape (rows x cols), 64 tokens | GFLOPS | Weight traffic |
+|---|---|---|
+| 4864 x 896 (ffn gate/up) | 267.9 | 4.4 MiB |
+| 896 x 896 (attention projection) | 227.3 | 0.8 MiB |
+| 151936 x 896 (output projection) | 262.2 | 137.9 MiB |
+
+The full prefill reaches 241 GFLOPS, so about 91 percent of prefill time is this
+kernel; norms, rope, attention and residual adds account for the rest. The gap
+with llama.cpp is therefore genuinely in the kernel, not in the code around it.
+
+### The llama.cpp comparison is less stable than it looks
+
+Two runs of `llama-bench -p 512 -t 6` on the same file and machine in the same
+session:
+
+| Run | pp512 |
+|---|---|
+| earlier in this session | 285.3 ± 22.8 t/s |
+| after the kernel work | **220.7 ± 3.8 t/s** |
+
+The same binary, the same weights, a 29 percent difference. TGE's own prefill
+runs span 170-201 t/s. So "67 percent of llama.cpp" was computed against the
+high llama sample; against the low one TGE is at 87 percent, which is inside
+this machine's noise band.
+
+The honest statement is therefore: **TGE prefill is somewhere between 13 and 33
+percent behind llama.cpp, and this machine cannot resolve which** without the
+other applications giving up their 3 GB. The isolated kernel figure (265 GFLOPS)
+is the stable number worth tracking.
+
 ## 7. Rejected experiments
 
 Each of these was implemented, measured, and removed. They are recorded so the

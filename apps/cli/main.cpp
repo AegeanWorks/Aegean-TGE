@@ -49,6 +49,8 @@ void print_usage() {
       "        --size-mb N      buffer size per direction (default 256)\n"
       "        --repeat N       timed repetitions (default 5)\n"
       "        --threads N      worker threads (default: all logical)\n"
+      "  bench batch [opts]   one prefill matrix-vector kernel, in isolation\n"
+      "        --rows N --cols N --tokens N --repeat N\n"
       "  gguf <path>          inspect a GGUF model file\n"
       "  generate [opts]      greedy decode and token-rate measurement\n"
       "        --model PATH     GGUF model to load\n"
@@ -518,6 +520,64 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   return 0;
 }
 
+int command_batch_bench(int rows, int cols, int tokens, int repeat) {
+  if (rows <= 0 || cols <= 0 || tokens <= 0 || repeat <= 0) {
+    std::fprintf(stderr, "bench batch: all dimensions must be positive\n");
+    return 2;
+  }
+  if (cols % 32 != 0) {
+    std::fprintf(stderr, "bench batch: cols must be a multiple of 32\n");
+    return 2;
+  }
+
+  const std::size_t matrix_bytes =
+      static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols / 32) * 34;
+  tge::memory::AlignedBuffer weights(matrix_bytes);
+  std::uint32_t state = 0x51ED270Bu;
+  for (std::size_t index = 0; index < matrix_bytes; ++index) {
+    state = state * 1664525u + 1013904223u;
+    static_cast<std::uint8_t*>(weights.data())[index] =
+        static_cast<std::uint8_t>(state >> 24);
+  }
+
+  const std::size_t input_elements = static_cast<std::size_t>(tokens) * cols;
+  const std::size_t output_elements = static_cast<std::size_t>(tokens) * rows;
+  tge::memory::AlignedBuffer input(input_elements * sizeof(float));
+  tge::memory::AlignedBuffer output(output_elements * sizeof(float));
+  fill_deterministic(input.f32(), input_elements, 0xABCDEF01u);
+
+  tge::cpu::Q8BatchArgs args;
+  args.data = static_cast<const std::uint8_t*>(weights.data());
+  args.rows = rows;
+  args.cols = cols;
+  args.input = input.f32();
+  args.tokens = tokens;
+  args.out = output.f32();
+
+  const tge::cpu::GemvConfig config{0};
+  const tge::KernelSet& set = tge::kernels();
+  double best = 0.0;
+  for (int iteration = 0; iteration < repeat; ++iteration) {
+    const auto start = Clock::now();
+    set.gemv_q8_batch(args, config);
+    const auto finish = Clock::now();
+    const double seconds = std::chrono::duration<double>(finish - start).count();
+    if (best == 0.0 || seconds < best) {
+      best = seconds;
+    }
+  }
+
+  const double flops =
+      2.0 * static_cast<double>(rows) * cols * static_cast<double>(tokens);
+  std::printf("q8 batch %dx%d x %d tokens (%.1f MiB of weights), best of %d\n",
+              rows, cols, tokens,
+              static_cast<double>(matrix_bytes) / (1024.0 * 1024.0), repeat);
+  std::printf("  %.3f ms  %.2f GFLOPS  %.2f GB/s\n", best * 1e3,
+              flops / best / 1e9,
+              static_cast<double>(matrix_bytes) / best / 1e9);
+  return 0;
+}
+
 int command_info(bool json) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::memory::SystemMemory memory = tge::memory::query_system_memory();
@@ -807,6 +867,21 @@ int main(int argc, char** argv) {
   }
 
   if (command == "bench") {
+    if (argc >= 3 && std::strcmp(argv[2], "batch") == 0) {
+      int rows = 4864, cols = 896, tokens = 64, repeat = 5;
+      for (int index = 3; index + 1 < argc; index += 2) {
+        const char* flag = argv[index];
+        const char* value = argv[index + 1];
+        bool ok = true;
+        if (std::strcmp(flag, "--rows") == 0) ok = parse_int(value, rows);
+        else if (std::strcmp(flag, "--cols") == 0) ok = parse_int(value, cols);
+        else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
+        else if (std::strcmp(flag, "--repeat") == 0) ok = parse_int(value, repeat);
+        else { std::fprintf(stderr, "bench batch: unknown option '%s'\n", flag); return 2; }
+        if (!ok) { std::fprintf(stderr, "bench batch: invalid value\n"); return 2; }
+      }
+      return command_batch_bench(rows, cols, tokens, repeat);
+    }
     if (argc >= 3 && std::strcmp(argv[2], "mem") == 0) {
       return run_mem_bench(argc, argv, 3);
     }
