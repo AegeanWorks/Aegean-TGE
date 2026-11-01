@@ -47,6 +47,11 @@ across six activations instead of four, taking prefill from 170.9 to 191.6 t/s
 (207 to 241 GFLOPS). Aligning the prompt chunk to that group was measured and
 reverted. The rest needs an integer inner loop.
 
+Revision 10 (same day) built that integer inner loop and **rejected it**: it
+measured 150.0 t/s against 186.0 for the float path, 22 percent slower. The
+instruction count was lower and the port pressure was higher. Recorded with the
+other rejected experiments.
+
 ## 1. Hardware audit
 
 | Item | Measured |

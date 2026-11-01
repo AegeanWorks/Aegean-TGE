@@ -206,37 +206,35 @@ llama.cpp on every position of that span.
   the comparison above uses greedy so the numbers are reproducible.
 - Prefill arithmetic is still behind: the batch kernel sustains about 241 GFLOPS
   against llama.cpp's 358. Widening the token group from four to six closed part
-  of it (see section 6); the rest needs an integer inner loop, because the
-  per-element int8-to-float widening is now the largest single cost and cannot
-  be amortized further within the register file.
+  of it. The integer inner loop was implemented and measured 22 percent slower,
+  so it was reverted (section 7); the remaining gap needs port-level analysis,
+  not more instruction counting.
 
-## 7. Rejected: integer-domain Q8 inner loop
+## 7. Rejected experiments
 
-Single-threaded decode reaches 16.6 t/s, which is about 8.3 GB/s of weight
-traffic, while a standalone f32 GEMV reaches 18.4 GB/s on one thread. That gap
-looked like the cost of widening every int8 to int32 and then to float, so the
-obvious fix was to quantize the activation too and keep the inner loop in
-integer domain.
+Each of these was implemented, measured, and removed. They are recorded so the
+same idea is not tried twice on intuition alone.
 
-It was implemented with `sign` + `maddubs` + `madd`, with lane accumulation and
-one horizontal reduction per row. Measured over 128 generated tokens:
+| Experiment | Result | Decision |
+|---|---|---|
+| Pad packed A stride from 6 to 8 floats | 1024: 62.0 -> 52.7 GFLOPS; 2048: 59.8 -> 47.6 | Rejected: 33 percent more panel traffic outweighed fewer line splits |
+| Software prefetch in GEMV, distance 512 | 1T: ~19.6 with vs ~18.4-20.0 without; 16T median 28.4 with vs 32.1 without | Rejected: hardware prefetcher already handles a contiguous per-thread band |
+| `_MM_HINT_NTA` on the GEMV prefetch | 16T median 29.8 vs 28.4 for T0, inside the noise band | Rejected: no measurable difference |
+| Align the 64-token prompt chunk to the six-token group | prefill median 185.4 vs 191.6 | Rejected: measured worse, so the tail stays on the single-token path |
+| **Integer inner loop for prefill** (quantize activations, `maddubs`, no widening) | prefill median **150.0 t/s** (145.9 / 150.0 / 152.1) vs **186.0** float (five samples, 150.3-201.7) | Rejected: **22 percent slower** |
 
-| Kernel | Decode |
-|---|---|
-| Float activation | 30.3 / 28.9 / 33.1 t/s |
-| Integer activation | 31.0 / 30.4 / 32.9 t/s |
+The integer prefill kernel is the most instructive rejection. It was built
+exactly as planned — activations quantized once per call, `sign` + `maddubs` +
+`madd` in the inner loop, one int-to-float conversion per block — and it lost.
 
-No measurable gain, and it broke exact token parity with llama.cpp at position
-14 of 16. Reverted; see `decisions/ADR-0006-q8-stays-in-float.md`.
+The likely reason, unconfirmed because there is no profiler on this machine yet:
+the integer path needs `psignb`, which issues on one port, plus a scalar scale
+broadcast and a conversion per token per block, where the float path uses four
+FMAs spread over two ports with no conversions at all. Counting instructions
+made the integer version look 1.5x cheaper; counting *ports* did not.
 
-**The lesson is the more useful result.** A token is not one GEMV: it is 24
-layers of two norms, six projections, an attention pass and a 151,936-row output
-projection, with roughly 150 barriers between the calls. Comparing whole-token
-throughput against a single-kernel number measured the wrong thing. Decode is
-structural here — locality and synchronisation — not arithmetic.
-
-That redirects the remaining work to structure: batch the prompt, fuse QKV into
-one parallel region, fuse gate and up.
+That is the third performance hypothesis this milestone that instruction
+counting got wrong, which is the real lesson: on this machine, measure first.
 
 ## 8. What to measure next
 
