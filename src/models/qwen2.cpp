@@ -8,6 +8,8 @@
 #include <stdexcept>
 
 #include "tge/core/dispatch.hpp"
+#include "tge/memory/budget.hpp"
+#include "tge/models/plan.hpp"
 
 namespace tge::models {
 namespace {
@@ -114,6 +116,17 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->context_ = std::min(model_context, std::min(requested, kHardMaxContext));
     if (model->context_ < 1) {
       throw std::runtime_error("model reports no usable context length");
+    }
+
+    // The same rule `tge plan` reports, applied rather than printed: an
+    // over-large context shrinks to what the budget supports instead of failing
+    // on allocation after the work has started.
+    const ModelPlan plan = analyse(model->file_, model->context_);
+    const PlacementDecision decision =
+        place(plan, static_cast<std::int64_t>(memory::MemoryBudget{}.snapshot().usable),
+              model->context_, 1);
+    if (decision.max_context > 0 && decision.max_context < model->context_) {
+      model->context_ = decision.max_context;
     }
 
     model->layers_.resize(static_cast<std::size_t>(config.block_count));

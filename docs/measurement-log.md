@@ -239,6 +239,11 @@ decode ceiling of 53.3 t/s.** The engine measures ~30 t/s, so decode runs at
 **56 percent of its bandwidth bound** — the other 44 percent is attention,
 normalisation and the per-call barriers, not memory.
 
+**The loader now applies the same rule** rather than only reporting it: asking
+for 32768 tokens on the 1.5B Q4_K_M model loads at 14178 with a printed notice,
+instead of allocating and failing. Cost of consulting the plan: load went from
+24.0 to 28.5 ms warm (+4 ms). A cold file reads 232 ms once.
+
 Analysis costs **2.3 ms warm**, 50 ms on a cold file (the first read of the
 metadata region faults it in). Either way it is far cheaper than loading a model,
 and it makes "does this fit?" answerable before committing to an allocation —

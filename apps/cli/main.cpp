@@ -441,6 +441,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   std::printf("load     : %.1f ms (%s vocabulary)\n",
               std::chrono::duration<double>(load_end - load_start).count() * 1e3,
               eager ? "eager" : "skipped");
+  if (context_limit > 0 && model->max_context() < context_limit) {
+    std::printf("context  : %d requested, %d available in memory\n",
+                context_limit, model->max_context());
+  }
   model->set_threads(threads);
 
   const tge::models::Qwen2Config& config = model->config();
