@@ -572,7 +572,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
 }
 
 int command_batch_bench(int rows, int cols, int tokens, int repeat,
-                        bool use_vnni) {
+                        bool use_vnni, bool use_q4k) {
   if (rows <= 0 || cols <= 0 || tokens <= 0 || repeat <= 0) {
     std::fprintf(stderr, "bench batch: all dimensions must be positive\n");
     return 2;
@@ -581,9 +581,15 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
     std::fprintf(stderr, "bench batch: cols must be a multiple of 32\n");
     return 2;
   }
+  if (use_q4k && cols % 256 != 0) {
+    std::fprintf(stderr, "bench batch: Q4_K needs cols to be a multiple of 256\n");
+    return 2;
+  }
 
   const std::size_t matrix_bytes =
-      static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols / 32) * 34;
+      use_q4k
+          ? static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols / 256) * 144
+          : static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols / 32) * 34;
   tge::memory::AlignedBuffer weights(matrix_bytes);
   std::uint32_t state = 0x51ED270Bu;
   for (std::size_t index = 0; index < matrix_bytes; ++index) {
@@ -608,9 +614,40 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
 
   const tge::cpu::GemvConfig config{0};
   const tge::KernelSet& set = tge::kernels();
+  const double flops = 2.0 * static_cast<double>(rows) * cols * tokens;
+  double best = 0.0;
+
+  if (use_q4k) {
+    tge::cpu::DequantBatchArgs args;
+    args.data = static_cast<const std::uint8_t*>(weights.data());
+    args.kind = tge::cpu::QuantKind::Q4_K;
+    args.rows = rows;
+    args.cols = cols;
+    args.input = input.f32();
+    args.tokens = tokens;
+    args.out = output.f32();
+    for (int iteration = 0; iteration < repeat; ++iteration) {
+      const auto start = Clock::now();
+      set.gemv_dequant_batch(args, config);
+      const auto finish = Clock::now();
+      const double seconds =
+          std::chrono::duration<double>(finish - start).count();
+      if (best == 0.0 || seconds < best) {
+        best = seconds;
+      }
+    }
+    std::printf("q4_k batch %dx%d x %d tokens (%.1f MiB), best of %d\n", rows,
+                cols, tokens,
+                static_cast<double>(matrix_bytes) / (1024.0 * 1024.0), repeat);
+    std::printf("  %.3f ms  %.2f GFLOPS  %.2f GB/s\n", best * 1e3,
+                flops / best / 1e9,
+                static_cast<double>(matrix_bytes) / best / 1e9);
+    return 0;
+  }
+
   const tge::cpu::Q8BatchFn kernel =
       use_vnni ? &tge::cpu::gemv_q8_batch_vnni : set.gemv_q8_batch;
-  double best = 0.0;
+  best = 0.0;
   for (int iteration = 0; iteration < repeat; ++iteration) {
     const auto start = Clock::now();
     kernel(args, config);
@@ -621,8 +658,6 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
     }
   }
 
-  const double flops =
-      2.0 * static_cast<double>(rows) * cols * static_cast<double>(tokens);
   std::printf("q8 batch %dx%d x %d tokens (%.1f MiB of weights), %s, best of %d\n",
               rows, cols, tokens,
               static_cast<double>(matrix_bytes) / (1024.0 * 1024.0),
@@ -1005,6 +1040,7 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[2], "batch") == 0) {
       int rows = 4864, cols = 896, tokens = 64, repeat = 5;
       bool use_vnni = false;
+      bool use_q4k = false;
       for (int index = 3; index < argc; index += 2) {
         const char* flag = argv[index];
         const char* value = index + 1 < argc ? argv[index + 1] : "";
@@ -1014,10 +1050,11 @@ int main(int argc, char** argv) {
         else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
         else if (std::strcmp(flag, "--repeat") == 0) ok = parse_int(value, repeat);
         else if (std::strcmp(flag, "--kernel") == 0) use_vnni = std::strcmp(value, "vnni") == 0;
+        else if (std::strcmp(flag, "--format") == 0) use_q4k = std::strcmp(value, "q4k") == 0;
         else { std::fprintf(stderr, "bench batch: unknown option '%s'\n", flag); return 2; }
         if (!ok) { std::fprintf(stderr, "bench batch: invalid value\n"); return 2; }
       }
-      return command_batch_bench(rows, cols, tokens, repeat, use_vnni);
+      return command_batch_bench(rows, cols, tokens, repeat, use_vnni, use_q4k);
     }
     if (argc >= 3 && std::strcmp(argv[2], "mem") == 0) {
       return run_mem_bench(argc, argv, 3);

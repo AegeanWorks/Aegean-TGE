@@ -173,7 +173,18 @@ Q4_K, Q6_K and Q8_0 in one file: output is token-identical to llama.cpp.
 | 0.5B | Q4_K_M (dequantize-then-dot) | 10.8 t/s |
 
 The K-quant path is correct but not yet fast: it expands a row to float before
-the dot. A fused K-quant dot is the obvious follow-up.
+the dot. `bench batch --format q4k` isolates why. At 896x4864:
+
+| Kernel | 64 tokens | 1 token |
+|---|---|---|
+| Q8_0 | 369.3 GFLOPS, 3.07 GB/s | 41.1 GFLOPS, **21.85 GB/s** |
+| Q4_K | 198.7 GFLOPS, 0.87 GB/s | 18.4 GFLOPS, **5.18 GB/s** |
+
+Decode is the damning case: Q4_K sustains 5.18 GB/s against a ~28 GB/s wall, so
+it runs at **18 percent of available bandwidth** while Q8_0 reaches 21.85. It is
+compute-bound on the dequantisation, not limited by how few bytes it reads -
+which is why a 28 percent smaller file decodes three times slower. A fused
+K-quant dot has to make the unpack cheaper, not just avoid the scratch buffer.
 
 ## 8. Load and startup
 
