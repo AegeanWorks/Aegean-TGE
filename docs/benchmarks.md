@@ -154,17 +154,23 @@ an order of magnitude.
 
 | Engine | Threads | Prompt (pp512) | Decode (tg128) |
 |---|---|---|---|
-| TGE | 6 / all | **170.9 t/s** (median of 3) | **23.4 t/s** (median of 3) |
+| TGE | 6 / all | **191.6 t/s** (median of 3) | **23.4 t/s** (median of 3) |
 | llama.cpp | 6 | 285.3 ± 22.8 t/s | 17.9 ± 1.2 t/s |
 
 Both measured with a 510-token context resident, so decode numbers here are
 lower than the short-context figures above: attention has more keys to walk.
 
-That is **11 t/s to 171 t/s, a 15x improvement**, and prefill is now 60 percent
-of llama.cpp rather than 4 percent. Decode remains faster than llama.cpp.
+That is **11 t/s to 191.6 t/s**, and prefill is now 67 percent of llama.cpp
+rather than 4 percent. The last 12 percent came from widening the kernel's token
+group from four to six, which amortizes the weight widening over more
+activations: the same 32 weights are folded across six rows instead of four,
+and six accumulators still fit the register file where eight would spill.
+Aligning the 64-token chunk to that group was measured and was slightly worse,
+so it was reverted.
 
-The remaining prefill gap is arithmetic: TGE's batch kernel sustains about
-207 GFLOPS, llama.cpp's quantized GEMM about 358 GFLOPS on the same six cores.
+What remains is arithmetic: 241 GFLOPS against llama.cpp's 358. The int8-to-float
+widening is now the largest cost in the inner loop, and the fix is an integer
+dot product rather than more float unrolling.
 
 ### Correctness, not just speed
 
@@ -198,9 +204,11 @@ llama.cpp on every position of that span.
   without changing the decoded text.
 - Sampling supports temperature, top-k, top-p, min-p and repetition penalty, but
   the comparison above uses greedy so the numbers are reproducible.
-- Prefill arithmetic is still behind: the batch kernel sustains about 207 GFLOPS
-  against llama.cpp's 358. Closing that needs weight packing and register
-  blocking across output rows, which is a kernel rewrite rather than a tweak.
+- Prefill arithmetic is still behind: the batch kernel sustains about 241 GFLOPS
+  against llama.cpp's 358. Widening the token group from four to six closed part
+  of it (see section 6); the rest needs an integer inner loop, because the
+  per-element int8-to-float widening is now the largest single cost and cannot
+  be amortized further within the register file.
 
 ## 7. Rejected: integer-domain Q8 inner loop
 

@@ -1,54 +1,16 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-TOKENIZER",
+    "task_id": "TGE-PREFILL2",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793520800.9097056,
+    "updated_at": 1793521029.9922464,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-FOUNDATION",
-      "phase": "phase 1",
-      "phase_num": 1,
-      "description": "[1/3] Native CPU foundation: audit, CPU detection, packed AVX2 GEMM, thread pool, memory budget",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793496566.9019213,
-      "timestamp_str": "2026-11-01 04:29:26",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "Milestone 0.1 foundation required before any inference work",
-        "benefits": "Measured baseline and a kernel pipeline that scales across P/E cores",
-        "risks": "Benchmark variance from background memory pressure; GCC-only toolchain",
-        "mitigation": "Median/best-of-five reporting; MSVC install tracked as follow-up"
-      }
-    },
-    {
-      "task_id": "TGE-FOUNDATION",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 24/24 tests; GEMM 2048^3 18.2 -> 246.5 GFLOPS (best of 5); llama.cpp baseline pp512 407.6 / tg128 8.73 t/s on 0.5B Q4_K_M",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793496572.0098543,
-      "timestamp_str": "2026-11-01 04:29:32",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-FOUNDATION",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-DECODE' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793497095.1669056,
-      "timestamp_str": "2026-11-01 04:38:15",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-DECODE",
       "phase": "phase 4",
@@ -265,6 +227,44 @@
       "status": "in_progress",
       "timestamp": 1793520800.9097056,
       "timestamp_str": "2026-11-01 11:13:20",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PREFILL2",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/1] Widen prefill token group to amortize weight widening",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793521029.6746886,
+      "timestamp_str": "2026-11-01 11:17:09",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "int8-to-float widening dominated the batch inner loop",
+        "benefits": "prefill 170.9 -> 191.6 t/s with no numerics change",
+        "risks": "register spill if the group grows past the YMM file",
+        "mitigation": "group of six chosen for the register budget; batch kernel still tested against scalar, token parity re-checked"
+      }
+    },
+    {
+      "task_id": "TGE-TOKENIZER",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-PREFILL2' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793521029.6746886,
+      "timestamp_str": "2026-11-01 11:17:09",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PREFILL2",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; 45/45 tests; prefill median 191.6 t/s, parity intact",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793521029.9922464,
+      "timestamp_str": "2026-11-01 11:17:09",
       "agent": "unidentified"
     }
   ]

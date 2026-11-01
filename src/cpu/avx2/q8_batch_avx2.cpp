@@ -29,9 +29,12 @@ inline float horizontal_sum(__m256 values) {
 /// One output row against `kGroup` tokens at once.
 ///
 /// The weight block is widened once and then applied to every token in the
-/// group: four folds of the same 32 weights. That amortization is the whole
+/// group: six folds of the same 32 weights. That amortization is the whole
 /// point of batching, so the token loop is inside the block loop on purpose.
-constexpr int kGroup = 4;
+/// Six is a register-budget choice: six accumulators plus four weight vectors
+/// plus the per-token temporaries fit the sixteen YMM registers without
+/// spilling, and eight does not.
+constexpr int kGroup = 6;
 
 }  // namespace
 
@@ -66,15 +69,13 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
       int token = 0;
 
       for (; token + kGroup <= tokens; token += kGroup) {
-        __m256 acc0 = _mm256_setzero_ps();
-        __m256 acc1 = _mm256_setzero_ps();
-        __m256 acc2 = _mm256_setzero_ps();
-        __m256 acc3 = _mm256_setzero_ps();
-
-        const float* in0 = args.input + static_cast<std::size_t>(token) * cols;
-        const float* in1 = in0 + cols;
-        const float* in2 = in1 + cols;
-        const float* in3 = in2 + cols;
+        __m256 accumulators[kGroup];
+        const float* inputs[kGroup];
+        for (int index = 0; index < kGroup; ++index) {
+          accumulators[index] = _mm256_setzero_ps();
+          inputs[index] = args.input +
+                          static_cast<std::size_t>(token + index) * cols;
+        }
 
         for (int block = 0; block < blocks; ++block) {
           const std::uint8_t* entry = weight_row + block * kQ8BlockBytes;
@@ -89,44 +90,21 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
           const __m256 w3 = widen(values + 24);
 
           const int offset = block * kQ8BlockElements;
-          const float* x0 = in0 + offset;
-          const float* x1 = in1 + offset;
-          const float* x2 = in2 + offset;
-          const float* x3 = in3 + offset;
-
-          __m256 s0 = _mm256_mul_ps(w0, _mm256_loadu_ps(x0));
-          s0 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x0 + 8), s0);
-          s0 = _mm256_fmadd_ps(w2, _mm256_loadu_ps(x0 + 16), s0);
-          s0 = _mm256_fmadd_ps(w3, _mm256_loadu_ps(x0 + 24), s0);
-          acc0 = _mm256_fmadd_ps(scale, s0, acc0);
-
-          __m256 s1 = _mm256_mul_ps(w0, _mm256_loadu_ps(x1));
-          s1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x1 + 8), s1);
-          s1 = _mm256_fmadd_ps(w2, _mm256_loadu_ps(x1 + 16), s1);
-          s1 = _mm256_fmadd_ps(w3, _mm256_loadu_ps(x1 + 24), s1);
-          acc1 = _mm256_fmadd_ps(scale, s1, acc1);
-
-          __m256 s2 = _mm256_mul_ps(w0, _mm256_loadu_ps(x2));
-          s2 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x2 + 8), s2);
-          s2 = _mm256_fmadd_ps(w2, _mm256_loadu_ps(x2 + 16), s2);
-          s2 = _mm256_fmadd_ps(w3, _mm256_loadu_ps(x2 + 24), s2);
-          acc2 = _mm256_fmadd_ps(scale, s2, acc2);
-
-          __m256 s3 = _mm256_mul_ps(w0, _mm256_loadu_ps(x3));
-          s3 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x3 + 8), s3);
-          s3 = _mm256_fmadd_ps(w2, _mm256_loadu_ps(x3 + 16), s3);
-          s3 = _mm256_fmadd_ps(w3, _mm256_loadu_ps(x3 + 24), s3);
-          acc3 = _mm256_fmadd_ps(scale, s3, acc3);
+          for (int index = 0; index < kGroup; ++index) {
+            const float* x = inputs[index] + offset;
+            __m256 sum = _mm256_mul_ps(w0, _mm256_loadu_ps(x));
+            sum = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x + 8), sum);
+            sum = _mm256_fmadd_ps(w2, _mm256_loadu_ps(x + 16), sum);
+            sum = _mm256_fmadd_ps(w3, _mm256_loadu_ps(x + 24), sum);
+            accumulators[index] =
+                _mm256_fmadd_ps(scale, sum, accumulators[index]);
+          }
         }
 
-        args.out[static_cast<std::size_t>(token + 0) * rows + row] =
-            horizontal_sum(acc0);
-        args.out[static_cast<std::size_t>(token + 1) * rows + row] =
-            horizontal_sum(acc1);
-        args.out[static_cast<std::size_t>(token + 2) * rows + row] =
-            horizontal_sum(acc2);
-        args.out[static_cast<std::size_t>(token + 3) * rows + row] =
-            horizontal_sum(acc3);
+        for (int index = 0; index < kGroup; ++index) {
+          args.out[static_cast<std::size_t>(token + index) * rows + row] =
+              horizontal_sum(accumulators[index]);
+        }
       }
 
       // Tail tokens that do not fill a group.

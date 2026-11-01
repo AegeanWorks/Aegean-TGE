@@ -42,6 +42,11 @@ merge table, validated against `llama-tokenize` on punctuation, decimals,
 percent signs, contractions and double spaces. The only remaining item from the
 caveat list is the prefill arithmetic gap.
 
+Revision 9 (same day) narrows that gap: the batch kernel folds each weight block
+across six activations instead of four, taking prefill from 170.9 to 191.6 t/s
+(207 to 241 GFLOPS). Aligning the prompt chunk to that group was measured and
+reverted. The rest needs an integer inner loop.
+
 ## 1. Hardware audit
 
 | Item | Measured |

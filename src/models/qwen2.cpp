@@ -20,7 +20,9 @@ constexpr int kHardMaxContext = 32768;
 
 // Prompt chunk. The batch kernel re-reads the activation rows once per output
 // row, so the chunk has to stay small enough that they live in cache. 64 rows
-// of the widest activation (4864 floats) is about 1.2 MiB per worker.
+// of the widest activation (4864 floats) is about 1.2 MiB per worker. Aligning
+// it to the kernel's six-token group was measured and was slightly worse, so
+// the tail is left to the single-token path.
 constexpr int kPrefillChunk = 64;
 
 float silu(float value) { return value / (1.0F + std::exp(-value)); }
