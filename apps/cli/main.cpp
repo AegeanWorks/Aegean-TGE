@@ -62,6 +62,9 @@ void print_usage() {
       "        --model PATH --context N --sessions N --bandwidth GB/s\n"
       "  bench sessions [opts] concurrent decoding over shared weights\n"
       "        --model PATH --sessions N --tokens N --threads N --context N\n"
+      "  bench continuous [opts] continuous batching over N KV slots\n"
+      "        --model PATH --requests N --tokens N --threads N --sequences N\n"
+      "        --vnni | --kv f16   optional VNNI / half-KV trades\n"
       "  generate [opts]      greedy decode and token-rate measurement\n"
       "        --model PATH     GGUF model to load\n"
       "        --tokens \"a b c\"  prompt token ids\n"
@@ -79,10 +82,14 @@ void print_usage() {
       "        --seed N         random seed for sampling\n"
       "        --attention A    auto|scalar|head|gqa attention (default auto)\n"
       "        --speculative    greedy prompt-lookup speculation\n"
+      "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
+      "        --kv T           KV cache type: f32|f16 (default f32)\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
       "  fidelity [opts]      scalar vs selected attention, teacher-forced\n"
       "        --model PATH --corpus PATH\n"
+      "        --vnni           compare against the VNNI batch kernels\n"
+      "        --kv T           KV cache type: f32|f16 (default f32)\n"
       "        --context N      context used by both models (default 1024)\n"
       "        --tokens N       stop after N corpus tokens (default all)\n"
       "        --threads N      worker threads (default: all logical)\n"
@@ -436,9 +443,18 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      int context_limit, bool print_text,
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
-                     bool speculative) {
+                     bool speculative, bool vnni, bool kv_half) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
+    return 2;
+  }
+  const tge::cpu::CpuInfo cpu = tge::cpu::detect();
+  if (vnni && !cpu.features.avx_vnni) {
+    std::fprintf(stderr, "generate: --vnni needs AVX-VNNI on this CPU\n");
+    return 2;
+  }
+  if (kv_half && !cpu.features.f16c) {
+    std::fprintf(stderr, "generate: --kv f16 needs F16C on this CPU\n");
     return 2;
   }
 
@@ -451,7 +467,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      (vocabulary == VocabularyMode::Auto && needs_tokenizer);
   const auto load_start = Clock::now();
   std::unique_ptr<tge::models::Qwen2> model =
-      tge::models::Qwen2::load(path, error, context_limit, eager);
+      tge::models::Qwen2::load(path, error, context_limit, eager, kv_half);
   const auto load_end = Clock::now();
   if (!model) {
     std::fprintf(stderr, "generate: %s\n", error.c_str());
@@ -477,6 +493,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     }
     model->set_attention_mode(tge::models::AttentionMode::Head);
   }
+  model->set_vnni(vnni);
 
   const tge::models::Qwen2Config& config = model->config();
 
@@ -810,6 +827,145 @@ int command_plan(const std::string& path, int context, int sessions,
   return 0;
 }
 
+int command_continuous_bench(const std::string& path, int requests, int tokens,
+                             int threads, int sequences, int context,
+                             bool vnni, bool kv_half) {
+  if (requests <= 0 || tokens <= 0 || sequences <= 0) {
+    std::fprintf(stderr,
+                 "bench continuous: requests, tokens and sequences must be "
+                 "positive\n");
+    return 2;
+  }
+  if (sequences > 64) {
+    std::fprintf(stderr, "bench continuous: at most 64 slots\n");
+    return 2;
+  }
+  const tge::cpu::CpuInfo cpu = tge::cpu::detect();
+  if (vnni && !cpu.features.avx_vnni) {
+    std::fprintf(stderr, "bench continuous: --vnni needs AVX-VNNI\n");
+    return 2;
+  }
+  if (kv_half && !cpu.features.f16c) {
+    std::fprintf(stderr, "bench continuous: --kv f16 needs F16C\n");
+    return 2;
+  }
+  std::string error;
+  const auto load_start = Clock::now();
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(path, error, context, false, kv_half, sequences);
+  if (!model) {
+    std::fprintf(stderr, "bench continuous: %s\n", error.c_str());
+    return 1;
+  }
+  model->set_threads(threads);
+  model->set_vnni(vnni);
+  const auto load_end = Clock::now();
+
+  // Every request uses the same seed token, so identical transcripts are the
+  // independence check for the per-slot KV cache.
+  const int seed_token = 128;
+  const int vocab = model->vocab_size();
+
+  struct Slot {
+    bool active = false;
+    int position = 0;
+    std::vector<int> generated;
+  };
+  std::vector<Slot> slots(static_cast<std::size_t>(sequences));
+  int admitted = 0;
+  int finished = 0;
+  long long decode_tokens = 0;
+  std::vector<int> batch_tokens;
+  std::vector<int> batch_positions;
+  std::vector<int> batch_sequences;
+  batch_tokens.reserve(static_cast<std::size_t>(sequences));
+  batch_positions.reserve(static_cast<std::size_t>(sequences));
+  batch_sequences.reserve(static_cast<std::size_t>(sequences));
+  std::vector<std::vector<int>> transcripts(static_cast<std::size_t>(requests));
+
+  const auto start = Clock::now();
+  while (finished < requests) {
+    // Admit a request into every free slot, prefilling its seed token.
+    for (int slot = 0; slot < sequences && admitted < requests; ++slot) {
+      if (slots[static_cast<std::size_t>(slot)].active) {
+        continue;
+      }
+      const float* logits = model->prefill(&seed_token, 1, 0, slot);
+      Slot& entry = slots[static_cast<std::size_t>(slot)];
+      entry.active = true;
+      entry.position = 1;
+      entry.generated.assign(
+          1, tge::models::Qwen2::argmax(logits, vocab));
+      ++admitted;
+    }
+
+    batch_tokens.clear();
+    batch_positions.clear();
+    batch_sequences.clear();
+    for (int slot = 0; slot < sequences; ++slot) {
+      const Slot& entry = slots[static_cast<std::size_t>(slot)];
+      if (!entry.active) {
+        continue;
+      }
+      batch_tokens.push_back(entry.generated.back());
+      batch_positions.push_back(entry.position);
+      batch_sequences.push_back(slot);
+    }
+    if (batch_tokens.empty()) {
+      break;
+    }
+
+    const float* logits = model->forward_batch(
+        batch_tokens.data(), batch_positions.data(),
+        static_cast<int>(batch_tokens.size()), batch_sequences.data());
+    for (std::size_t index = 0; index < batch_tokens.size(); ++index) {
+      const int next = tge::models::Qwen2::argmax(
+          logits + index * static_cast<std::size_t>(vocab), vocab);
+      const int slot = batch_sequences[index];
+      Slot& entry = slots[static_cast<std::size_t>(slot)];
+      entry.generated.push_back(next);
+      ++entry.position;
+      ++decode_tokens;
+      if (static_cast<int>(entry.generated.size()) >= tokens ||
+          model->config().is_end_token(next)) {
+        transcripts[static_cast<std::size_t>(finished)] = entry.generated;
+        ++finished;
+        entry.active = false;
+      }
+    }
+  }
+  const auto finish = Clock::now();
+
+  const double seconds =
+      std::chrono::duration<double>(finish - start).count();
+  const double load_seconds =
+      std::chrono::duration<double>(load_end - load_start).count();
+  bool identical = true;
+  for (int index = 1; index < requests; ++index) {
+    if (transcripts[static_cast<std::size_t>(index)] != transcripts[0]) {
+      identical = false;
+    }
+  }
+  const double per_second =
+      seconds > 0.0 ? static_cast<double>(decode_tokens) / seconds : 0.0;
+
+  std::printf("continuous: %d requests, %d slots, %d tokens\n", requests,
+              sequences, tokens);
+  std::printf("load      : %.1f ms\n", load_seconds * 1e3);
+  std::printf("wall      : %.3f s\n", seconds);
+  std::printf("decode    : %lld tokens, %.2f t/s aggregate\n", decode_tokens,
+              per_second);
+  std::printf("state     : %s\n",
+              identical ? "independent (all transcripts identical)"
+                        : "LEAKED - transcripts differ");
+  std::printf("first     :");
+  for (const int id : transcripts[0]) {
+    std::printf(" %d", id);
+  }
+  std::printf("\n");
+  return identical ? 0 : 1;
+}
+
 int command_sessions_bench(const std::string& path, int sessions, int tokens,
                            int threads_per_session, int context) {
   if (sessions <= 0 || tokens <= 0) {
@@ -1026,6 +1182,8 @@ int run_generate(int argc, char** argv) {
   VocabularyMode vocabulary = VocabularyMode::Auto;
   tge::models::AttentionMode attention_mode = tge::models::AttentionMode::Auto;
   bool speculative = false;
+  bool vnni = false;
+  bool kv_half = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
 
@@ -1040,6 +1198,10 @@ int run_generate(int argc, char** argv) {
     }
     if (std::strcmp(argv[index], "--speculative") == 0) {
       speculative = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--vnni") == 0) {
+      vnni = true;
       continue;
     }
     if (index + 1 >= argc) {
@@ -1088,6 +1250,15 @@ int run_generate(int argc, char** argv) {
                      "generate: --attention takes auto|scalar|head|gqa\n");
         return 2;
       }
+    } else if (std::strcmp(flag, "--kv") == 0) {
+      if (std::strcmp(value, "f16") == 0) {
+        kv_half = true;
+      } else if (std::strcmp(value, "f32") == 0) {
+        kv_half = false;
+      } else {
+        std::fprintf(stderr, "generate: --kv takes f32|f16\n");
+        return 2;
+      }
     } else if (std::strcmp(flag, "--top-k") == 0) {
       ok = parse_int(value, sampling.top_k);
     } else if (std::strcmp(flag, "--temp") == 0) {
@@ -1117,7 +1288,8 @@ int run_generate(int argc, char** argv) {
   sampling.seed = static_cast<std::uint32_t>(seed);
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
-                          vocabulary, attention_mode, speculative);
+                          vocabulary, attention_mode, speculative, vnni,
+                          kv_half);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -1227,7 +1399,17 @@ int run_mem_bench(int argc, char** argv, int first) {
 }
 
 int command_fidelity(const std::string& path, const std::string& corpus_path,
-                     int context, int max_tokens, int threads) {
+                     int context, int max_tokens, int threads, bool vnni,
+                     bool kv_half) {
+  const tge::cpu::CpuInfo cpu = tge::cpu::detect();
+  if (vnni && !cpu.features.avx_vnni) {
+    std::fprintf(stderr, "fidelity: --vnni needs AVX-VNNI on this CPU\n");
+    return 2;
+  }
+  if (kv_half && !cpu.features.f16c) {
+    std::fprintf(stderr, "fidelity: --kv f16 needs F16C on this CPU\n");
+    return 2;
+  }
   std::ifstream corpus_stream(corpus_path, std::ios::binary);
   if (!corpus_stream) {
     std::fprintf(stderr, "fidelity: cannot read %s\n", corpus_path.c_str());
@@ -1246,13 +1428,13 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   // The scalar reference loads the vocabulary eagerly, because the tokenizer
   // reuses those arrays instead of parsing the file a second time.
   std::unique_ptr<tge::models::Qwen2> reference =
-      tge::models::Qwen2::load(path, error, context, true);
+      tge::models::Qwen2::load(path, error, context, true, false);
   if (!reference) {
     std::fprintf(stderr, "fidelity: %s\n", error.c_str());
     return 1;
   }
   std::unique_ptr<tge::models::Qwen2> candidate =
-      tge::models::Qwen2::load(path, error, context, false);
+      tge::models::Qwen2::load(path, error, context, false, kv_half);
   if (!candidate) {
     std::fprintf(stderr, "fidelity: %s\n", error.c_str());
     return 1;
@@ -1262,6 +1444,7 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   reference->set_threads(threads);
   candidate->set_threads(threads);
   reference->set_attention_mode(tge::models::AttentionMode::Scalar);
+  candidate->set_vnni(vnni);
 
   const std::unique_ptr<tge::models::Tokenizer> tokenizer =
       tge::models::Tokenizer::from_gguf(reference->file(), error);
@@ -1373,8 +1556,9 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
       mode_name = "gqa";
       break;
   }
-  std::printf("fidelity : scalar vs %s attention (%s)\n",
-              tge::kernels().attention_name.c_str(), mode_name);
+  std::printf("fidelity : scalar vs %s attention (%s%s%s)\n",
+              tge::kernels().attention_name.c_str(), mode_name,
+              vnni ? ", vnni" : "", kv_half ? ", f16 kv" : "");
   std::printf("load     : %.1f ms\n",
               std::chrono::duration<double>(load_end - load_start).count() * 1e3);
   std::printf("corpus   : %d positions, context %d\n", positions, usable);
@@ -1393,14 +1577,36 @@ int run_fidelity(int argc, char** argv) {
   int context = 1024;
   int max_tokens = 0;
   int threads = 0;
+  bool vnni = false;
+  bool kv_half = false;
 
-  for (int index = 2; index < argc; index += 2) {
+  for (int index = 2; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--vnni") == 0) {
+      vnni = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--kv") == 0) {
+      if (index + 1 >= argc) {
+        std::fprintf(stderr, "fidelity: '--kv' needs a value\n");
+        return 2;
+      }
+      const char* value = argv[++index];
+      if (std::strcmp(value, "f16") == 0) {
+        kv_half = true;
+      } else if (std::strcmp(value, "f32") == 0) {
+        kv_half = false;
+      } else {
+        std::fprintf(stderr, "fidelity: --kv takes f32|f16\n");
+        return 2;
+      }
+      continue;
+    }
     if (index + 1 >= argc) {
       std::fprintf(stderr, "fidelity: '%s' needs a value\n", argv[index]);
       return 2;
     }
     const char* flag = argv[index];
-    const char* value = argv[index + 1];
+    const char* value = argv[++index];
     bool ok = true;
     if (std::strcmp(flag, "--model") == 0) {
       model_path = value;
@@ -1430,7 +1636,8 @@ int run_fidelity(int argc, char** argv) {
     std::fprintf(stderr, "fidelity: --corpus is required\n");
     return 2;
   }
-  return command_fidelity(model_path, corpus_path, context, max_tokens, threads);
+  return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
+                          vnni, kv_half);
 }
 
 }  // namespace
@@ -1470,6 +1677,58 @@ int main(int argc, char** argv) {
       return 2;
     }
     return command_gguf(argv[2]);
+  }
+
+  if (command == "bench" && argc >= 3 &&
+      std::strcmp(argv[2], "continuous") == 0) {
+    std::string model_path;
+    int requests = 8;
+    int tokens = 32;
+    int threads = 0;
+    int sequences = 4;
+    int context = 0;
+    bool vnni = false;
+    bool kv_half = false;
+    for (int index = 3; index < argc; ++index) {
+      if (std::strcmp(argv[index], "--vnni") == 0) {
+        vnni = true;
+        continue;
+      }
+      if (std::strcmp(argv[index], "--kv") == 0) {
+        if (index + 1 >= argc) {
+          std::fprintf(stderr, "bench continuous: '--kv' needs a value\n");
+          return 2;
+        }
+        const char* value = argv[++index];
+        if (std::strcmp(value, "f16") == 0) {
+          kv_half = true;
+        } else if (std::strcmp(value, "f32") == 0) {
+          kv_half = false;
+        } else {
+          std::fprintf(stderr, "bench continuous: --kv takes f32|f16\n");
+          return 2;
+        }
+        continue;
+      }
+      const char* flag = argv[index];
+      const char* value = index + 1 < argc ? argv[index + 1] : "";
+      bool ok = true;
+      if (std::strcmp(flag, "--model") == 0) model_path = value;
+      else if (std::strcmp(flag, "--requests") == 0) ok = parse_int(value, requests);
+      else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
+      else if (std::strcmp(flag, "--threads") == 0) ok = parse_int(value, threads);
+      else if (std::strcmp(flag, "--sequences") == 0) ok = parse_int(value, sequences);
+      else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
+      else { std::fprintf(stderr, "bench continuous: unknown option '%s'\n", flag); return 2; }
+      if (!ok) { std::fprintf(stderr, "bench continuous: invalid value\n"); return 2; }
+      ++index;
+    }
+    if (model_path.empty()) {
+      std::fprintf(stderr, "bench continuous: --model is required\n");
+      return 2;
+    }
+    return command_continuous_bench(model_path, requests, tokens, threads,
+                                    sequences, context, vnni, kv_half);
   }
 
   if (command == "bench" && argc >= 3 && std::strcmp(argv[2], "sessions") == 0) {

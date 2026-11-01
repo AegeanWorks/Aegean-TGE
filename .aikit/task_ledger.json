@@ -1,120 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-SPEC",
+    "task_id": "TGE-BATCH",
     "last_phase": "verification",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1793568429.2284431,
+    "updated_at": 1793570949.9318213,
     "owner": "commandcode:1",
     "started_by": "commandcode:1",
     "continuations": [],
-    "completed_at": 1793568429.4592519
+    "completed_at": 1793571378.7556727
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PROFILE",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; added bench batch isolation; kernel 227-268 GFLOPS; llama pp512 varies 220.7-285.3 between runs",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793522034.9647815,
-      "timestamp_str": "2026-11-01 11:33:54",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-INT-PREFILL",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-PROFILE' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793522034.9647815,
-      "timestamp_str": "2026-11-01 11:33:54",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-VNNI",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; VNNI kernel faster in isolation (284/342 GFLOPS) but slower end-to-end (150.9 vs 186.0); reverted; 45/45 tests, parity intact",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793525613.0855494,
-      "timestamp_str": "2026-11-01 12:33:33",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-PROFILE",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-VNNI' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793525613.0855494,
-      "timestamp_str": "2026-11-01 12:33:33",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-QUALITY",
-      "phase": "planning",
-      "phase_num": 2,
-      "description": "[1/5] Fix the confirmed quality handoffs and precompute RoPE",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793548835.813675,
-      "timestamp_str": "2026-11-01 19:00:35",
-      "agent": "commandcode:1",
-      "impact_assessment": {
-        "why": "The report's defects were reproduced in this tree: control tokens split into 8 ids, generation ignores the end token, top-p leaks excluded tail mass to the weakest kept token, and the repetition penalty compounds per occurrence. RoPE also recomputes 12,288 trig pairs per token.",
-        "benefits": "Special tokens tokenise as one id; generation stops at end-of-turn; nucleus sampling preserves the requested distribution; penalty is per distinct token; 32 trig pairs per position instead of 12,288.",
-        "risks": "contract: SamplingParams gains penalty_window, Qwen2Config gains eos/eot ids, Tokenizer gains control-token matching; dependency: standard library only, no new packages; concurrency: RoPE table is read-only after load and sampling stays single-threaded; state: no persistence or file-format changes",
-        "mitigation": "Unit tests for each defect, greedy token ids compared before and after, tokenizer ids compared with the reference, and the full project gate run before commit"
-      }
-    },
-    {
-      "task_id": "TGE-VNNI",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-QUALITY' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793548835.813675,
-      "timestamp_str": "2026-11-01 19:00:35",
-      "agent": "commandcode:1",
-      "continued_from": "unidentified"
-    },
-    {
-      "task_id": "TGE-QUALITY",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 53/53 tests; stop at end id 127->52 tokens; control ids 8->2; top-p .200->.158; sampler 16.75->0.61 ms; RoPE 12288->0 trig pairs; greedy ids parity",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793549121.9504204,
-      "timestamp_str": "2026-11-01 19:05:21",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-QUALITY",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 54/54 tests; pool handoff 39.4/64.3us->0.51/0.80us; short decode 31.2/28.1->36.9/43.1->41.9/47.3 t/s; 2k prefill 63.3/78.1->144.0/203.6 t/s; 2k decode 20.3/19.9->22.9/23.8 t/s; greedy ids identical; store-buffer handshake fixed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793550410.5382028,
-      "timestamp_str": "2026-11-01 19:26:50",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-QUALITY",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 54/54 tests; handoffs + detokenizer + --penalty-window; pool 39.4/64.3->0.51/0.80us; 2k prefill 63.3/78.1->144.0/203.6 t/s; ids identical",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793550677.8363802,
-      "timestamp_str": "2026-11-01 19:31:17",
-      "agent": "commandcode:1"
-    },
     {
       "task_id": "TGE-QUALITY",
       "phase": "completed",
@@ -248,6 +145,120 @@
       "status": "completed",
       "timestamp": 1793568429.4592535,
       "timestamp_str": "2026-11-02 00:27:09",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-VNNI",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/2] Pre-quantize VNNI activation rows and price the trade",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793569180.1308877,
+      "timestamp_str": "2026-11-02 00:39:40",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "The report's VNNI lost end to end because the kernel re-quantized the activation on every call; the 2048 prefill is the weak spot.",
+        "benefits": "One quantization per distinct activation flips the 510 prefill to +19% and the 2048 to +14% on the best run; the fidelity harness prices the accuracy trade.",
+        "risks": "contract: Q8BatchArgs gains pre-quantized pointers and the model gains set_vnni; dependency: none new; concurrency: the scratch is per model, no TLS; state: 0.3 MB Q8 scratch, no format change; accuracy: mean KL 1.6e-3, top-1 485/497",
+        "mitigation": "The VNNI is opt-in (--vnni); the default stays f32; tge fidelity --vnni reports the price; 58/58 tests and 4/4 gates"
+      }
+    },
+    {
+      "task_id": "TGE-VNNI",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 58/58 tests; VNNI 510 prefill 163.1->194.5 t/s (+19%), 2048 165.6->188.2 (+14% best run; later 155.5 in noise); 510 decode 36.9->26.2, 2048 36.3->36.9; fidelity mean KL 1.568e-3, worst 2.254e-2, top-1 485/497; ids differ at 128/2048/spec; default f32, --vnni opt-in",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793569180.6214197,
+      "timestamp_str": "2026-11-02 00:39:40",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-F16",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/2] f16 KV cache with F16C reads and fidelity pricing",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793570124.9497864,
+      "timestamp_str": "2026-11-02 00:55:24",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "The KV is f32 while llama uses f16; the 2k decode and the 32k memory are the pressure points.",
+        "benefits": "KV halves (192->96 MiB at 8192); 510 prefill +58%; fidelity 1.658e-6 KL, top-1 497/497, ids identical.",
+        "risks": "contract: Qwen2::load gains kv_half and the attention args gain f16 pointers; dependency: F16C; concurrency: per-model caches; state: half caches; accuracy: 1.658e-6",
+        "mitigation": "Opt-in --kv f16; default f32; tge fidelity --kv f16 reports the price; 60/60 tests and 4/4 gates"
+      }
+    },
+    {
+      "task_id": "TGE-VNNI",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-F16' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793570124.9497864,
+      "timestamp_str": "2026-11-02 00:55:24",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-F16",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 60/60 tests; f16 KV 510 prefill 139.7->220.8 (+58%); 2048 prefill/decode 145.7/21.7->165.9/35.4 on the best run (machine \u00b120%); fidelity mean KL 1.658e-6, worst 2.446e-5, top-1 497/497; ids identical at 2048/story/spec; default f32, --kv f16 opt-in",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793570125.250983,
+      "timestamp_str": "2026-11-02 00:55:25",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-BATCH",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/2] Continuous batching with per-sequence KV slots",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793570949.684187,
+      "timestamp_str": "2026-11-02 01:09:09",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "The sessions benchmark runs N models, so N weight streams do not share; the model can decode one token per KV slot in one batch pass.",
+        "benefits": "8 requests x 32 tokens: 58.28 t/s aggregate vs 42.21 for four concurrent models (+38%); first transcript identical to single decode.",
+        "risks": "contract: Qwen2::load gains sequences and forward_batch; dependency: none; concurrency: per-slot KV, no shared batch state; state: sequences x the KV cache; scheduler: minimal, no paged/mixed",
+        "mitigation": "Default sequences=1 keeps existing paths; the CLI transcript checks parity; 60/60 tests and 4/4 gates"
+      }
+    },
+    {
+      "task_id": "TGE-F16",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-BATCH' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793570949.684187,
+      "timestamp_str": "2026-11-02 01:09:09",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-BATCH",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 60/60 tests; continuous 8x32 58.28 t/s vs sessions 42.21 (+38%), single 26.29; first transcript == generate ids; all 8 identical; minimal scheduler (paged/mixed remains)",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793570949.9318213,
+      "timestamp_str": "2026-11-02 01:09:09",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-BATCH",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-BATCH' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793571378.7556741,
+      "timestamp_str": "2026-11-02 01:16:18",
       "agent": "commandcode:1"
     }
   ]

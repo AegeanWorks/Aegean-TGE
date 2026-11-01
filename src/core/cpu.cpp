@@ -244,6 +244,7 @@ CpuInfo detect() {
   info.features.sse41 = bit(leaf1.ecx, 19);
   info.features.sse42 = bit(leaf1.ecx, 20);
   info.features.fma = bit(leaf1.ecx, 12);
+  info.features.f16c = bit(leaf1.ecx, 29);
   info.features.avx = bit(leaf1.ecx, 28);
   const bool osxsave = bit(leaf1.ecx, 27);
 
@@ -277,6 +278,7 @@ CpuInfo detect() {
     info.features.avx = false;
     info.features.avx2 = false;
     info.features.fma = false;
+    info.features.f16c = false;
     info.features.avx_vnni = false;
   }
   if (!info.features.os_avx512) {
@@ -333,8 +335,9 @@ std::string describe(const CpuInfo& info) {
       {"ssse3", f.ssse3},       {"sse4.1", f.sse41},
       {"sse4.2", f.sse42},      {"avx", f.avx},
       {"avx2", f.avx2},         {"fma", f.fma},
-      {"avx-vnni", f.avx_vnni}, {"avx512f", f.avx512f},
-      {"avx512vnni", f.avx512vnni}, {"amx-int8", f.amx_int8}};
+      {"f16c", f.f16c},         {"avx-vnni", f.avx_vnni},
+      {"avx512f", f.avx512f},   {"avx512vnni", f.avx512vnni},
+      {"amx-int8", f.amx_int8}};
   for (const auto& [name, present] : flags) {
     if (present) {
       out << " " << name;
@@ -368,8 +371,9 @@ std::string to_json(const CpuInfo& info) {
       {"ssse3", f.ssse3},       {"sse4_1", f.sse41},
       {"sse4_2", f.sse42},      {"avx", f.avx},
       {"avx2", f.avx2},         {"fma", f.fma},
-      {"avx_vnni", f.avx_vnni}, {"avx512f", f.avx512f},
-      {"avx512vnni", f.avx512vnni}, {"amx_int8", f.amx_int8}};
+      {"f16c", f.f16c},         {"avx_vnni", f.avx_vnni},
+      {"avx512f", f.avx512f},   {"avx512vnni", f.avx512vnni},
+      {"amx_int8", f.amx_int8}};
   bool first = true;
   for (const auto& [name, present] : flags) {
     if (!first) {

@@ -120,6 +120,9 @@ aegean-tge/
 | **Prompt, 2048 tokens** | **170-200 t/s (this run; llama.cpp: 287.9 t/s, 6 threads)** |
 | Concurrent sessions, 0.5B Q8_0 | 2 × 6: 47.4 t/s aggregate; 4 × 6: 53.2 this run, tail forward removed; >1 thread/session safe |
 | Speculative decode, story prompt | 49.9-56.4 t/s vs 28.1-30.1 normal (1.66-2.00x); ids identical; pins per-head |
+| VNNI prefill, `--vnni` | 510: 194.5 vs 163.1 t/s (+19%); 2048: +14% on the best run; KL 1.6e-3, top-1 485/497; opt-in |
+| f16 KV, `--kv f16` | 2048: 165.9 vs 145.7 t/s prefill, 35.4 vs 21.7 decode on the best run; KL 1.658e-6, top-1 497/497, ids identical; opt-in |
+| Continuous batching, `bench continuous` | 8 × 32: 58.3 t/s vs 42.2 sessions (1.38x), ids identical; 4 slots, 1 model; `--vnni`/`--kv f16` accepted |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
@@ -150,7 +153,17 @@ chunks over positions as well as heads, and the prefill stays per-head.
 change against the scalar oracle. `--speculative` runs prompt-lookup speculation
 for greedy decoding; it pins the per-head schedule so the verifier and a
 sequential decode agree, and its ids match the per-head run (and auto on the
-test prompts). Numbers: [docs/measurement-log.md](docs/measurement-log.md);
+test prompts). `--vnni` selects the AVX-VNNI batch kernels with one activation
+quantization per distinct vector; it lifts prefill 14-19 percent on the best
+run at the cost of a measured 1.6e-3 KL and 12/497 top-1 flips, so the default
+stays f32 (`--vnni` needs AVX-VNNI). `--kv f16` stores the KV cache as IEEE
+half (`--kv f16` needs F16C): it halves KV memory and
+prices at 1.658e-6 mean KL with 497/497 top-1 and identical free-running ids,
+while its speed is not a uniform win; the default stays f32. `bench continuous`
+keeps four KV slots active in one model and decodes the active requests in one
+weight pass; 8×32 measures 58.3 t/s aggregate against 42.2 for four concurrent
+models, with identical ids. Numbers:
+[docs/measurement-log.md](docs/measurement-log.md);
 method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)

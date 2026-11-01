@@ -149,7 +149,8 @@ Qwen2Config read_config(const gguf::File& file) {
 }
 
 std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
-                                   int context_limit, bool eager_vocabulary) {
+                                   int context_limit, bool eager_vocabulary,
+                                   bool kv_half, int sequences) {
   std::unique_ptr<Qwen2> model(new Qwen2());
   try {
     // The body needs no metadata arrays; building the vocabulary here would cost
@@ -212,10 +213,18 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
 
     const int dim = config.embedding_length;
     const int kv_dim = config.kv_dim();
+    model->sequence_count_ = std::max(1, sequences);
     const std::size_t cache_elements =
+        static_cast<std::size_t>(model->sequence_count_) *
         static_cast<std::size_t>(config.block_count) * model->context_ * kv_dim;
-    model->k_cache_.assign(cache_elements, 0.0F);
-    model->v_cache_.assign(cache_elements, 0.0F);
+    model->kv_half_ = kv_half;
+    if (kv_half) {
+      model->k_cache_half_.assign(cache_elements, 0);
+      model->v_cache_half_.assign(cache_elements, 0);
+    } else {
+      model->k_cache_.assign(cache_elements, 0.0F);
+      model->v_cache_.assign(cache_elements, 0.0F);
+    }
 
     model->x_.assign(static_cast<std::size_t>(dim), 0.0F);
     model->h_.assign(static_cast<std::size_t>(dim), 0.0F);
@@ -228,6 +237,10 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->up_.assign(static_cast<std::size_t>(config.feed_forward_length),
                       0.0F);
     model->logits_.assign(static_cast<std::size_t>(config.vocab_size), 0.0F);
+    model->logits_batch_.assign(
+        static_cast<std::size_t>(std::min(kPrefillChunk, model->context_)) *
+            static_cast<std::size_t>(config.vocab_size),
+        0.0F);
     model->verify_logits_.assign(
         static_cast<std::size_t>(kSpeculativeBatch) *
             static_cast<std::size_t>(config.vocab_size),
@@ -365,7 +378,7 @@ const float* Qwen2::vector(const char* name, int expected) const {
 }
 
 void Qwen2::matvec(const Matrix& weight, const float* input,
-                   float* output) const {
+                   float* output, const cpu::Q8Quantized* quantized) const {
   // Decode is memory-bound and synchronisation-sensitive, so it uses the
   // decode pool rather than one worker per logical processor. Sizing each call
   // to the matrix was measured and gave no gain over a flat count, so the
@@ -374,6 +387,20 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
       threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
   const cpu::GemvConfig config{workers, &decode_pool()};
   if (weight.type == gguf::TensorType::Q8_0) {
+    if (vnni_ && quantized != nullptr && quantized->values != nullptr &&
+        quantized->scales != nullptr) {
+      cpu::Q8BatchArgs args;
+      args.data = weight.data;
+      args.rows = weight.rows;
+      args.cols = weight.cols;
+      args.input = input;
+      args.tokens = 1;
+      args.out = output;
+      args.quantized = quantized->values;
+      args.quantized_scales = quantized->scales;
+      cpu::gemv_q8_batch_vnni(args, config);
+      return;
+    }
     cpu::Q8GemvArgs args;
     args.data = weight.data;
     args.rows = weight.rows;
@@ -411,7 +438,8 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
 }
 
 void Qwen2::batch_matvec(const Matrix& weight, const float* input,
-                         float* output, int tokens) const {
+                         float* output, int tokens,
+                         const cpu::Q8Quantized* quantized) const {
   if (tokens <= 0) {
     return;
   }
@@ -421,6 +449,20 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
   const cpu::GemvConfig config{workers, &prefill_pool()};
 
   if (weight.type == gguf::TensorType::Q8_0) {
+    if (vnni_ && quantized != nullptr && quantized->values != nullptr &&
+        quantized->scales != nullptr) {
+      cpu::Q8BatchArgs args;
+      args.data = weight.data;
+      args.rows = weight.rows;
+      args.cols = weight.cols;
+      args.input = input;
+      args.tokens = tokens;
+      args.out = output;
+      args.quantized = quantized->values;
+      args.quantized_scales = quantized->scales;
+      cpu::gemv_q8_batch_vnni(args, config);
+      return;
+    }
     cpu::Q8BatchArgs args;
     args.data = weight.data;
     args.rows = weight.rows;
@@ -458,6 +500,31 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     return;
   }
   throw std::runtime_error("batch_matvec: unsupported weight type");
+}
+
+cpu::Q8Quantized Qwen2::quantize_activations(const float* input, int tokens,
+                                             int cols) {
+  cpu::Q8Quantized result;
+  if (!vnni_ || input == nullptr || tokens <= 0 || cols <= 0 ||
+      cols % cpu::kQ8BlockElements != 0) {
+    return result;
+  }
+  const std::size_t values = static_cast<std::size_t>(tokens) *
+                             static_cast<std::size_t>(cols);
+  const std::size_t scales =
+      static_cast<std::size_t>(tokens) *
+      static_cast<std::size_t>(cols / cpu::kQ8BlockElements);
+  if (q8_values_.size() < values) {
+    q8_values_.resize(values);
+  }
+  if (q8_scales_.size() < scales) {
+    q8_scales_.resize(scales);
+  }
+  cpu::quantize_q8_batch(input, tokens, cols, q8_values_.data(),
+                         q8_scales_.data());
+  result.values = q8_values_.data();
+  result.scales = q8_scales_.data();
+  return result;
 }
 
 void Qwen2::dequant_row(const Matrix& weight, int row, float* output) const {
@@ -526,7 +593,7 @@ void Qwen2::apply_rope(float* values, int heads, int position) const {
   }
 }
 
-void Qwen2::attention_head(int layer, int position, int head,
+void Qwen2::attention_head(int sequence, int layer, int position, int head,
                            const float* query, float* out,
                            float* scores) const {
   const int head_dim = config_.head_dim;
@@ -536,12 +603,20 @@ void Qwen2::attention_head(int layer, int position, int head,
   const std::size_t kv_head_offset =
       static_cast<std::size_t>(kv_head) * head_dim;
   const std::size_t layer_base =
-      static_cast<std::size_t>(layer) * context_ * kv_dim;
+      (static_cast<std::size_t>(sequence) * config_.block_count +
+       static_cast<std::size_t>(layer)) *
+      context_ * kv_dim;
 
   cpu::AttentionArgs args;
   args.query = query;
-  args.keys = k_cache_.data() + layer_base + kv_head_offset;
-  args.values = v_cache_.data() + layer_base + kv_head_offset;
+  if (kv_half_) {
+    args.half = true;
+    args.keys_half = k_cache_half_.data() + layer_base + kv_head_offset;
+    args.values_half = v_cache_half_.data() + layer_base + kv_head_offset;
+  } else {
+    args.keys = k_cache_.data() + layer_base + kv_head_offset;
+    args.values = v_cache_.data() + layer_base + kv_head_offset;
+  }
   args.kv_stride = kv_dim;
   args.span = position + 1;
   args.head_dim = head_dim;
@@ -563,14 +638,14 @@ bool Qwen2::uses_gqa(int position) const {
           (attention_mode_ == AttentionMode::Auto && position >= 256));
 }
 
-void Qwen2::attention(int layer, int position, const float* queries,
-                      float* out_buffer) {
+void Qwen2::attention(int sequence, int layer, int position,
+                      const float* queries, float* out_buffer) {
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
 
   if (uses_gqa(position)) {
-    attention_gqa(layer, position, queries, out_buffer);
+    attention_gqa(sequence, layer, position, queries, out_buffer);
     return;
   }
 
@@ -578,7 +653,7 @@ void Qwen2::attention(int layer, int position, const float* queries,
   // heads inline until there is enough history to pay for it.
   if (threads <= 1 || position < 64) {
     for (int head = 0; head < heads; ++head) {
-      attention_head(layer, position, head,
+      attention_head(sequence, layer, position, head,
                      queries + static_cast<std::size_t>(head) * head_dim,
                      out_buffer + static_cast<std::size_t>(head) * head_dim,
                      scores_.data());
@@ -588,7 +663,7 @@ void Qwen2::attention(int layer, int position, const float* queries,
 
   core::ThreadPool& pool = decode_pool();
   pool.parallel_for(heads, 1, [&](int head) {
-    attention_head(layer, position, head,
+    attention_head(sequence, layer, position, head,
                    queries + static_cast<std::size_t>(head) * head_dim,
                    out_buffer + static_cast<std::size_t>(head) * head_dim,
                    scores_.data() +
@@ -596,8 +671,8 @@ void Qwen2::attention(int layer, int position, const float* queries,
   });
 }
 
-void Qwen2::attention_gqa(int layer, int position, const float* queries,
-                          float* out) {
+void Qwen2::attention_gqa(int sequence, int layer, int position,
+                          const float* queries, float* out) {
   const int heads = config_.head_count;
   const int kv_heads = config_.head_count_kv;
   const int head_dim = config_.head_dim;
@@ -611,7 +686,9 @@ void Qwen2::attention_gqa(int layer, int position, const float* queries,
   const int chunk_size = (span + chunks - 1) / chunks;
   const int actual_chunks = (span + chunk_size - 1) / chunk_size;
   const std::size_t layer_base =
-      static_cast<std::size_t>(layer) * context_ * kv_dim;
+      (static_cast<std::size_t>(sequence) * config_.block_count +
+       static_cast<std::size_t>(layer)) *
+      context_ * kv_dim;
 
   core::ThreadPool& pool = decode_pool();
   pool.parallel_for(kv_heads * actual_chunks, 1, [&](int task) {
@@ -628,8 +705,16 @@ void Qwen2::attention_gqa(int layer, int position, const float* queries,
     cpu::AttentionGroupArgs args;
     args.queries =
         queries + static_cast<std::size_t>(kv_head) * group * head_dim;
-    args.keys = k_cache_.data() + layer_base + head_offset + row_offset;
-    args.values = v_cache_.data() + layer_base + head_offset + row_offset;
+    if (kv_half_) {
+      args.half = true;
+      args.keys_half =
+          k_cache_half_.data() + layer_base + head_offset + row_offset;
+      args.values_half =
+          v_cache_half_.data() + layer_base + head_offset + row_offset;
+    } else {
+      args.keys = k_cache_.data() + layer_base + head_offset + row_offset;
+      args.values = v_cache_.data() + layer_base + head_offset + row_offset;
+    }
     args.kv_stride = kv_dim;
     args.count = count;
     args.head_dim = head_dim;
@@ -711,7 +796,8 @@ void Qwen2::merge_gqa_chunks(const float* maxima, const float* sums,
   }
 }
 
-void Qwen2::attention_batch(int layer, int start_position, int tokens) {
+void Qwen2::attention_batch(int sequence, int layer, int start_position,
+                            int tokens) {
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int dim = config_.embedding_length;
@@ -725,11 +811,176 @@ void Qwen2::attention_batch(int layer, int start_position, int tokens) {
     float* scores =
         scores_.data() + static_cast<std::size_t>(token) * context_;
     for (int head = 0; head < heads; ++head) {
-      attention_head(layer, position, head,
+      attention_head(sequence, layer, position, head,
                      queries + static_cast<std::size_t>(head) * head_dim,
                      out + static_cast<std::size_t>(head) * head_dim, scores);
     }
   });
+}
+
+const float* Qwen2::forward_batch(const int* tokens, const int* positions,
+                                  int count, const int* sequences) {
+  if (tokens == nullptr || positions == nullptr || sequences == nullptr ||
+      count <= 0) {
+    throw std::runtime_error("forward_batch: invalid batch");
+  }
+  const int dim = config_.embedding_length;
+  const int kv_dim = config_.kv_dim();
+  const int ffn = config_.feed_forward_length;
+  const int heads = config_.head_count;
+  const int head_dim = config_.head_dim;
+  const int capacity =
+      static_cast<int>(batch_x_.size() / static_cast<std::size_t>(dim));
+  if (count > capacity) {
+    throw std::runtime_error("forward_batch: batch exceeds the prefill rows");
+  }
+  for (int index = 0; index < count; ++index) {
+    if (tokens[index] < 0 || tokens[index] >= config_.vocab_size) {
+      throw std::runtime_error("forward_batch: token outside the vocabulary");
+    }
+    if (positions[index] < 0 || positions[index] >= context_) {
+      throw std::runtime_error("forward_batch: position outside the context");
+    }
+    if (sequences[index] < 0 || sequences[index] >= sequence_count_) {
+      throw std::runtime_error("forward_batch: sequence outside the slots");
+    }
+  }
+
+  for (int index = 0; index < count; ++index) {
+    dequant_row(token_embd_, tokens[index],
+                batch_x_.data() + static_cast<std::size_t>(index) * dim);
+  }
+
+  for (int index = 0; index < config_.block_count; ++index) {
+    const Layer& layer = layers_[static_cast<std::size_t>(index)];
+
+    for (int token = 0; token < count; ++token) {
+      rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+               batch_x_.data() + static_cast<std::size_t>(token) * dim,
+               layer.attn_norm);
+    }
+    const cpu::Q8Quantized q_attn_in =
+        vnni_ ? quantize_activations(batch_h_.data(), count, dim)
+              : cpu::Q8Quantized{};
+    const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
+    batch_matvec(layer.wq, batch_h_.data(), batch_q_.data(), count,
+                 q_attn_in_ptr);
+    batch_matvec(layer.wk, batch_h_.data(), batch_k_.data(), count,
+                 q_attn_in_ptr);
+    batch_matvec(layer.wv, batch_h_.data(), batch_v_.data(), count,
+                 q_attn_in_ptr);
+
+    for (int token = 0; token < count; ++token) {
+      const int position = positions[token];
+      const int sequence = sequences[token];
+      float* q = batch_q_.data() + static_cast<std::size_t>(token) * dim;
+      float* k = batch_k_.data() + static_cast<std::size_t>(token) * kv_dim;
+      float* v = batch_v_.data() + static_cast<std::size_t>(token) * kv_dim;
+      for (int axis = 0; axis < dim; ++axis) {
+        q[axis] += layer.q_bias[axis];
+      }
+      for (int axis = 0; axis < kv_dim; ++axis) {
+        k[axis] += layer.k_bias[axis];
+        v[axis] += layer.v_bias[axis];
+      }
+      apply_rope(q, heads, position);
+      apply_rope(k, config_.head_count_kv, position);
+
+      const std::size_t slot =
+          (static_cast<std::size_t>(sequence) * config_.block_count +
+           static_cast<std::size_t>(index)) *
+              context_ * kv_dim +
+          static_cast<std::size_t>(position) * kv_dim;
+      if (kv_half_) {
+        std::uint16_t* k_out = k_cache_half_.data() + slot;
+        std::uint16_t* v_out = v_cache_half_.data() + slot;
+        for (int axis = 0; axis < kv_dim; ++axis) {
+          k_out[axis] = cpu::float_to_half(k[axis]);
+          v_out[axis] = cpu::float_to_half(v[axis]);
+        }
+      } else {
+        std::memcpy(k_cache_.data() + slot, k,
+                    sizeof(float) * static_cast<std::size_t>(kv_dim));
+        std::memcpy(v_cache_.data() + slot, v,
+                    sizeof(float) * static_cast<std::size_t>(kv_dim));
+      }
+    }
+
+    for (int token = 0; token < count; ++token) {
+      const int position = positions[token];
+      const int sequence = sequences[token];
+      const float* q =
+          batch_q_.data() + static_cast<std::size_t>(token) * dim;
+      float* out =
+          batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+      float* scores =
+          scores_.data() + static_cast<std::size_t>(token) * context_;
+      for (int head = 0; head < heads; ++head) {
+        attention_head(sequence, index, position, head,
+                       q + static_cast<std::size_t>(head) * head_dim,
+                       out + static_cast<std::size_t>(head) * head_dim,
+                       scores);
+      }
+    }
+
+    const cpu::Q8Quantized q_attn_out =
+        vnni_ ? quantize_activations(batch_attn_.data(), count, dim)
+              : cpu::Q8Quantized{};
+    batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), count,
+                 vnni_ ? &q_attn_out : nullptr);
+    for (int token = 0; token < count; ++token) {
+      float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
+      const float* residual =
+          batch_h_.data() + static_cast<std::size_t>(token) * dim;
+      for (int axis = 0; axis < dim; ++axis) {
+        x[axis] += residual[axis];
+      }
+    }
+
+    for (int token = 0; token < count; ++token) {
+      rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+               batch_x_.data() + static_cast<std::size_t>(token) * dim,
+               layer.ffn_norm);
+    }
+    const cpu::Q8Quantized q_ffn =
+        vnni_ ? quantize_activations(batch_h_.data(), count, dim)
+              : cpu::Q8Quantized{};
+    batch_matvec(layer.w_gate, batch_h_.data(), batch_gate_.data(), count,
+                 vnni_ ? &q_ffn : nullptr);
+    batch_matvec(layer.w_up, batch_h_.data(), batch_up_.data(), count,
+                 vnni_ ? &q_ffn : nullptr);
+    const std::size_t activation_elements =
+        static_cast<std::size_t>(count) * static_cast<std::size_t>(ffn);
+    for (std::size_t position = 0; position < activation_elements; ++position) {
+      batch_gate_[position] = silu(batch_gate_[position]) * batch_up_[position];
+    }
+
+    const cpu::Q8Quantized q_down =
+        vnni_ ? quantize_activations(batch_gate_.data(), count, ffn)
+              : cpu::Q8Quantized{};
+    batch_matvec(layer.w_down, batch_gate_.data(), batch_h_.data(), count,
+                 vnni_ ? &q_down : nullptr);
+    for (int token = 0; token < count; ++token) {
+      float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
+      const float* residual =
+          batch_h_.data() + static_cast<std::size_t>(token) * dim;
+      for (int axis = 0; axis < dim; ++axis) {
+        x[axis] += residual[axis];
+      }
+    }
+  }
+
+  for (int token = 0; token < count; ++token) {
+    rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+             batch_x_.data() + static_cast<std::size_t>(token) * dim,
+             output_norm_);
+  }
+  const cpu::Q8Quantized q_out =
+      vnni_ ? quantize_activations(batch_h_.data(), count, dim)
+            : cpu::Q8Quantized{};
+  batch_matvec(output_, batch_h_.data(), logits_batch_.data(), count,
+               vnni_ ? &q_out : nullptr);
+  return logits_batch_.data();
 }
 
 const float* Qwen2::forward(int token, int position) {
@@ -744,6 +995,7 @@ const float* Qwen2::forward(int token, int position) {
 
   const int dim = config_.embedding_length;
   const int kv_dim = config_.kv_dim();
+  const int ffn = config_.feed_forward_length;
 
   dequant_row(token_embd_, token, x_.data());
 
@@ -751,9 +1003,12 @@ const float* Qwen2::forward(int token, int position) {
     const Layer& layer = layers_[static_cast<std::size_t>(index)];
 
     rms_norm(h_.data(), x_.data(), layer.attn_norm);
-    matvec(layer.wq, h_.data(), q_.data());
-    matvec(layer.wk, h_.data(), k_.data());
-    matvec(layer.wv, h_.data(), v_.data());
+    const cpu::Q8Quantized q_attn_in =
+        vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
+    const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
+    matvec(layer.wq, h_.data(), q_.data(), q_attn_in_ptr);
+    matvec(layer.wk, h_.data(), k_.data(), q_attn_in_ptr);
+    matvec(layer.wv, h_.data(), v_.data(), q_attn_in_ptr);
     for (int axis = 0; axis < dim; ++axis) {
       q_[static_cast<std::size_t>(axis)] += layer.q_bias[axis];
     }
@@ -769,42 +1024,63 @@ const float* Qwen2::forward(int token, int position) {
         static_cast<std::size_t>(index) * context_ * kv_dim;
     const std::size_t slot =
         layer_base + static_cast<std::size_t>(position) * kv_dim;
-    std::memcpy(k_cache_.data() + slot, k_.data(),
-                sizeof(float) * static_cast<std::size_t>(kv_dim));
-    std::memcpy(v_cache_.data() + slot, v_.data(),
-                sizeof(float) * static_cast<std::size_t>(kv_dim));
+    if (kv_half_) {
+      std::uint16_t* k_out = k_cache_half_.data() + slot;
+      std::uint16_t* v_out = v_cache_half_.data() + slot;
+      for (int axis = 0; axis < kv_dim; ++axis) {
+        k_out[axis] = cpu::float_to_half(k_[static_cast<std::size_t>(axis)]);
+        v_out[axis] = cpu::float_to_half(v_[static_cast<std::size_t>(axis)]);
+      }
+    } else {
+      std::memcpy(k_cache_.data() + slot, k_.data(),
+                  sizeof(float) * static_cast<std::size_t>(kv_dim));
+      std::memcpy(v_cache_.data() + slot, v_.data(),
+                  sizeof(float) * static_cast<std::size_t>(kv_dim));
+    }
 
-    attention(index, position, q_.data(), attn_.data());
+    attention(0, index, position, q_.data(), attn_.data());
 
-    matvec(layer.wo, attn_.data(), h_.data());
+    const cpu::Q8Quantized q_attn_out =
+        vnni_ ? quantize_activations(attn_.data(), 1, dim) : cpu::Q8Quantized{};
+    matvec(layer.wo, attn_.data(), h_.data(),
+           vnni_ ? &q_attn_out : nullptr);
     for (int axis = 0; axis < dim; ++axis) {
       x_[static_cast<std::size_t>(axis)] += h_[axis];
     }
 
     rms_norm(h_.data(), x_.data(), layer.ffn_norm);
-    matvec(layer.w_gate, h_.data(), gate_.data());
-    matvec(layer.w_up, h_.data(), up_.data());
-    for (int axis = 0; axis < config_.feed_forward_length; ++axis) {
+    const cpu::Q8Quantized q_ffn =
+        vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
+    const cpu::Q8Quantized* q_ffn_ptr = vnni_ ? &q_ffn : nullptr;
+    matvec(layer.w_gate, h_.data(), gate_.data(), q_ffn_ptr);
+    matvec(layer.w_up, h_.data(), up_.data(), q_ffn_ptr);
+    for (int axis = 0; axis < ffn; ++axis) {
       gate_[static_cast<std::size_t>(axis)] =
           silu(gate_[static_cast<std::size_t>(axis)]) * up_[axis];
     }
-    matvec(layer.w_down, gate_.data(), h_.data());
+    const cpu::Q8Quantized q_down =
+        vnni_ ? quantize_activations(gate_.data(), 1, ffn) : cpu::Q8Quantized{};
+    matvec(layer.w_down, gate_.data(), h_.data(),
+           vnni_ ? &q_down : nullptr);
     for (int axis = 0; axis < dim; ++axis) {
       x_[static_cast<std::size_t>(axis)] += h_[axis];
     }
   }
 
   rms_norm(h_.data(), x_.data(), output_norm_);
-  matvec(output_, h_.data(), logits_.data());
+  const cpu::Q8Quantized q_out =
+      vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
+  matvec(output_, h_.data(), logits_.data(), vnni_ ? &q_out : nullptr);
   return logits_.data();
 }
 
-const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
-  return prefill_run(tokens, count, start_position, nullptr);
+const float* Qwen2::prefill(const int* tokens, int count, int start_position,
+                            int sequence) {
+  return prefill_run(tokens, count, start_position, nullptr, sequence);
 }
 
 const float* Qwen2::prefill_run(const int* tokens, int count, int start_position,
-                                float* all_logits) {
+                                float* all_logits, int sequence) {
   if (tokens == nullptr || count <= 0) {
     throw std::runtime_error("prefill: empty prompt");
   }
@@ -847,9 +1123,16 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                  layer.attn_norm);
       }
 
-      batch_matvec(layer.wq, batch_h_.data(), batch_q_.data(), chunk);
-      batch_matvec(layer.wk, batch_h_.data(), batch_k_.data(), chunk);
-      batch_matvec(layer.wv, batch_h_.data(), batch_v_.data(), chunk);
+      const cpu::Q8Quantized q_attn_in =
+          vnni_ ? quantize_activations(batch_h_.data(), chunk, dim)
+                : cpu::Q8Quantized{};
+      const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
+      batch_matvec(layer.wq, batch_h_.data(), batch_q_.data(), chunk,
+                   q_attn_in_ptr);
+      batch_matvec(layer.wk, batch_h_.data(), batch_k_.data(), chunk,
+                   q_attn_in_ptr);
+      batch_matvec(layer.wv, batch_h_.data(), batch_v_.data(), chunk,
+                   q_attn_in_ptr);
 
       for (int token = 0; token < chunk; ++token) {
         float* q = batch_q_.data() + static_cast<std::size_t>(token) * dim;
@@ -868,20 +1151,35 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
         apply_rope(k, config_.head_count_kv, position);
 
         const std::size_t slot =
-            static_cast<std::size_t>(index) * context_ * kv_dim +
+            (static_cast<std::size_t>(sequence) * config_.block_count +
+             static_cast<std::size_t>(index)) *
+                context_ * kv_dim +
             static_cast<std::size_t>(position) * kv_dim;
-        std::memcpy(k_cache_.data() + slot, k,
-                    sizeof(float) * static_cast<std::size_t>(kv_dim));
-        std::memcpy(v_cache_.data() + slot, v,
-                    sizeof(float) * static_cast<std::size_t>(kv_dim));
+        if (kv_half_) {
+          std::uint16_t* k_out = k_cache_half_.data() + slot;
+          std::uint16_t* v_out = v_cache_half_.data() + slot;
+          for (int axis = 0; axis < kv_dim; ++axis) {
+            k_out[axis] = cpu::float_to_half(k[axis]);
+            v_out[axis] = cpu::float_to_half(v[axis]);
+          }
+        } else {
+          std::memcpy(k_cache_.data() + slot, k,
+                      sizeof(float) * static_cast<std::size_t>(kv_dim));
+          std::memcpy(v_cache_.data() + slot, v,
+                      sizeof(float) * static_cast<std::size_t>(kv_dim));
+        }
       }
 
       // Every key and value in this chunk is in the cache before attention
       // runs, so each token sees exactly the causal prefix it should, and the
       // tokens can be attended in parallel.
-      attention_batch(index, chunk_start, chunk);
+      attention_batch(sequence, index, chunk_start, chunk);
 
-      batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), chunk);
+      const cpu::Q8Quantized q_attn_out =
+          vnni_ ? quantize_activations(batch_attn_.data(), chunk, dim)
+                : cpu::Q8Quantized{};
+      batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), chunk,
+                   vnni_ ? &q_attn_out : nullptr);
       for (int token = 0; token < chunk; ++token) {
         float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
         const float* residual =
@@ -897,15 +1195,25 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                  layer.ffn_norm);
       }
 
-      batch_matvec(layer.w_gate, batch_h_.data(), batch_gate_.data(), chunk);
-      batch_matvec(layer.w_up, batch_h_.data(), batch_up_.data(), chunk);
+      const cpu::Q8Quantized q_ffn =
+          vnni_ ? quantize_activations(batch_h_.data(), chunk, dim)
+                : cpu::Q8Quantized{};
+      const cpu::Q8Quantized* q_ffn_ptr = vnni_ ? &q_ffn : nullptr;
+      batch_matvec(layer.w_gate, batch_h_.data(), batch_gate_.data(), chunk,
+                   q_ffn_ptr);
+      batch_matvec(layer.w_up, batch_h_.data(), batch_up_.data(), chunk,
+                   q_ffn_ptr);
       const std::size_t activation_elements =
           static_cast<std::size_t>(chunk) * static_cast<std::size_t>(ffn);
       for (std::size_t position = 0; position < activation_elements; ++position) {
         batch_gate_[position] = silu(batch_gate_[position]) * batch_up_[position];
       }
 
-      batch_matvec(layer.w_down, batch_gate_.data(), batch_h_.data(), chunk);
+      const cpu::Q8Quantized q_down =
+          vnni_ ? quantize_activations(batch_gate_.data(), chunk, ffn)
+                : cpu::Q8Quantized{};
+      batch_matvec(layer.w_down, batch_gate_.data(), batch_h_.data(), chunk,
+                   vnni_ ? &q_down : nullptr);
       for (int token = 0; token < chunk; ++token) {
         float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
         const float* residual =
@@ -925,7 +1233,11 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                batch_x_.data() + static_cast<std::size_t>(token) * dim,
                output_norm_);
     }
-    batch_matvec(output_, batch_h_.data(), all_logits, last_rows);
+    const cpu::Q8Quantized q_out =
+        vnni_ ? quantize_activations(batch_h_.data(), last_rows, dim)
+              : cpu::Q8Quantized{};
+    batch_matvec(output_, batch_h_.data(), all_logits, last_rows,
+                 vnni_ ? &q_out : nullptr);
     const std::size_t last_row =
         static_cast<std::size_t>(last_rows - 1) * config_.vocab_size;
     std::memcpy(logits_.data(), all_logits + last_row,
@@ -938,7 +1250,9 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
   std::memcpy(x_.data(), batch_x_.data() + last,
               sizeof(float) * static_cast<std::size_t>(dim));
   rms_norm(h_.data(), x_.data(), output_norm_);
-  matvec(output_, h_.data(), logits_.data());
+  const cpu::Q8Quantized q_out =
+      vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
+  matvec(output_, h_.data(), logits_.data(), vnni_ ? &q_out : nullptr);
   return logits_.data();
 }
 
@@ -955,7 +1269,7 @@ int Qwen2::verify_draft(const int* tokens, int count, int start_position,
     throw std::runtime_error("verify_draft: logits scratch is too small");
   }
 
-  prefill_run(tokens, count, start_position, verify_logits_.data());
+  prefill_run(tokens, count, start_position, verify_logits_.data(), 0);
   for (int token = 0; token < count; ++token) {
     predicted[token] = argmax(
         verify_logits_.data() +
@@ -966,8 +1280,13 @@ int Qwen2::verify_draft(const int* tokens, int count, int start_position,
 }
 
 void Qwen2::reset_cache() {
-  std::fill(k_cache_.begin(), k_cache_.end(), 0.0F);
-  std::fill(v_cache_.begin(), v_cache_.end(), 0.0F);
+  if (kv_half_) {
+    std::fill(k_cache_half_.begin(), k_cache_half_.end(), 0);
+    std::fill(v_cache_half_.begin(), v_cache_half_.end(), 0);
+  } else {
+    std::fill(k_cache_.begin(), k_cache_.end(), 0.0F);
+    std::fill(v_cache_.begin(), v_cache_.end(), 0.0F);
+  }
 }
 
 int Qwen2::argmax(const float* values, int count) {

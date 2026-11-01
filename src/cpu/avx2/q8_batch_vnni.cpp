@@ -48,6 +48,23 @@ constexpr int kGroup = 6;
 
 }  // namespace
 
+void quantize_q8_batch(const float* input, int tokens, int cols,
+                       std::int8_t* values, float* scales) {
+  if (input == nullptr || values == nullptr || scales == nullptr ||
+      tokens <= 0 || cols <= 0 || cols % kQ8BlockElements != 0) {
+    return;
+  }
+  const int blocks = cols / kQ8BlockElements;
+  for (int token = 0; token < tokens; ++token) {
+    const float* source = input + static_cast<std::size_t>(token) * cols;
+    std::int8_t* target = values + static_cast<std::size_t>(token) * cols;
+    for (int block = 0; block < blocks; ++block) {
+      scales[static_cast<std::size_t>(token) * blocks + block] = quantize_block(
+          source + block * kQ8BlockElements, target + block * kQ8BlockElements);
+    }
+  }
+}
+
 void gemv_q8_batch_vnni(const Q8BatchArgs& args, const GemvConfig& config) {
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
     return;
@@ -62,34 +79,28 @@ void gemv_q8_batch_vnni(const Q8BatchArgs& args, const GemvConfig& config) {
 
   // Reused across calls: allocating per matvec showed up as a real cost when
   // the model calls this ~150 times per chunk.
-  thread_local std::vector<std::int8_t> quantized;
-  thread_local std::vector<float> scales;
-  const std::size_t value_count =
-      static_cast<std::size_t>(tokens) * static_cast<std::size_t>(cols);
-  const std::size_t scale_count =
-      static_cast<std::size_t>(tokens) * static_cast<std::size_t>(blocks);
-  if (quantized.size() < value_count) {
-    quantized.resize(value_count);
-  }
-  if (scales.size() < scale_count) {
-    scales.resize(scale_count);
-  }
-
-  // The workers must read the calling thread's buffers, so take plain pointers:
-  // naming the thread_local vectors inside the lambda would give each worker its
-  // own empty instance.
-  std::int8_t* quantized_data = quantized.data();
-  float* scale_data = scales.data();
-
-  for (int token = 0; token < tokens; ++token) {
-    const float* source = args.input + static_cast<std::size_t>(token) * cols;
-    std::int8_t* target =
-        quantized_data + static_cast<std::size_t>(token) * cols;
-    for (int block = 0; block < blocks; ++block) {
-      scale_data[static_cast<std::size_t>(token) * blocks + block] = quantize_block(
-          source + block * kQ8BlockElements,
-          target + block * kQ8BlockElements);
+  thread_local std::vector<std::int8_t> local_values;
+  thread_local std::vector<float> local_scales;
+  std::int8_t* quantized_data = nullptr;
+  float* scale_data = nullptr;
+  if (args.quantized != nullptr && args.quantized_scales != nullptr) {
+    quantized_data = const_cast<std::int8_t*>(args.quantized);
+    scale_data = const_cast<float*>(args.quantized_scales);
+  } else {
+    const std::size_t value_count =
+        static_cast<std::size_t>(tokens) * static_cast<std::size_t>(cols);
+    const std::size_t scale_count =
+        static_cast<std::size_t>(tokens) * static_cast<std::size_t>(blocks);
+    if (local_values.size() < value_count) {
+      local_values.resize(value_count);
     }
+    if (local_scales.size() < scale_count) {
+      local_scales.resize(scale_count);
+    }
+    quantize_q8_batch(args.input, tokens, cols, local_values.data(),
+                      local_scales.data());
+    quantized_data = local_values.data();
+    scale_data = local_scales.data();
   }
 
   const int threads = resolve_thread_count(config.threads);

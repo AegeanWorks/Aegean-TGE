@@ -25,3 +25,24 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 - **Context**: The speculative verifier runs the batched prefill path while decode switches to grouped-query attention at 256 positions. The schedules agree on the fidelity corpus (top-1 497/497, mean KL 5.1e-12) but not by construction, so a near tie could accept a draft the sequential decode would not. Prefill-side GQA would align them, but a token-outer group kernel measured 2048 prefill -5% and decode -13% (510 prefill +33%), and the K/V rows were already in L2.
 - **Decision**: `--speculative` sets the per-head schedule on the model (scalar keeps its scalar path), so the verifier and the decode use identical arithmetic. Normal generation keeps auto's grouped schedule. The prefill stays per-head; the group kernel stays head-outer and its comment is corrected.
 - **Consequences**: Speculative decode re-measured 2.00x on the repetitive story prompt with identical ids; at 2048 it is 4% ahead of the per-head run but 12% behind auto, and its output agrees with both on the test prompt. The prefill GQA is not shipped, so the 2048 prefill remains the engine's relative weak spot.
+
+### ADR-003: VNNI batch kernels are opt-in, with pre-quantized activations
+- **Date**: 2026-11-01
+- **Status**: Accepted
+- **Context**: The VNNI batch kernel lost end to end because it re-quantized the activation rows on every call, six to seven times per layer. Quantizing each distinct activation once and reusing it across q/k/v and gate/up turns the 510 prefill from 163.1 to 194.5 t/s and the 2048 from 165.6 to 188.2 (the best run; a later 2048 run fell inside the machine noise). The cost is the Q8 activation grid: mean KL 1.568e-3, worst 2.254e-2, top-1 485/497, and free-running ids differ.
+- **Decision**: `--vnni` selects the VNNI batch kernels and pre-quantizes once per activation; the default stays the f32 kernels. The decode's single-token VNNI is not claimed (one 510 run lost 29%).
+- **Consequences**: Prefill gains 14-19% on the best run, still about 65% of llama.cpp's 2048 rate; the accuracy trade is explicit and opt-in; default output and numbers are unchanged; the fidelity harness can price the option with `--vnni`.
+
+### ADR-004: f16 KV cache is opt-in
+- **Date**: 2026-11-01
+- **Status**: Accepted
+- **Context**: The KV cache is f32 while llama.cpp uses f16, and the 2048 decode is the engine's weak spot. An f16 cache halves the KV (192 -> 96 MiB at 8192 tokens) and reads it with F16C. Measured against the f32 reference over 497 positions: mean KL 1.658e-6, worst 2.446e-5, top-1 497/497, with identical free-running ids on the 2048, story and speculative traces. The speed is mixed (510 prefill +58%, 2048 prefill +14%/-14%, decode -24%/+63% across runs; the machine moves Â±20%).
+- **Decision**: Add `--kv f16` (half storage, F16C attention reads); the default stays f32. The plan still prints the f32 KV size, so the budget check stays conservative.
+- **Consequences**: The memory case is the reason to use it; the accuracy price is two orders of magnitude below the VNNI's (1.7e-6 vs 1.6e-3 KL); the speed is not a uniform win, so it is not the default; tests 58 -> 60 with the half round-trip and f16 attention differential.
+
+### ADR-005: Continuous batching with per-sequence KV slots
+- **Date**: 2026-11-01
+- **Status**: Accepted
+- **Context**: The sessions benchmark runs N models, so N copies of the weights stream independently. The model can instead own N KV slots and decode one token per slot in one batch pass, sharing the weight read. Eight requests of 32 tokens measure 58.28 t/s aggregate with four slots against 42.21 for four concurrent models (+38%), and the first transcript is token-identical to the single decode.
+- **Decision**: Add `sequences` to `Qwen2::load` (default 1), `forward_batch` (one token per sequence with per-token sequence and position), and `bench continuous` (admit into freed slots, prefill the seed per slot, decode the active batch). The scheduler is minimal; there is no paged KV or mixed prefill+decode in one batch.
+- **Consequences**: The weights are shared across the decode batch and the KV is `sequences` times the single cache; a newly admitted request's prefill still reads the weights separately; the default single-slot paths are unchanged; the batch parity is checked through the CLI transcript, not a unit test.

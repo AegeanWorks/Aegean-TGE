@@ -1,11 +1,16 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "tge/core/thread_pool.hpp"
 #include "tge/models/gguf.hpp"
+
+namespace tge::cpu {
+struct Q8Quantized;
+}
 
 namespace tge::models {
 
@@ -71,7 +76,9 @@ class Qwen2 {
   static std::unique_ptr<Qwen2> load(const std::string& path,
                                      std::string& error,
                                      int context_limit = 0,
-                                     bool eager_vocabulary = false);
+                                     bool eager_vocabulary = false,
+                                     bool kv_half = false,
+                                     int sequences = 1);
 
   const Qwen2Config& config() const { return config_; }
   int max_context() const { return context_; }
@@ -94,16 +101,33 @@ class Qwen2 {
   void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
   AttentionMode attention_mode() const { return attention_mode_; }
 
+  /// Use the AVX-VNNI Q8_0 batch kernel, quantizing each distinct activation
+  /// once per layer and reusing it across the matrices that share it.
+  void set_vnni(bool enabled) { vnni_ = enabled; }
+  bool vnni() const { return vnni_; }
+
+  /// True when the KV cache is stored as IEEE half.
+  bool kv_half() const { return kv_half_; }
+
+  /// Independent KV slots the model can decode at once.
+  int sequence_count() const { return sequence_count_; }
+
   /// Advances the KV cache by one token and returns `vocab_size` logits. The
   /// pointer is owned by the model and valid until the next call.
   const float* forward(int token, int position);
+
+  /// Decodes one token per sequence in a single weight pass and returns
+  /// `count * vocab_size` logits, row `i` for sequence `sequences[i]`.
+  const float* forward_batch(const int* tokens, const int* positions, int count,
+                             const int* sequences);
 
   /// Processes a prompt in one pass and returns the logits for its last token.
   ///
   /// Each weight is read once per chunk instead of once per token, which is the
   /// difference between prompt processing at tens and at hundreds of tokens per
   /// second. Attention itself stays per-token.
-  const float* prefill(const int* tokens, int count, int start_position);
+  const float* prefill(const int* tokens, int count, int start_position,
+                       int sequence = 0);
 
   /// Runs up to `kSpeculativeBatch` draft tokens at `start_position` in one
   /// batched pass and writes the greedy argmax after each position to
@@ -143,15 +167,20 @@ class Qwen2 {
 
   Matrix matrix(const char* name) const;
   const float* vector(const char* name, int expected) const;
-  void matvec(const Matrix& weight, const float* input, float* output) const;
+  void matvec(const Matrix& weight, const float* input, float* output,
+              const cpu::Q8Quantized* quantized = nullptr) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
-                    int tokens) const;
+                    int tokens, const cpu::Q8Quantized* quantized = nullptr) const;
   void dequant_row(const Matrix& weight, int row, float* output) const;
+
+  /// Quantizes one activation batch for the VNNI kernels. The scratch is owned
+  /// by the model, so the result is valid until the next call.
+  cpu::Q8Quantized quantize_activations(const float* input, int tokens, int cols);
 
   /// Shared prefill body. `all_logits`, when non-null, receives one row of
   /// logits per token in the final chunk; the public prefill passes null.
   const float* prefill_run(const int* tokens, int count, int start_position,
-                           float* all_logits);
+                           float* all_logits, int sequence);
 
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
@@ -159,16 +188,18 @@ class Qwen2 {
   core::ThreadPool& decode_pool() const;
   core::ThreadPool& prefill_pool() const;
   /// All query heads for one decode token, spread over the pool.
-  void attention(int layer, int position, const float* queries, float* out);
+  void attention(int sequence, int layer, int position, const float* queries,
+                 float* out);
   /// Grouped-query attention over position chunks, for long decode histories.
-  void attention_gqa(int layer, int position, const float* queries, float* out);
+  void attention_gqa(int sequence, int layer, int position,
+                     const float* queries, float* out);
   /// Attention for every token in a prefill chunk, spread over the pool. Every
   /// key and value in the chunk is cached before this runs.
-  void attention_batch(int layer, int start_position, int tokens);
+  void attention_batch(int sequence, int layer, int start_position, int tokens);
   /// One query head against its key/value cache. `scores` holds `position + 1`
   /// values and must not overlap another task's slice.
-  void attention_head(int layer, int position, int head, const float* query,
-                      float* out, float* scores) const;
+  void attention_head(int sequence, int layer, int position, int head,
+                      const float* query, float* out, float* scores) const;
   /// True when this position takes the grouped-query schedule in decode and
   /// prefill alike; `threads <= 1` keeps the per-head path.
   bool uses_gqa(int position) const;
@@ -182,7 +213,10 @@ class Qwen2 {
   Qwen2Config config_;
   int context_ = 0;
   int threads_ = 0;
+  int sequence_count_ = 1;
   AttentionMode attention_mode_ = AttentionMode::Auto;
+  bool vnni_ = false;
+  bool kv_half_ = false;
   mutable std::unique_ptr<core::ThreadPool> decode_pool_;
   mutable std::unique_ptr<core::ThreadPool> prefill_pool_;
 
@@ -193,9 +227,14 @@ class Qwen2 {
 
   std::vector<float> k_cache_;
   std::vector<float> v_cache_;
+  std::vector<std::uint16_t> k_cache_half_;
+  std::vector<std::uint16_t> v_cache_half_;
 
   std::vector<float> x_;
   std::vector<float> h_;
+  // VNNI activation scratch: one batch of rows plus its per-block scales.
+  std::vector<std::int8_t> q8_values_;
+  std::vector<float> q8_scales_;
   std::vector<float> q_;
   std::vector<float> k_;
   std::vector<float> v_;
@@ -204,6 +243,7 @@ class Qwen2 {
   std::vector<float> up_;
   std::vector<float> logits_;
   std::vector<float> verify_logits_;
+  std::vector<float> logits_batch_;
   std::vector<float> scores_;
   // Grouped-query attention scratch: per-chunk online-softmax state for every
   // query head in every KV group.

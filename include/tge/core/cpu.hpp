@@ -18,6 +18,7 @@ struct Features {
   bool avx = false;
   bool avx2 = false;
   bool fma = false;
+  bool f16c = false;
   bool avx_vnni = false;
   bool avx512f = false;
   bool avx512dq = false;

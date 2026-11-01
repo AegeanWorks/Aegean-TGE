@@ -100,15 +100,32 @@ struct Q8BatchArgs {
   const float* input = nullptr;        // [tokens][cols], row stride = cols
   int tokens = 0;
   float* out = nullptr;                // [tokens][rows], row stride = rows
+  // Optional activation rows already quantized to Q8_0. The VNNI kernel uses
+  // these instead of quantizing `input` per call, so a batch of matrices that
+  // share one activation (q/k/v, gate/up) amortizes the conversion.
+  const std::int8_t* quantized = nullptr;        // [tokens][cols]
+  const float* quantized_scales = nullptr;       // [tokens][cols / 32]
 };
 
 using Q8BatchFn = void (*)(const Q8BatchArgs& args, const GemvConfig& config);
 
+/// One batch of activation rows already quantized to Q8_0, ready to reuse
+/// across the matrices that share it.
+struct Q8Quantized {
+  const std::int8_t* values = nullptr;  // [tokens][cols]
+  const float* scales = nullptr;        // [tokens][cols / 32]
+};
+
 void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& config);
 
-/// AVX-VNNI variant, reachable from the benchmark harness. Dispatch keeps the
-/// float kernel: this one wins in isolation but loses end to end.
+/// Quantizes activation rows exactly as `gemv_q8_batch_vnni` does, so a caller
+/// can reuse one conversion across several matrices.
+void quantize_q8_batch(const float* input, int tokens, int cols,
+                       std::int8_t* values, float* scales);
+
+/// AVX-VNNI variant. Reachable from the benchmark harness and, with `--vnni`,
+/// from the model; dispatch elsewhere keeps the float kernel.
 void gemv_q8_batch_vnni(const Q8BatchArgs& args, const GemvConfig& config);
 
 /// Quantized formats with a super-block layout. Q8_0 has its own fused kernels;
@@ -163,6 +180,10 @@ struct AttentionArgs {
   const float* query = nullptr;   // head_dim values
   const float* keys = nullptr;    // span rows, stride kv_stride
   const float* values = nullptr;  // span rows, stride kv_stride
+  // When `half`, read `keys_half`/`values_half` instead of the float rows.
+  const std::uint16_t* keys_half = nullptr;
+  const std::uint16_t* values_half = nullptr;
+  bool half = false;
   int kv_stride = 0;
   int span = 0;
   int head_dim = 0;
@@ -188,6 +209,9 @@ struct AttentionGroupArgs {
   const float* queries = nullptr;   // group_heads * head_dim
   const float* keys = nullptr;      // count rows, stride kv_stride
   const float* values = nullptr;    // count rows, stride kv_stride
+  const std::uint16_t* keys_half = nullptr;
+  const std::uint16_t* values_half = nullptr;
+  bool half = false;
   int kv_stride = 0;
   int count = 0;
   int head_dim = 0;
@@ -238,6 +262,38 @@ inline float half_to_float(std::uint16_t value) {
   float result = 0.0F;
   std::memcpy(&result, &bits, sizeof(result));
   return result;
+}
+
+/// Converts one float to IEEE half, round to nearest even. Used by the f16 KV
+/// store; keeps the conversion identical for the scalar and vector paths.
+inline std::uint16_t float_to_half(float value) {
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  const std::uint32_t sign = (bits >> 16) & 0x8000u;
+  const std::uint32_t exponent = (bits >> 23) & 0xFFu;
+  const std::uint32_t mantissa = bits & 0x7FFFFFu;
+  if (exponent == 0xFFu) {
+    return static_cast<std::uint16_t>(
+        sign | 0x7C00u | (mantissa != 0 ? 0x200u : 0u));
+  }
+  const int unbiased = static_cast<int>(exponent) - 127;
+  if (unbiased < -24) {
+    return static_cast<std::uint16_t>(sign);
+  }
+  if (unbiased < -14) {
+    const std::uint32_t shift = static_cast<std::uint32_t>(-unbiased - 14);
+    const std::uint32_t significand = 0x800000u | mantissa;
+    const std::uint32_t half = significand >> (shift + 13);
+    const std::uint32_t round = (significand >> (shift + 12)) & 1u;
+    return static_cast<std::uint16_t>(sign | (half + round));
+  }
+  if (unbiased > 15) {
+    return static_cast<std::uint16_t>(sign | 0x7C00u);
+  }
+  const std::uint32_t half =
+      (static_cast<std::uint32_t>(unbiased + 15) << 10) | (mantissa >> 13);
+  const std::uint32_t round = (mantissa >> 12) & 1u;
+  return static_cast<std::uint16_t>(sign | (half + round));
 }
 
 /// Streaming kernels used to measure the memory bandwidth ceiling.

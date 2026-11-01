@@ -73,6 +73,9 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | Speculation pins the per-head schedule | 2048, 64 tokens | normal head 31.47 t/s | spec 32.71 t/s, ids equal to head and auto | **kept** |
 | 2026-11-01 | Session benchmark tail forward | 4x32 tokens, 6 threads | wall 3.746 s, 34.17 t/s | wall 2.329 s, 53.24 t/s | **kept** |
 | 2026-11-01 | Story speculative decode (recheck) | 128 tokens | 28.13 t/s | 56.38 t/s (2.00x), ids identical | **kept** |
+| 2026-11-01 | VNNI Q8 batch, pre-quantized activations, `--vnni` | 510 / 2048 prefill | 163.1 / 165.6 t/s | 194.5 / 188.2 t/s (+19% / +14%) | **kept opt-in** (KL 1.568e-3, top-1 485/497) |
+| 2026-11-01 | f16 KV cache (`--kv f16`) | 2048 prefill / decode | 145.7 / 21.7 t/s | 165.9 / 35.4 t/s | **kept opt-in** (KL 1.658e-6, top-1 497/497, ids identical) |
+| 2026-11-01 | Continuous batching (4 KV slots, 1 model) | 8 requests × 32 tokens | sessions 42.21 t/s aggregate | 58.28 t/s (+38%), ids identical | **kept** |
 
 ## 1. f32 GEMM
 
@@ -791,3 +794,84 @@ same `tokens - 1` the normal decoder reports. All transcripts remain identical.
 
 Fidelity is unchanged by the reverted kernel: 497 positions, mean KL 5.104e-12,
 worst 1.426e-10, top-1 497/497. Tests: 58/58; gates: 4/4.
+
+## 23. AVX-VNNI with pre-quantized activations (2026-11-01)
+
+The report's VNNI lost end to end because `gemv_q8_batch_vnni` quantized the
+activation rows again on every call, and the model calls it six to seven times
+per layer. The model now quantizes each distinct activation once (q/k/v share
+`batch_h_`, gate/up share it after the FFN norm, and so on) and hands the
+pre-quantized rows to the kernel. `--vnni` selects it and
+`tge fidelity --vnni` prices it.
+
+| run (6 threads) | f32 | `--vnni` |
+|---|---|---|
+| 510 prefill | 163.1 t/s | **194.5 t/s (+19%)** |
+| 2048 prefill | 165.6 t/s | **188.2 t/s (+14%; a later run 155.5, inside noise)** |
+| 510 decode | 36.88 t/s | 26.20 t/s |
+| 2048 decode | 36.33 t/s | 36.93 t/s |
+| 2048 speculative prefill | 149.9 t/s | **178.1 t/s (+19%)** |
+
+Pre-quantizing flips the prefill from the report's loss to a win. The decode's
+single-token path is not a win (one 510 run lost 29 percent), so the option is
+for prompt processing.
+
+The accuracy price is real: against the scalar/f32 reference over 497 positions,
+`--vnni` gives mean KL **1.568e-3**, worst 2.254e-2, max |logit| 0.754, and
+top-1 **485/497** (12 flips). Free-running ids differ at 128 tokens, at 2048 and
+under speculation. That is the ADR-0006 parity trade, now measured rather than
+assumed.
+
+The VNNI is therefore opt-in and the default stays f32. The 2048 prefill gains
+14 percent on the best run (still about 65 percent of llama.cpp's 288 t/s); the
+default's output and numbers are unchanged. `tge info` reports whether the CPU
+has AVX-VNNI; `--vnni` refuses to run without it.
+
+## 24. f16 KV cache (2026-11-01)
+
+The KV cache is now optionally IEEE half (`--kv f16`), read by the attention
+kernels with F16C; the default stays f32. `tge fidelity --kv f16` prices it.
+
+| run (6 threads) | f32 | f16 |
+|---|---|---|
+| 510 prefill | 139.7 t/s | **220.8 t/s (+58%)** |
+| 510 decode | 35.5 t/s | 30.4 t/s |
+| 2048 prefill | 145.7 / 154.7 t/s | 165.9 / 133.6 t/s |
+| 2048 decode | 21.7 / 32.7 t/s | 35.4 / 24.9 t/s |
+| story decode | 26.3 t/s | 22.8 t/s |
+| 2048 speculative decode | 33.5 t/s | 29.4 t/s |
+
+The absolute columns move with this machine (Â±20%); the f16 is not a uniform
+speed win. Its case is memory and accuracy: the KV halves (192 -> 96 MiB at
+8192 tokens), and against the f32 reference over 497 positions it gives mean KL
+**1.658e-6**, worst 2.446e-5, max |logit| 5.3e-2 and top-1 **497/497**.
+Free-running ids are identical on the 2048 prompt, the story prompt and under
+speculation.
+
+The default stays f32; `--kv f16` is for long-context or multi-session memory.
+`--kv f16` refuses to run on a CPU without F16C, which `tge info` reports.
+Tests: 58 -> 60 (half round-trip, f16 attention differential).
+
+## 25. Continuous batching (2026-11-01)
+
+The model now owns `sequences` KV slots and `forward_batch` decodes one token
+per sequence in a single weight pass. `bench continuous` keeps N slots active,
+admits a new request into each freed slot, prefills its seed token, and decodes
+the active batch. The paged/mixed prefill-decode scheduler is not shipped.
+
+| 8 requests x 32 tokens, 6 threads | aggregate |
+|---|---|
+| 4 concurrent sessions (4 models) | 42.21 t/s |
+| continuous, 4 slots (1 model) | **58.28 t/s (+38%)** |
+| single request | 26.29 t/s |
+
+The first transcript is token-identical to `generate` on the same seed token,
+and all eight are identical, so the per-slot KV cache does not leak. The 1.38x
+over concurrent sessions comes from sharing one weight stream across the four
+decodes; the wall is 4.256 s for 248 decode tokens. The prefill of a newly
+admitted request still reads the weights separately, and the KV is not paged or
+evicted.
+
+Tests: 60/60 unchanged; the batch parity is checked through the CLI transcript.
+`bench continuous` also accepts `--vnni` and `--kv f16` (the flags are guarded by
+the CPU checks above), so the trades can be combined with batching.

@@ -10,13 +10,18 @@ void attention_head_scalar(const AttentionArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
   const int span = args.span;
+  const bool half = args.half;
+  const std::uint16_t* half_keys = args.keys_half;
+  const std::uint16_t* half_values = args.values_half;
 
   float maximum = -INFINITY;
   for (int token = 0; token < span; ++token) {
-    const float* key = args.keys + static_cast<std::size_t>(token) * stride;
+    const std::size_t row = static_cast<std::size_t>(token) * stride;
     float product = 0.0F;
     for (int index = 0; index < head_dim; ++index) {
-      product += args.query[index] * key[index];
+      const float key =
+          half ? half_to_float(half_keys[row + index]) : args.keys[row + index];
+      product += args.query[index] * key;
     }
     const float scaled = product * args.scale;
     args.scores[static_cast<std::size_t>(token)] = scaled;
@@ -38,9 +43,12 @@ void attention_head_scalar(const AttentionArgs& args) {
   for (int token = 0; token < span; ++token) {
     const float weight =
         args.scores[static_cast<std::size_t>(token)] * inverse;
-    const float* value = args.values + static_cast<std::size_t>(token) * stride;
+    const std::size_t row = static_cast<std::size_t>(token) * stride;
+    const float* value = half ? nullptr : args.values + row;
     for (int index = 0; index < head_dim; ++index) {
-      args.out[index] += weight * value[index];
+      const float element =
+          half ? half_to_float(half_values[row + index]) : value[index];
+      args.out[index] += weight * element;
     }
   }
 }
@@ -49,6 +57,9 @@ void attention_group_scalar(const AttentionGroupArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
   const int count = args.count;
+  const bool half = args.half;
+  const std::uint16_t* half_keys = args.keys_half;
+  const std::uint16_t* half_values = args.values_half;
 
   for (int head = 0; head < args.group_heads; ++head) {
     const float* query =
@@ -63,27 +74,32 @@ void attention_group_scalar(const AttentionGroupArgs& args) {
     }
 
     for (int token = 0; token < count; ++token) {
-      const float* key = args.keys + static_cast<std::size_t>(token) * stride;
+      const std::size_t row = static_cast<std::size_t>(token) * stride;
       float product = 0.0F;
       for (int index = 0; index < head_dim; ++index) {
-        product += query[index] * key[index];
+        const float key =
+            half ? half_to_float(half_keys[row + index]) : args.keys[row + index];
+        product += query[index] * key;
       }
       const float score = product * args.scale;
-      const float* value =
-          args.values + static_cast<std::size_t>(token) * stride;
+      const float* value = half ? nullptr : args.values + row;
 
       if (score > maximum) {
         const float alpha = std::exp(maximum - score);
         sum = sum * alpha + 1.0F;
         for (int index = 0; index < head_dim; ++index) {
-          accumulators[index] = accumulators[index] * alpha + value[index];
+          const float element =
+              half ? half_to_float(half_values[row + index]) : value[index];
+          accumulators[index] = accumulators[index] * alpha + element;
         }
         maximum = score;
       } else {
         const float beta = std::exp(score - maximum);
         sum += beta;
         for (int index = 0; index < head_dim; ++index) {
-          accumulators[index] += beta * value[index];
+          const float element =
+              half ? half_to_float(half_values[row + index]) : value[index];
+          accumulators[index] += beta * element;
         }
       }
     }

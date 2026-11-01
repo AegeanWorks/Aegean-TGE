@@ -44,11 +44,41 @@ void attention_head_avx2(const AttentionArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
   const int span = args.span;
+  const bool half = args.half;
+  const std::uint16_t* half_keys = args.keys_half;
+  const std::uint16_t* half_values = args.values_half;
 
   float maximum = -INFINITY;
   for (int token = 0; token < span; ++token) {
-    const float* key = args.keys + static_cast<std::size_t>(token) * stride;
-    const float scaled = dot_avx2(args.query, key, head_dim) * args.scale;
+    const std::size_t row = static_cast<std::size_t>(token) * stride;
+    float dot = 0.0F;
+    if (half) {
+      const std::uint16_t* key = half_keys + row;
+      __m256 acc0 = _mm256_setzero_ps();
+      __m256 acc1 = _mm256_setzero_ps();
+      int index = 0;
+      for (; index + 16 <= head_dim; index += 16) {
+        const __m256 k0 = _mm256_cvtph_ps(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+        const __m256 k1 = _mm256_cvtph_ps(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index + 8)));
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index), k0, acc0);
+        acc1 =
+            _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index + 8), k1, acc1);
+      }
+      for (; index + 8 <= head_dim; index += 8) {
+        const __m256 k = _mm256_cvtph_ps(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index), k, acc0);
+      }
+      dot = horizontal_sum(_mm256_add_ps(acc0, acc1));
+      for (; index < head_dim; ++index) {
+        dot += args.query[index] * half_to_float(key[index]);
+      }
+    } else {
+      dot = dot_avx2(args.query, args.keys + row, head_dim);
+    }
+    const float scaled = dot * args.scale;
     args.scores[static_cast<std::size_t>(token)] = scaled;
     maximum = std::max(maximum, scaled);
   }
@@ -75,16 +105,33 @@ void attention_head_avx2(const AttentionArgs& args) {
   for (int token = 0; token < span; ++token) {
     const float scalar_weight =
         args.scores[static_cast<std::size_t>(token)] * inverse;
+    const std::size_t row = static_cast<std::size_t>(token) * stride;
     const __m256 weight = _mm256_set1_ps(scalar_weight);
-    const float* value = args.values + static_cast<std::size_t>(token) * stride;
-    int lane = 0;
-    for (; lane + 8 <= head_dim; lane += 8) {
-      _mm256_storeu_ps(args.out + lane,
-                       _mm256_fmadd_ps(weight, _mm256_loadu_ps(value + lane),
-                                       _mm256_loadu_ps(args.out + lane)));
-    }
-    for (; lane < head_dim; ++lane) {
-      args.out[lane] += scalar_weight * value[lane];
+    if (half) {
+      const std::uint16_t* value = half_values + row;
+      int lane = 0;
+      for (; lane + 8 <= head_dim; lane += 8) {
+        const __m256 v = _mm256_cvtph_ps(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(value + lane)));
+        _mm256_storeu_ps(
+            args.out + lane,
+            _mm256_fmadd_ps(weight, v, _mm256_loadu_ps(args.out + lane)));
+      }
+      for (; lane < head_dim; ++lane) {
+        args.out[lane] += scalar_weight * half_to_float(value[lane]);
+      }
+    } else {
+      const float* value = args.values + row;
+      int lane = 0;
+      for (; lane + 8 <= head_dim; lane += 8) {
+        _mm256_storeu_ps(
+            args.out + lane,
+            _mm256_fmadd_ps(weight, _mm256_loadu_ps(value + lane),
+                            _mm256_loadu_ps(args.out + lane)));
+      }
+      for (; lane < head_dim; ++lane) {
+        args.out[lane] += scalar_weight * value[lane];
+      }
     }
   }
 }
@@ -93,6 +140,9 @@ void attention_group_avx2(const AttentionGroupArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
   const int count = args.count;
+  const bool half = args.half;
+  const std::uint16_t* half_keys = args.keys_half;
+  const std::uint16_t* half_values = args.values_half;
 
   for (int head = 0; head < args.group_heads; ++head) {
     const float* query =
@@ -107,39 +157,96 @@ void attention_group_avx2(const AttentionGroupArgs& args) {
     }
 
     for (int token = 0; token < count; ++token) {
-      const float* key = args.keys + static_cast<std::size_t>(token) * stride;
-      const float score = dot_avx2(query, key, head_dim) * args.scale;
-      const float* value =
-          args.values + static_cast<std::size_t>(token) * stride;
+      const std::size_t row = static_cast<std::size_t>(token) * stride;
+      float score;
+      if (half) {
+        const std::uint16_t* key = half_keys + row;
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        int index = 0;
+        for (; index + 16 <= head_dim; index += 16) {
+          const __m256 k0 = _mm256_cvtph_ps(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+          const __m256 k1 = _mm256_cvtph_ps(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index + 8)));
+          acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k0, acc0);
+          acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 8), k1, acc1);
+        }
+        for (; index + 8 <= head_dim; index += 8) {
+          const __m256 k = _mm256_cvtph_ps(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+          acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k, acc0);
+        }
+        float dot = horizontal_sum(_mm256_add_ps(acc0, acc1));
+        for (; index < head_dim; ++index) {
+          dot += query[index] * half_to_float(key[index]);
+        }
+        score = dot * args.scale;
+      } else {
+        score = dot_avx2(query, args.keys + row, head_dim) * args.scale;
+      }
 
       if (score > maximum) {
         const float alpha = std::exp(maximum - score);
         const __m256 scale = _mm256_set1_ps(alpha);
         sum = sum * alpha + 1.0F;
-        int index = 0;
-        for (; index + 8 <= head_dim; index += 8) {
-          _mm256_storeu_ps(
-              accumulators + index,
-              _mm256_fmadd_ps(scale, _mm256_loadu_ps(accumulators + index),
-                              _mm256_loadu_ps(value + index)));
-        }
-        for (; index < head_dim; ++index) {
-          accumulators[index] = accumulators[index] * alpha + value[index];
+        if (half) {
+          const std::uint16_t* value = half_values + row;
+          int index = 0;
+          for (; index + 8 <= head_dim; index += 8) {
+            const __m256 v = _mm256_cvtph_ps(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(value + index)));
+            _mm256_storeu_ps(
+                accumulators + index,
+                _mm256_fmadd_ps(scale, _mm256_loadu_ps(accumulators + index), v));
+          }
+          for (; index < head_dim; ++index) {
+            accumulators[index] =
+                accumulators[index] * alpha + half_to_float(value[index]);
+          }
+        } else {
+          const float* value = args.values + row;
+          int index = 0;
+          for (; index + 8 <= head_dim; index += 8) {
+            _mm256_storeu_ps(
+                accumulators + index,
+                _mm256_fmadd_ps(scale, _mm256_loadu_ps(accumulators + index),
+                                _mm256_loadu_ps(value + index)));
+          }
+          for (; index < head_dim; ++index) {
+            accumulators[index] = accumulators[index] * alpha + value[index];
+          }
         }
         maximum = score;
       } else {
         const float beta = std::exp(score - maximum);
         const __m256 scale = _mm256_set1_ps(beta);
         sum += beta;
-        int index = 0;
-        for (; index + 8 <= head_dim; index += 8) {
-          _mm256_storeu_ps(
-              accumulators + index,
-              _mm256_fmadd_ps(scale, _mm256_loadu_ps(value + index),
-                              _mm256_loadu_ps(accumulators + index)));
-        }
-        for (; index < head_dim; ++index) {
-          accumulators[index] += beta * value[index];
+        if (half) {
+          const std::uint16_t* value = half_values + row;
+          int index = 0;
+          for (; index + 8 <= head_dim; index += 8) {
+            const __m256 v = _mm256_cvtph_ps(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(value + index)));
+            _mm256_storeu_ps(
+                accumulators + index,
+                _mm256_fmadd_ps(scale, v, _mm256_loadu_ps(accumulators + index)));
+          }
+          for (; index < head_dim; ++index) {
+            accumulators[index] += beta * half_to_float(value[index]);
+          }
+        } else {
+          const float* value = args.values + row;
+          int index = 0;
+          for (; index + 8 <= head_dim; index += 8) {
+            _mm256_storeu_ps(
+                accumulators + index,
+                _mm256_fmadd_ps(scale, _mm256_loadu_ps(value + index),
+                                _mm256_loadu_ps(accumulators + index)));
+          }
+          for (; index < head_dim; ++index) {
+            accumulators[index] += beta * value[index];
+          }
         }
       }
     }

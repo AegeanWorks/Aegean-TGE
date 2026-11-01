@@ -26,7 +26,7 @@ Delivered:
 
 Remaining for 0.1:
 
-- [ ] AVX-VNNI quantized dot product tier
+- [x] AVX-VNNI batch tier, opt-in (`--vnni`): prefill +14-19% on the best run; accuracy trade priced at mean KL 1.6e-3, top-1 485/497
 
 ## 0.2 — Model loading and CPU inference
 
@@ -85,6 +85,8 @@ planning.
 
 - [x] Concurrent sessions benchmark; per-session thread pools
 - [x] Prompt-lookup speculative decoding (greedy)
+- [x] f16 KV cache (`--kv f16`): KV halved; mean KL 1.658e-6, top-1 497/497, ids identical; speed mixed; opt-in
+- [x] Continuous batching: 4 per-sequence KV slots, `forward_batch`, admission; 58.3 vs 42.2 t/s; paged/mixed prefill-decode remains
 - [ ] Prefill-side GQA grouping — rejected: 2048 prefill -5%, decode -13% with the token-outer kernel; 510 prefill +33%; the verifier pins per-head instead
 
 ## 0.8 — Windows inference platform
