@@ -68,6 +68,24 @@ Dequantising K-quant weights into a prepared form is the other candidate, and it
 is a trap: Q4_K_M at 638 MiB becomes roughly 2.5 GiB as float, which this machine
 with 2 GB free cannot hold. The 20 ms saved would be paid for in swap.
 
+### The vocabulary setting, measured
+
+`--vocabulary auto|eager|lazy` controls when the 300k-entry vocabulary is parsed.
+Three runs each, 0.5B Q8_0:
+
+| Path | lazy | eager |
+|---|---|---|
+| id prompt, load | **32.9 ms** | 86.9 ms |
+| text prompt, load + tokenizer | 207-219 ms | **183-205 ms** |
+
+Auto is correct in both directions: eager when a tokenizer will be built (the
+arrays are parsed once rather than twice), skipped when it will not. That is a
+2.6x startup win on id prompts and roughly 10 percent on text prompts.
+
+All three modes produce identical prompt and generated ids - the setting changes
+*when* the vocabulary is parsed, not what it contains. Verified against the same
+greedy sequence llama.cpp produces.
+
 ### Ablation: what actually caused the GEMM speedup
 
 The first entry bundles three changes into one 18.2 -> 246.5 GFLOPS figure, which
