@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "tge/core/cpu.hpp"
@@ -727,21 +729,14 @@ int command_plan(const std::string& path, int context, int sessions,
 
 int command_sessions_bench(const std::string& path, int sessions, int tokens,
                            int threads_per_session, int context) {
-  std::vector<std::unique_ptr<tge::models::Qwen2>> models;
-  models.reserve(static_cast<std::size_t>(sessions));
-
-  // The thread pool registry is process-wide and keyed by size, so two sessions
-  // requesting the same thread count share one pool and corrupt it. Until pools
-  // are per-session, concurrency is single-threaded per session.
-  if (sessions > 1 && threads_per_session != 1) {
+  if (sessions <= 0 || tokens <= 0) {
     std::fprintf(stderr,
-                 "bench sessions: %d sessions need --threads 1\n"
-                 "  Why: the thread pool registry is process-wide, so sessions\n"
-                 "       sharing a pool size corrupt each other (0xC0000005).\n"
-                 "  Fix: pass --threads 1, or give each session its own pool.\n",
-                 sessions);
+                 "bench sessions: sessions and tokens must be positive\n");
     return 2;
   }
+
+  std::vector<std::unique_ptr<tge::models::Qwen2>> models;
+  models.reserve(static_cast<std::size_t>(sessions));
 
   const auto load_start = Clock::now();
   for (int index = 0; index < sessions; ++index) {
@@ -762,25 +757,47 @@ int command_sessions_bench(const std::string& path, int sessions, int tokens,
   std::vector<std::vector<int>> generated(static_cast<std::size_t>(sessions));
   std::vector<std::thread> workers;
   workers.reserve(static_cast<std::size_t>(sessions));
+  std::atomic<int> ready{0};
+  std::atomic<int> done{0};
+  std::atomic<bool> go{false};
 
-  const auto start = Clock::now();
   for (int index = 0; index < sessions; ++index) {
-    workers.emplace_back([&models, &generated, index, tokens, seed_token]() {
-      tge::models::Qwen2& model = *models[static_cast<std::size_t>(index)];
-      std::vector<int>& out = generated[static_cast<std::size_t>(index)];
-      out.reserve(static_cast<std::size_t>(tokens));
-      const float* logits = model.forward(seed_token, 0);
-      for (int step = 0; step < tokens; ++step) {
-        const int next = tge::models::Qwen2::argmax(logits, model.vocab_size());
-        out.push_back(next);
-        logits = model.forward(next, step + 1);
-      }
-    });
+    workers.emplace_back(
+        [&models, &generated, &ready, &done, &go, index, tokens, seed_token]() {
+          tge::models::Qwen2& model = *models[static_cast<std::size_t>(index)];
+          std::vector<int>& out = generated[static_cast<std::size_t>(index)];
+          out.reserve(static_cast<std::size_t>(tokens));
+
+          // Warm the per-session pool and get the first logits outside the
+          // timed region; pool creation is not decode throughput.
+          const float* logits = model.forward(seed_token, 0);
+          ready.fetch_add(1, std::memory_order_acq_rel);
+          while (!go.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+          }
+
+          for (int step = 0; step < tokens; ++step) {
+            const int next =
+                tge::models::Qwen2::argmax(logits, model.vocab_size());
+            out.push_back(next);
+            logits = model.forward(next, step + 1);
+          }
+          done.fetch_add(1, std::memory_order_acq_rel);
+        });
   }
+
+  while (ready.load(std::memory_order_acquire) < sessions) {
+    std::this_thread::yield();
+  }
+  const auto start = Clock::now();
+  go.store(true, std::memory_order_release);
+  while (done.load(std::memory_order_acquire) < sessions) {
+    std::this_thread::yield();
+  }
+  const auto finish = Clock::now();
   for (std::thread& worker : workers) {
     worker.join();
   }
-  const auto finish = Clock::now();
 
   const double seconds = std::chrono::duration<double>(finish - start).count();
   const double load_seconds =
@@ -795,8 +812,11 @@ int command_sessions_bench(const std::string& path, int sessions, int tokens,
   }
 
   const double per_session = static_cast<double>(tokens) / seconds;
+  const int shown_threads =
+      threads_per_session > 0 ? threads_per_session
+                              : tge::cpu::resolve_decode_threads();
   std::printf("sessions : %d x %d tokens, %d thread(s) each\n", sessions, tokens,
-              threads_per_session);
+              shown_threads);
   std::printf("load     : %.1f ms for %d models\n", load_seconds * 1e3, sessions);
   std::printf("wall     : %.3f s\n", seconds);
   std::printf("decode   : %.2f t/s per session, %.2f t/s aggregate\n",

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "tge/core/thread_pool.hpp"
+
 namespace tge::cpu {
 
 /// Row-major single-precision GEMM: C[M,N] = A[M,K] * B[K,N].
@@ -22,6 +24,9 @@ struct GemmArgs {
 struct GemmConfig {
   /// Worker threads. 0 selects the engine default; 1 forces the calling thread.
   int threads = 0;
+  /// If non-null, use this pool instead of the process-wide fallback. A model
+  /// passes its own per-session pool so concurrent sessions never share one.
+  core::ThreadPool* pool = nullptr;
 };
 
 /// Every GEMM implementation has this signature, so dispatch is a function
@@ -54,6 +59,8 @@ struct GemvArgs {
 
 struct GemvConfig {
   int threads = 0;
+  /// If non-null, use this pool instead of the process-wide fallback.
+  core::ThreadPool* pool = nullptr;
 };
 
 using GemvFn = void (*)(const GemvArgs& args, const GemvConfig& config);

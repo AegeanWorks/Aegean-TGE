@@ -62,7 +62,9 @@ void expect_q8_gemv_matches(int rows, int cols, std::uint32_t seed) {
   tge::cpu::gemv_q8_0_scalar(args, tge::cpu::GemvConfig{1});
 
   args.out = optimized.data();
-  tge::kernels().gemv_q8(args, tge::cpu::GemvConfig{tge::cpu::resolve_decode_threads()});
+  tge::core::ThreadPool pool(tge::cpu::resolve_decode_threads());
+  tge::kernels().gemv_q8(
+      args, tge::cpu::GemvConfig{tge::cpu::resolve_decode_threads(), &pool});
 
   const float worst = tge::ops::max_abs_diff(
       reference.data(), optimized.data(), static_cast<std::int64_t>(rows));
@@ -99,8 +101,10 @@ void expect_q8_batch_matches(int rows, int cols, int tokens,
   tge::cpu::gemv_q8_batch_scalar(args, tge::cpu::GemvConfig{1});
 
   args.out = optimized.data();
-  tge::kernels().gemv_q8_batch(args,
-                               tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0)});
+  tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+  tge::kernels().gemv_q8_batch(
+      args,
+      tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0), &pool});
 
   const float worst = tge::ops::max_abs_diff(
       reference.data(), optimized.data(),

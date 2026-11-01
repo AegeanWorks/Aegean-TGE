@@ -123,7 +123,8 @@ void gemm_packed(const GemmArgs& args, const GemmConfig& config) {
   }
 
   const int threads = resolve_thread_count(config.threads);
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool =
+      config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
 
   memory::AlignedBuffer b_panel;
   // One 64-byte aligned panel per row block, so broadcasts never straddle a

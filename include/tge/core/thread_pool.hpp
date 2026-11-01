@@ -59,9 +59,9 @@ class ThreadPool {
   std::atomic<int> next_{0};
 };
 
-/// Returns a process-lifetime pool for the requested thread count, creating it
-/// on first use. Pools are cached so repeated benchmark iterations do not pay
-/// thread creation cost.
+/// Returns the process-lifetime fallback pool for the requested thread count.
+/// Models own their pools and pass them through the kernel configs, so this
+/// registry is for the standalone benchmarks and tests.
 ThreadPool& acquire_pool(int threads);
 
 /// Logical processors usable by this process.

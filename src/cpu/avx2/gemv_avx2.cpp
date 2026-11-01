@@ -63,7 +63,8 @@ void gemv_avx2(const GemvArgs& args, const GemvConfig& config) {
   }
 
   const int threads = resolve_thread_count(config.threads);
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool =
+      config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
 
   // Row bands are handed out as contiguous ranges, not interleaved rows. Each
   // worker then sweeps one region sequentially, which is what the hardware

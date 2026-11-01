@@ -65,7 +65,8 @@ void gemv_q8_0_avx2(const Q8GemvArgs& args, const GemvConfig& config) {
   }
 
   const int threads = resolve_thread_count(config.threads);
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool =
+      config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
 
   const int blocks = args.cols / kQ8BlockElements;
   const std::size_t row_bytes =

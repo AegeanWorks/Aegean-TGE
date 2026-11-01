@@ -38,6 +38,7 @@ cmake --build --preset release
 .\build\release\bin\tge.exe gguf <model.gguf>
 .\build\release\bin\tge.exe generate --model <model.gguf> --prompt "The capital of France is" --n 32 --text
 .\build\release\bin\tge.exe fidelity --model <model.gguf> --corpus docs\architecture.md
+.\build\release\bin\tge.exe bench sessions --model <model.gguf> --sessions 4 --tokens 32 --threads 1
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
 .\build\release\bin\tge.exe bench gemm --m 1024 --n 1024 --k 1024 --repeat 3
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
@@ -116,6 +117,7 @@ aegean-tge/
 | **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
 | **Prompt, 510 tokens** | **261-266 t/s (llama.cpp: 352.2 t/s, 6 threads)** |
 | **Prompt, 2048 tokens** | **225-246 t/s (llama.cpp: 287.9 t/s, 6 threads)** |
+| Concurrent sessions, 0.5B Q8_0 | 2 × 6 threads: 47.4 t/s aggregate; 4 × 6: 46.2; >1 thread/session now safe |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |

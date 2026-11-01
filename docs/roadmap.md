@@ -83,6 +83,8 @@ already present.
 Continuous batching, concurrent sessions, speculative decoding, adaptive
 planning.
 
+- [x] Concurrent sessions benchmark; per-session thread pools
+
 ## 0.8 — Windows inference platform
 
 OpenAI-compatible server, streaming, CLI, Windows service, packaging.

@@ -98,6 +98,14 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(tge_core PUBLIC Threads::Threads)
 
+# MinGW's ar can leave the archive index stale when only some members change;
+# refresh it so the linker sees every kernel symbol after an incremental build.
+if(CMAKE_RANLIB)
+  add_custom_command(TARGET tge_core POST_BUILD
+    COMMAND "${CMAKE_RANLIB}" "$<TARGET_FILE:tge_core>"
+    COMMENT "Refreshing tge_core archive index")
+endif()
+
 target_compile_definitions(tge_core PUBLIC TGE_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)

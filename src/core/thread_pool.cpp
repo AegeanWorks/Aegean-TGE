@@ -168,6 +168,9 @@ void ThreadPool::worker() {
 }
 
 ThreadPool& acquire_pool(int threads) {
+  // Fallback registry for the standalone benchmarks and tests. A model owns its
+  // own pools and passes them through the kernel configs, so concurrent
+  // sessions never reach this shared registry.
   static std::mutex registry_mutex;
   static std::map<int, std::unique_ptr<ThreadPool>> pools;
 

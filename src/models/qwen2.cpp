@@ -291,6 +291,31 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
   }
 }
 
+void Qwen2::set_threads(int threads) {
+  if (threads == threads_ && decode_pool_ && prefill_pool_) {
+    return;
+  }
+  threads_ = threads;
+  decode_pool_.reset();
+  prefill_pool_.reset();
+}
+
+core::ThreadPool& Qwen2::decode_pool() const {
+  if (!decode_pool_) {
+    const int size = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+    decode_pool_ = std::make_unique<core::ThreadPool>(size);
+  }
+  return *decode_pool_;
+}
+
+core::ThreadPool& Qwen2::prefill_pool() const {
+  if (!prefill_pool_) {
+    const int size = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
+    prefill_pool_ = std::make_unique<core::ThreadPool>(size);
+  }
+  return *prefill_pool_;
+}
+
 Qwen2::Matrix Qwen2::matrix(const char* name) const {
   const gguf::TensorInfo* info = file_.tensor(name);
   if (info == nullptr) {
@@ -343,7 +368,7 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
   // simpler rule stands.
   const int workers =
       threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
-  const cpu::GemvConfig config{workers};
+  const cpu::GemvConfig config{workers, &decode_pool()};
   if (weight.type == gguf::TensorType::Q8_0) {
     cpu::Q8GemvArgs args;
     args.data = weight.data;
@@ -389,7 +414,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
   // Prompt processing is compute-bound, so it takes every logical processor
   // rather than the smaller decode pool.
   const int workers = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
-  const cpu::GemvConfig config{workers};
+  const cpu::GemvConfig config{workers, &prefill_pool()};
 
   if (weight.type == gguf::TensorType::Q8_0) {
     cpu::Q8BatchArgs args;
@@ -553,7 +578,7 @@ void Qwen2::attention(int layer, int position, const float* queries,
     return;
   }
 
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool = decode_pool();
   pool.parallel_for(heads, 1, [&](int head) {
     attention_head(layer, position, head,
                    queries + static_cast<std::size_t>(head) * head_dim,
@@ -580,7 +605,7 @@ void Qwen2::attention_gqa(int layer, int position, const float* queries,
   const std::size_t layer_base =
       static_cast<std::size_t>(layer) * context_ * kv_dim;
 
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool = decode_pool();
   pool.parallel_for(kv_heads * actual_chunks, 1, [&](int task) {
     const int kv_head = task / actual_chunks;
     const int chunk = task % actual_chunks;
@@ -670,9 +695,8 @@ void Qwen2::attention_batch(int layer, int start_position, int tokens) {
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int dim = config_.embedding_length;
-  const int threads = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
 
-  core::ThreadPool& pool = core::acquire_pool(threads);
+  core::ThreadPool& pool = prefill_pool();
   pool.parallel_for(tokens, 1, [&](int token) {
     const int position = start_position + token;
     const float* queries =

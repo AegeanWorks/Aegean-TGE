@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "tge/core/thread_pool.hpp"
 #include "tge/models/gguf.hpp"
 
 namespace tge::models {
@@ -81,7 +82,9 @@ class Qwen2 {
   const gguf::File& file() const { return file_; }
 
   /// Worker threads used by every matrix-vector call. 0 selects the default.
-  void set_threads(int threads) { threads_ = threads; }
+  /// Each model owns its own decode and prefill pools, so concurrent sessions
+  /// never publish into a shared worker set.
+  void set_threads(int threads);
 
   /// Attention scheduling. See `AttentionMode`.
   void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
@@ -136,6 +139,9 @@ class Qwen2 {
 
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
+  /// Lazy per-session pools; the decode and prefill sizes differ.
+  core::ThreadPool& decode_pool() const;
+  core::ThreadPool& prefill_pool() const;
   /// All query heads for one decode token, spread over the pool.
   void attention(int layer, int position, const float* queries, float* out);
   /// Grouped-query attention over position chunks, for long decode histories.
@@ -153,6 +159,8 @@ class Qwen2 {
   int context_ = 0;
   int threads_ = 0;
   AttentionMode attention_mode_ = AttentionMode::Auto;
+  mutable std::unique_ptr<core::ThreadPool> decode_pool_;
+  mutable std::unique_ptr<core::ThreadPool> prefill_pool_;
 
   Matrix token_embd_;
   Matrix output_;

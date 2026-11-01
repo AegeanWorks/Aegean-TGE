@@ -67,6 +67,7 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | GQA-aware decode attention (position chunks) | 2048-token decode | 35.11 t/s | 40.34 t/s | **kept** |
 | 2026-11-01 | Same, fidelity against scalar | 511 positions | â€” | mean KL 5.0e-12, top-1 511/511 | **kept** |
 | 2026-11-01 | Re-measured against llama.cpp build 11624 | 6 threads, Q8_0 | old log: llama tg128 15.2 t/s | TGE tg128 45.5 vs llama 45.1 t/s; prefill 261-266 vs 352; parity ~95 tokens | reference |
+| 2026-11-01 | Per-session thread pools for concurrent sessions | 4 sessions × 6 threads | refused / 0xC0000005 | 46.2 t/s aggregate, transcripts identical | **kept** |
 
 ## 1. f32 GEMM
 
@@ -253,19 +254,21 @@ useful than quoting whichever run looked best.
 
 ## 7c. Concurrent sessions
 
-0.5B Q8_0, 32 tokens each:
+0.5B Q8_0, 32 tokens each, context 2048, greedy. The pool is per session
+(section 20), and the timer starts after every session has warmed it.
 
 | Sessions | Threads each | Per session | Aggregate |
 |---|---|---|---|
-| 1 | 6 | 17.37 t/s | 17.37 t/s |
-| 2 | 1 | 15.56 t/s | 31.11 t/s |
-| 4 | 1 | 12.06 t/s | 48.23 t/s |
+| 1 | 6 | 37.42 t/s | 37.42 t/s |
+| 2 | 6 | 23.68 t/s | 47.36 t/s |
+| 4 | 1 | 10.75 t/s | 43.00 t/s |
+| 4 | 6 | 11.55 t/s | 46.20 t/s |
 
-Aggregate nearly triples while per-session latency falls: one session on six threads leaves half the bandwidth unused, and the extra sessions fill it. 17.4 -> 48.2 t/s with no kernel change - the largest throughput gain here.
-
-Independence: every session gets the same seed, so identical transcripts prove no KV or workspace leakage. All matched.
-
-Limitation: sessions with more than one thread each crash (0xC0000005). The pool registry is process-wide and keyed by size, so sessions sharing a size share one pool. The benchmark now refuses that combination. Fix belongs in the dispatch layer.
+Aggregate plateaus near 47 t/s: one session on six threads leaves bandwidth
+unused, and additional sessions fill it until the weight stream is the wall.
+The earlier 1 x 6 figure (17.37) was dominated by pool creation and thread
+start-up, which the benchmark now warms outside the timed region. All
+transcripts are identical, including the >1-thread rows that used to crash.
 
 ## 8. Load and startup
 
@@ -658,3 +661,34 @@ reference, while llama.cpp's 8-bit activation path is a larger deviation from
 exact f32. The token-identical claims in sections 4, 5, 7 and 11 were measured
 on the pre-vectorisation arithmetic and the older llama build; they are
 superseded here, not withdrawn as observations.
+
+## 20. Per-session thread pools for concurrent sessions (2026-11-01)
+
+`acquire_pool` was a process-wide registry keyed by size. Two sessions on
+different threads that asked for the same size received the same `ThreadPool`;
+both published into its `body_`/`count_`/`grain_` and corrupted each other
+(0xC0000005). The sessions benchmark refused that combination.
+
+The pools are now owned by the model: `Qwen2` keeps one decode pool and one
+prefill pool, and `GemvConfig`/`GemmConfig` carry a `pool` pointer through every
+kernel. The process-wide registry remains only as a fallback for the standalone
+benchmarks and tests, which never run two sessions. Nothing is stored in
+thread-local storage, so no worker join happens from a TLS destructor.
+
+The sessions benchmark also warms each pool and starts the timer after a
+barrier, so pool creation and thread start-up are no longer counted as decode
+time. The earlier 1 x 6 figure was mostly start-up.
+
+| sessions | threads each | per session | aggregate |
+|---|---|---|---|
+| 1 | 6 | 37.42 t/s | 37.42 t/s |
+| 2 | 6 | 23.68 t/s | 47.36 t/s |
+| 4 | 1 | 10.75 t/s | 43.00 t/s |
+| 4 | 6 | 11.55 t/s | 46.20 t/s |
+
+All transcripts identical (same seed), including the rows above one thread per
+session. The q8 kernel tests now pass an explicit pool, and the standalone
+benchmarks keep using the fallback registry.
+
+Tests: 57 -> 58 cases; the explicit pool path is covered by the q8 kernel tests
+and the sessions benchmark.
