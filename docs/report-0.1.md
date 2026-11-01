@@ -11,6 +11,11 @@ completion.
 Revision 2 (same day) adds the llama.cpp CPU baseline and the GEMM rewrite, and
 revises sections 5, 7, 8 and 9 accordingly.
 
+Revision 3 (same day) adds the GEMV decode kernel, multi-threaded bandwidth
+measurement, and the dispatch fix for the streaming kernels. It also records the
+finding that matters most: decode has roughly 4x of headroom over the measured
+llama.cpp baseline on this machine.
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -141,12 +146,14 @@ Full description: `docs/architecture.md`.
 | Work-stealing thread pool | `src/core/thread_pool.cpp` | tested |
 | Reference GEMM and vector ops | `src/tensor/reference.cpp` | tested |
 | AVX2 + FMA GEMM, packed and blocked | `src/cpu/avx2/gemm_avx2.cpp` | tested for numerical agreement |
+| AVX2 + FMA GEMV, threaded decode kernel | `src/cpu/avx2/gemv_avx2.cpp` | tested for numerical agreement |
 | Streaming bandwidth kernels | `src/cpu/avx2/mem_bandwidth_avx2.cpp` | tested |
+| Scalar streaming fallbacks | `src/cpu/scalar/mem_bandwidth_scalar.cpp` | tested |
 | System memory query | `src/memory/system_ram.cpp` | tested |
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (24 cases) | `tests/` | 24/24 passing |
+| Test harness (27 cases) | `tests/` | 27/27 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
@@ -166,16 +173,39 @@ A and B panels, 144/256/256 cache blocking, a first-pass store instead of a
 read-modify-write, and dynamic thread work claiming. The 2048³ case, where the
 old kernel collapsed to 18 GFLOPS, improved 13.5x.
 
+### The decode primitive and what it says
+
+GEMM is prefill. Decode, the long tail of token generation, is a matrix-vector
+product, so a dedicated GEMV kernel was written and measured.
+
+| Matrix | Size | 1 thread | 16 threads |
+|---|---|---|---|
+| 4096 x 4096 | 64 MiB | 18.4 GB/s | **35.4 GB/s** |
+| 8192 x 8192 | 256 MiB | 13.4 GB/s | 28.7 GB/s |
+
+Against a plain threaded read of 256 MiB (25.6-29.4 GB/s), the kernel is at the
+hardware wall. Nothing further can be won inside it; only fewer bytes or better
+pages would help.
+
+The number that matters: at 28-35 GB/s, a 1 GiB model has a decode ceiling of
+27-33 tokens per second. The measured llama.cpp baseline on a 1.04 GiB model is
+7.22 tokens per second. **Decode is running at roughly a quarter of available
+memory bandwidth**, which means the hardware is not the obstacle and a decoder
+built against this foundation has real room to work in.
+
 ## 8. Remaining tasks
 
 In the order that matters:
 
 1. **GGUF parsing and a CPU decoder** — the entry point to milestone 0.2, and
    the only way to turn the llama.cpp baseline into an actual comparison.
-2. **Prefetching in the GEMM inner loop** — the kernel is still around 10
-   percent of the six-P-core peak even when cache resident.
-3. **AVX-VNNI quantized dot product** — the highest-value unused CPU feature on
-   this hardware, and the one that matters for Q4_K inference.
+2. **AVX-VNNI quantized dot product** — quarters the bytes that must cross the
+   bus for Q4_K weights, which is the only large lever left on a bandwidth-bound
+   decode path.
+3. **Large pages** — the 256 MiB GEMV result shows TLB pressure cutting
+   bandwidth by 20 percent. `SeLockMemoryPrivilege` is not granted to this
+   account, so this cannot be implemented or verified without an administrator
+   changing Local Security Policy.
 4. **A per-thread scratch arena for packed panels** — packing currently
    allocates on every call.
 5. **MSVC install (elevated)** — needed for HIP and for MSVC code-generation
@@ -185,13 +215,16 @@ In the order that matters:
 ## 9. Known limitations
 
 - No inference. No model loading. No tokenizer. No KV cache.
-- The AVX2 kernel is packed, blocked and threaded, but has no prefetching and no
-  per-thread scratch reuse. At 512 cubed single-threaded it is about 14 percent
-  slower than the simpler kernel it replaced, because packing overhead cannot be
-  amortized on a small cache-resident problem.
+- The AVX2 GEMM is packed, blocked and threaded, but has no per-thread scratch
+  reuse. At 512 cubed single-threaded it is about 14 percent slower than the
+  simpler kernel it replaced, because packing overhead cannot be amortized on a
+  small cache-resident problem.
+- Software prefetch was tried in both the GEMV and the bandwidth path and removed
+  in both: the hardware prefetcher already covers a contiguous per-thread stream.
 - AVX-VNNI is detected but unused, even though it is the highest-value remaining
   CPU feature on this hardware for quantized dot products.
 - No SSE/AVX tier kernels exist; only scalar and AVX2.
+- Large pages are unavailable on this account, so the TLB lever is unverified.
 - Every performance number is a GCC build. No MSVC build has been compiled.
 - The budget policy fractions (62/23/8/7) are policy guesses, not measurements.
 - Benchmark variance on this machine is large (up to 2x single-run swings)

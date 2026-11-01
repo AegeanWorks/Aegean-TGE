@@ -8,6 +8,7 @@
 
 #include "tge/core/cpu.hpp"
 #include "tge/core/dispatch.hpp"
+#include "tge/core/thread_pool.hpp"
 #include "tge/memory/allocator.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/memory/system_ram.hpp"
@@ -17,6 +18,8 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
 void print_usage() {
   std::printf(
       "aegean-tge %s - native hybrid inference engine\n"
@@ -25,15 +28,21 @@ void print_usage() {
       "\n"
       "commands:\n"
       "  info [--json]        CPU, memory and kernel selection report\n"
-      "  bench [gemm] [opts]  matrix multiply throughput (default)\n"
+      "  bench gemm [opts]    matrix multiply throughput (default)\n"
       "        --m N            rows of A (default 1024)\n"
       "        --n N            columns of B (default 1024)\n"
       "        --k N            shared dimension (default 1024)\n"
       "        --repeat N       timed repetitions (default 5)\n"
       "        --threads N      worker threads (default: all logical)\n"
+      "  bench gemv [opts]    decode-shaped matrix-vector throughput\n"
+      "        --rows N         weight rows (default 4096)\n"
+      "        --cols N         reduction width (default 4096)\n"
+      "        --repeat N       timed repetitions (default 5)\n"
+      "        --threads N      worker threads (default: all logical)\n"
       "  bench mem [opts]     streaming memory bandwidth\n"
       "        --size-mb N      buffer size per direction (default 256)\n"
       "        --repeat N       timed repetitions (default 5)\n"
+      "        --threads N      worker threads (default: all logical)\n"
       "  version              print the engine version\n",
       TGE_VERSION);
 }
@@ -47,9 +56,27 @@ void fill_deterministic(float* data, std::size_t count, std::uint32_t seed) {
   }
 }
 
-double best_seconds(const tge::cpu::GemmFn kernel, const tge::cpu::GemmArgs& args,
-                    int threads, int repeat) {
+double best_gemm_seconds(const tge::cpu::GemmFn kernel,
+                         const tge::cpu::GemmArgs& args, int threads,
+                         int repeat) {
   const tge::cpu::GemmConfig config{threads};
+  double best = 0.0;
+  for (int iteration = 0; iteration < repeat; ++iteration) {
+    const auto start = Clock::now();
+    kernel(args, config);
+    const auto finish = Clock::now();
+    const double seconds = std::chrono::duration<double>(finish - start).count();
+    if (best == 0.0 || seconds < best) {
+      best = seconds;
+    }
+  }
+  return best;
+}
+
+double best_gemv_seconds(const tge::cpu::GemvFn kernel,
+                         const tge::cpu::GemvArgs& args, int threads,
+                         int repeat) {
+  const tge::cpu::GemvConfig config{threads};
   double best = 0.0;
   for (int iteration = 0; iteration < repeat; ++iteration) {
     const auto start = Clock::now();
@@ -68,9 +95,9 @@ void report_row(const char* kernel, int threads, double seconds, double flops) {
               seconds * 1e3, flops / seconds / 1e9);
 }
 
-int command_bench(int m, int n, int k, int repeat, int threads) {
+int command_gemm_bench(int m, int n, int k, int repeat, int threads) {
   if (m <= 0 || n <= 0 || k <= 0 || repeat <= 0) {
-    std::fprintf(stderr, "bench: dimensions and repeat must be positive\n");
+    std::fprintf(stderr, "bench gemm: dimensions and repeat must be positive\n");
     return 2;
   }
 
@@ -97,44 +124,121 @@ int command_bench(int m, int n, int k, int repeat, int threads) {
   const bool optimized = set.gemm_f32 != &tge::ops::gemm_ref;
 
   std::printf("gemm %dx%dx%d, best of %d\n", m, n, k, repeat);
-  std::printf("  %-12s  %7s  %12s  %8s\n", "kernel", "threads", "time", "gflops");
+  std::printf("  %-12s  %7s  %12s  %8s\n", "kernel", "threads", "time",
+              "gflops");
 
   const double reference_seconds =
-      best_seconds(&tge::ops::gemm_ref, reference_args, 1, repeat);
+      best_gemm_seconds(&tge::ops::gemm_ref, reference_args, 1, repeat);
   report_row("reference", 1, reference_seconds, flops);
 
-  double single_seconds = reference_seconds;
   if (optimized) {
-    single_seconds =
-        best_seconds(set.gemm_f32, optimized_args, 1, repeat);
-    report_row(set.gemm_name.c_str(), 1, single_seconds, flops);
-  }
+    report_row(set.gemm_name.c_str(), 1,
+               best_gemm_seconds(set.gemm_f32, optimized_args, 1, repeat),
+               flops);
+    if (workers > 1) {
+      report_row(set.gemm_name.c_str(), workers,
+                 best_gemm_seconds(set.gemm_f32, optimized_args, workers,
+                                   repeat),
+                 flops);
+    }
 
-  double parallel_seconds = single_seconds;
-  if (optimized && workers > 1) {
-    parallel_seconds =
-        best_seconds(set.gemm_f32, optimized_args, workers, repeat);
-    report_row(set.gemm_name.c_str(), workers, parallel_seconds, flops);
-  }
-
-  if (optimized) {
     const float worst = tge::ops::max_abs_diff(
         c_ref.f32(), c_opt.f32(), static_cast<std::int64_t>(c_count));
     std::printf("  max |reference - %s| = %.3e\n", set.gemm_name.c_str(),
                 static_cast<double>(worst));
     if (!(worst < 1e-2f)) {
-      std::fprintf(stderr, "bench: kernel disagrees with the reference\n");
+      std::fprintf(stderr, "bench gemm: kernel disagrees with the reference\n");
       return 1;
     }
   }
   return 0;
 }
 
-int command_mem_bench(int size_mb, int repeat) {
+int command_gemv_bench(int rows, int cols, int repeat, int threads) {
+  if (rows <= 0 || cols <= 0 || repeat <= 0) {
+    std::fprintf(stderr, "bench gemv: dimensions and repeat must be positive\n");
+    return 2;
+  }
+
+  const int workers = tge::cpu::resolve_thread_count(threads);
+  const tge::KernelSet& set = tge::kernels();
+
+  const std::size_t matrix_count = static_cast<std::size_t>(rows) * cols;
+  const double matrix_bytes =
+      static_cast<double>(matrix_count) * sizeof(float);
+
+  tge::memory::AlignedBuffer matrix(matrix_count * sizeof(float));
+  tge::memory::AlignedBuffer vector(static_cast<std::size_t>(cols) *
+                                    sizeof(float));
+  tge::memory::AlignedBuffer out_ref(static_cast<std::size_t>(rows) *
+                                     sizeof(float));
+  tge::memory::AlignedBuffer out_opt(static_cast<std::size_t>(rows) *
+                                     sizeof(float));
+
+  fill_deterministic(matrix.f32(), matrix_count, 0xA5A5A5u);
+  fill_deterministic(vector.f32(), static_cast<std::size_t>(cols), 0x5A5A5Au);
+
+  tge::cpu::GemvArgs reference_args;
+  reference_args.rows = rows;
+  reference_args.cols = cols;
+  reference_args.matrix = matrix.f32();
+  reference_args.ldm = cols;
+  reference_args.vector = vector.f32();
+  reference_args.out = out_ref.f32();
+
+  tge::cpu::GemvArgs optimized_args = reference_args;
+  optimized_args.out = out_opt.f32();
+
+  tge::ops::gemv_ref(reference_args, tge::cpu::GemvConfig{1});
+
+  std::printf("gemv %dx%d (%.1f MiB of weights), best of %d\n", rows, cols,
+              matrix_bytes / (1024.0 * 1024.0), repeat);
+  std::printf("  %-12s  %7s  %12s  %8s  %8s\n", "kernel", "threads", "time",
+              "gflops", "GB/s");
+
+  double best_gbs = 0.0;
+  const int thread_points[2] = {1, workers};
+  for (int point = 0; point < 2; ++point) {
+    const int used = thread_points[point];
+    if (point == 1 && used == 1) {
+      continue;
+    }
+    const double seconds =
+        best_gemv_seconds(set.gemv_f32, optimized_args, used, repeat);
+    const double gbs = matrix_bytes / seconds / 1e9;
+    best_gbs = std::max(best_gbs, gbs);
+    std::printf("  %-12s  %7d  %9.3f ms  %8.2f  %8.2f\n",
+                set.gemv_name.c_str(), used, seconds * 1e3,
+                (2.0 * static_cast<double>(rows) * cols) / seconds / 1e9, gbs);
+  }
+
+  const float worst = tge::ops::max_abs_diff(
+      out_ref.f32(), out_opt.f32(), static_cast<std::int64_t>(rows));
+  std::printf("  max |reference - %s| = %.3e\n", set.gemv_name.c_str(),
+              static_cast<double>(worst));
+  if (!(worst <= 1e-4F * static_cast<float>(cols) + 1e-3F)) {
+    std::fprintf(stderr, "bench gemv: kernel disagrees with the reference\n");
+    return 1;
+  }
+
+  // Decode reads every weight once per token, so the matrix scan time is the
+  // per-token floor for a model of this size.
+  const double tokens_per_second = (best_gbs * 1e9) / kGiB;
+  std::printf("  %.2f GB/s sustained; a 1 GiB model would top out near %.2f "
+              "tokens/s\n",
+              best_gbs, tokens_per_second);
+  return 0;
+}
+
+int command_mem_bench(int size_mb, int repeat, int threads) {
   if (size_mb <= 0 || repeat <= 0) {
     std::fprintf(stderr, "bench mem: size and repeat must be positive\n");
     return 2;
   }
+
+  const int workers = tge::cpu::resolve_thread_count(threads);
+  tge::core::ThreadPool& pool = tge::core::acquire_pool(workers);
+  const tge::KernelSet& set = tge::kernels();
 
   const std::size_t count =
       static_cast<std::size_t>(size_mb) * 1024 * 1024 / sizeof(float);
@@ -144,13 +248,23 @@ int command_mem_bench(int size_mb, int repeat) {
   tge::memory::AlignedBuffer target(bytes);
   fill_deterministic(source.f32(), count, 0xC0FFEEu);
 
+  const int chunks = std::max(1, workers * 4);
+  const std::size_t per_chunk = (count + chunks - 1) / chunks;
+
   double copy_best = 0.0;
   double read_best = 0.0;
-  float sink = 0.0F;
+  std::vector<float> partials(static_cast<std::size_t>(chunks), 0.0F);
 
   for (int iteration = 0; iteration < repeat; ++iteration) {
     auto start = Clock::now();
-    tge::cpu::copy_stream_avx2(target.f32(), source.f32(), count);
+    pool.parallel_for(chunks, 1, [&](int chunk) {
+      const std::size_t begin = static_cast<std::size_t>(chunk) * per_chunk;
+      if (begin >= count) {
+        return;
+      }
+      const std::size_t length = std::min(per_chunk, count - begin);
+      set.copy_stream(target.f32() + begin, source.f32() + begin, length);
+    });
     auto finish = Clock::now();
     const double copy_seconds =
         std::chrono::duration<double>(finish - start).count();
@@ -159,7 +273,15 @@ int command_mem_bench(int size_mb, int repeat) {
     }
 
     start = Clock::now();
-    sink += tge::cpu::sum_stream_avx2(source.f32(), count);
+    pool.parallel_for(chunks, 1, [&](int chunk) {
+      const std::size_t begin = static_cast<std::size_t>(chunk) * per_chunk;
+      if (begin >= count) {
+        return;
+      }
+      const std::size_t length = std::min(per_chunk, count - begin);
+      partials[static_cast<std::size_t>(chunk)] =
+          set.sum_stream(source.f32() + begin, length);
+    });
     finish = Clock::now();
     const double read_seconds =
         std::chrono::duration<double>(finish - start).count();
@@ -168,13 +290,20 @@ int command_mem_bench(int size_mb, int repeat) {
     }
   }
 
-  std::printf("memory bandwidth, %d MiB per buffer, best of %d\n", size_mb,
-              repeat);
-  std::printf("  copy (read+write)  %8.2f GB/s\n",
+  float sink = 0.0F;
+  for (const float partial : partials) {
+    sink += partial;
+  }
+
+  std::printf("memory bandwidth, %d MiB per buffer, %d threads, best of %d\n",
+              size_mb, workers, repeat);
+  std::printf("  %-18s  %8s\n", "operation", "GB/s");
+  std::printf("  %-18s  %8.2f\n", "copy (read+write)",
               (2.0 * static_cast<double>(bytes)) / copy_best / 1e9);
-  std::printf("  read (sum)         %8.2f GB/s\n",
+  std::printf("  %-18s  %8.2f\n", "read (sum)",
               static_cast<double>(bytes) / read_best / 1e9);
-  std::printf("  check value %.1f\n", static_cast<double>(sink));
+  std::printf("  kernel %s, check value %.1f\n", set.stream_name.c_str(),
+              static_cast<double>(sink));
   return 0;
 }
 
@@ -201,6 +330,8 @@ int command_info(bool json) {
 
   std::printf("\nKERNELS\n");
   std::printf("  gemm f32      : %s\n", kernels.gemm_name.c_str());
+  std::printf("  gemv f32      : %s\n", kernels.gemv_name.c_str());
+  std::printf("  streaming     : %s\n", kernels.stream_name.c_str());
   std::printf("  threads       : %d logical\n",
               tge::cpu::resolve_thread_count(0));
   return 0;
@@ -225,7 +356,7 @@ int run_gemm_bench(int argc, char** argv, int first) {
 
   for (int index = first; index < argc; index += 2) {
     if (index + 1 >= argc) {
-      std::fprintf(stderr, "bench: '%s' needs a value\n", argv[index]);
+      std::fprintf(stderr, "bench gemm: '%s' needs a value\n", argv[index]);
       return 2;
     }
     const char* flag = argv[index];
@@ -242,20 +373,55 @@ int run_gemm_bench(int argc, char** argv, int first) {
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
     } else {
-      std::fprintf(stderr, "bench: unknown option '%s'\n", flag);
+      std::fprintf(stderr, "bench gemm: unknown option '%s'\n", flag);
       return 2;
     }
     if (!ok) {
-      std::fprintf(stderr, "bench: invalid value for '%s'\n", flag);
+      std::fprintf(stderr, "bench gemm: invalid value for '%s'\n", flag);
       return 2;
     }
   }
-  return command_bench(m, n, k, repeat, threads);
+  return command_gemm_bench(m, n, k, repeat, threads);
+}
+
+int run_gemv_bench(int argc, char** argv, int first) {
+  int rows = 4096;
+  int cols = 4096;
+  int repeat = 5;
+  int threads = 0;
+
+  for (int index = first; index < argc; index += 2) {
+    if (index + 1 >= argc) {
+      std::fprintf(stderr, "bench gemv: '%s' needs a value\n", argv[index]);
+      return 2;
+    }
+    const char* flag = argv[index];
+    const char* value = argv[index + 1];
+    bool ok = false;
+    if (std::strcmp(flag, "--rows") == 0) {
+      ok = parse_int(value, rows);
+    } else if (std::strcmp(flag, "--cols") == 0) {
+      ok = parse_int(value, cols);
+    } else if (std::strcmp(flag, "--repeat") == 0) {
+      ok = parse_int(value, repeat);
+    } else if (std::strcmp(flag, "--threads") == 0) {
+      ok = parse_int(value, threads);
+    } else {
+      std::fprintf(stderr, "bench gemv: unknown option '%s'\n", flag);
+      return 2;
+    }
+    if (!ok) {
+      std::fprintf(stderr, "bench gemv: invalid value for '%s'\n", flag);
+      return 2;
+    }
+  }
+  return command_gemv_bench(rows, cols, repeat, threads);
 }
 
 int run_mem_bench(int argc, char** argv, int first) {
   int size_mb = 256;
   int repeat = 5;
+  int threads = 0;
 
   for (int index = first; index < argc; index += 2) {
     if (index + 1 >= argc) {
@@ -269,6 +435,8 @@ int run_mem_bench(int argc, char** argv, int first) {
       ok = parse_int(value, size_mb);
     } else if (std::strcmp(flag, "--repeat") == 0) {
       ok = parse_int(value, repeat);
+    } else if (std::strcmp(flag, "--threads") == 0) {
+      ok = parse_int(value, threads);
     } else {
       std::fprintf(stderr, "bench mem: unknown option '%s'\n", flag);
       return 2;
@@ -278,7 +446,7 @@ int run_mem_bench(int argc, char** argv, int first) {
       return 2;
     }
   }
-  return command_mem_bench(size_mb, repeat);
+  return command_mem_bench(size_mb, repeat, threads);
 }
 
 }  // namespace
@@ -315,6 +483,9 @@ int main(int argc, char** argv) {
   if (command == "bench") {
     if (argc >= 3 && std::strcmp(argv[2], "mem") == 0) {
       return run_mem_bench(argc, argv, 3);
+    }
+    if (argc >= 3 && std::strcmp(argv[2], "gemv") == 0) {
+      return run_gemv_bench(argc, argv, 3);
     }
     const int first = (argc >= 3 && std::strcmp(argv[2], "gemm") == 0) ? 3 : 2;
     return run_gemm_bench(argc, argv, first);

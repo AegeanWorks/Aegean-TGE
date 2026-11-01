@@ -1,14 +1,20 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-FOUNDATION",
-    "last_phase": "phase 4",
-    "active_phase": 4,
+    "task_id": "TGE-DECODE",
+    "last_phase": "phase 1",
+    "active_phase": 1,
     "status": "in_progress",
-    "updated_at": 1793496572.0098543,
+    "updated_at": 1793497102.0006146,
     "owner": "unidentified",
     "started_by": "unidentified",
-    "continuations": []
+    "continuations": [],
+    "impact_assessment": {
+      "why": "Token generation is matrix-vector, not matrix-matrix, and had no kernel",
+      "benefits": "2x sustained decode bandwidth; identifies remaining headroom over the baseline",
+      "risks": "Thread oversubscription, cache pollution from hints, ISA leakage in diagnostics",
+      "mitigation": "Measured thread scaling; prefetch and NTA A/B tested and removed; all kernel entry points feature-selected"
+    }
   },
   "checkpoints": [
     {
@@ -38,6 +44,44 @@
       "timestamp": 1793496572.0098543,
       "timestamp_str": "2026-11-01 04:29:32",
       "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-FOUNDATION",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-DECODE' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793497095.1669056,
+      "timestamp_str": "2026-11-01 04:38:15",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-DECODE",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 27/27 tests; GEMV decode kernel 35.4 GB/s on 16 threads vs 18.4 on 1; fixed unguarded AVX2 streaming calls",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793497095.1669056,
+      "timestamp_str": "2026-11-01 04:38:15",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-DECODE",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/2] Decode path: GEMV kernel, threaded bandwidth measurement, dispatch fix",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793497102.0006146,
+      "timestamp_str": "2026-11-01 04:38:21",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "Token generation is matrix-vector, not matrix-matrix, and had no kernel",
+        "benefits": "2x sustained decode bandwidth; identifies remaining headroom over the baseline",
+        "risks": "Thread oversubscription, cache pollution from hints, ISA leakage in diagnostics",
+        "mitigation": "Measured thread scaling; prefetch and NTA A/B tested and removed; all kernel entry points feature-selected"
+      }
     }
   ]
 }

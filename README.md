@@ -30,15 +30,21 @@ implemented and tested. There is no inference yet.
 cmake --preset release
 cmake --build --preset release
 .\build\release\bin\tge.exe info
-.\build\release\bin\tge.exe bench --m 1024 --n 1024 --k 1024 --repeat 3
-.\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 3
+.\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
+.\build\release\bin\tge.exe bench gemm --m 1024 --n 1024 --k 1024 --repeat 3
+.\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
 ```
 
 `tge info` prints the detected CPU, its instruction sets, the P/E core split, the
-cache hierarchy, system memory, and the resulting memory budget. `tge bench`
-measures the selected GEMM kernel at one and at all threads against the
-reference, and reports the maximum numerical deviation. `tge bench mem` measures
-the streaming bandwidth ceiling that decode is bounded by.
+cache hierarchy, system memory, and the resulting memory budget.
+
+`tge bench gemv` measures the **decode** shape: one activation vector through a
+weight matrix, streamed once. It reports sustained GB/s and the token rate a
+1 GiB model would reach at that bandwidth. This is the number that governs token
+generation.
+
+`tge bench gemm` measures prompt processing at one and at all threads against the
+reference. `tge bench mem` measures the raw bandwidth ceiling.
 
 ## 📦 What's Inside
 
@@ -60,7 +66,8 @@ aegean-tge/
 ├── src/
 │   ├── core/                 <- cpu detection, dispatch, thread pool
 │   ├── cpu/
-│   │   └── avx2/             <- ISA-specific, compiled with -mavx2 -mfma
+│   │   ├── avx2/             <- ISA-specific, compiled with -mavx2 -mfma
+│   │   └── scalar/           <- portable fallbacks for every ISA tier
 │   ├── memory/               <- system RAM, aligned allocation, budget
 │   └── tensor/               <- reference operations
 ├── tests/                    <- dependency-free harness, run by CTest
@@ -74,18 +81,16 @@ aegean-tge/
 |---|---|
 | CPU | Intel Core i5-14400F, 10C/16T (6P + 4E), AVX2 + FMA + AVX-VNNI |
 | Best ISA detected | `avx-vnni` |
-| RAM | 16 GiB, single DIMM, ~12.4 GB/s read bandwidth |
+| RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
-| f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 184.9 GFLOPS on 16 threads |
-| f32 GEMM 2048³ | 43.3 GFLOPS single-thread, 246.5 GFLOPS on 16 threads |
-| llama.cpp baseline (0.5B Q4_K_M) | 407.6 prompt t/s, 8.73 decode t/s |
-| Tests | 24 cases, all passing |
+| **GEMV decode 4096²** | 18.4 GB/s on 1 thread, **35.4 GB/s on 16** |
+| f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
+| llama.cpp baseline (1.5B Q4_K_M) | 207.6 prompt t/s, 7.22 decode t/s |
+| Tests | 27 cases, all passing |
 
-The 2048³ case is 13.5x the pre-rewrite kernel. TGE does not run inference yet,
-so the llama.cpp row is a bar to clear, not a comparison.
-
-Details and caveats: [docs/benchmarks.md](docs/benchmarks.md) and
-[docs/hardware-support.md](docs/hardware-support.md).
+The decode ceiling implied by 28-35 GB/s is 27-33 tokens/s for a 1 GiB model.
+llama.cpp achieves 7.22 on a 1.04 GiB model, so decode is running at roughly a
+quarter of available memory bandwidth. Details: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 

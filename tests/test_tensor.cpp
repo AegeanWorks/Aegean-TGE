@@ -59,6 +59,41 @@ void expect_gemm_matches_reference(int m, int n, int k, int threads) {
   }
 }
 
+void expect_gemv_matches_reference(int rows, int cols, int threads) {
+  std::vector<float> matrix(static_cast<std::size_t>(rows) * cols);
+  std::vector<float> vector(static_cast<std::size_t>(cols));
+  std::vector<float> reference(static_cast<std::size_t>(rows));
+  std::vector<float> optimized(static_cast<std::size_t>(rows));
+
+  fill(matrix.data(), matrix.size(), 0xA5A5A5u);
+  fill(vector.data(), vector.size(), 0x5A5A5Au);
+
+  tge::cpu::GemvArgs args;
+  args.rows = rows;
+  args.cols = cols;
+  args.matrix = matrix.data();
+  args.ldm = cols;
+  args.vector = vector.data();
+  args.out = reference.data();
+
+  tge::ops::gemv_ref(args, tge::cpu::GemvConfig{1});
+
+  args.out = optimized.data();
+  tge::kernels().gemv_f32(args, tge::cpu::GemvConfig{threads});
+
+  const float worst = tge::ops::max_abs_diff(
+      reference.data(), optimized.data(), static_cast<std::int64_t>(rows));
+  const float tolerance = 1e-5F * static_cast<float>(cols) + 1e-4F;
+
+  if (!(worst <= tolerance)) {
+    std::fprintf(stderr,
+                 "    gemv rows=%d cols=%d threads=%d worst=%g tolerance=%g\n",
+                 rows, cols, threads, static_cast<double>(worst),
+                 static_cast<double>(tolerance));
+    tgetest::fail("gemv matches reference", __FILE__, __LINE__);
+  }
+}
+
 }  // namespace
 
 TGE_TEST(gemm_handles_degenerate_shapes) {
@@ -92,6 +127,40 @@ TGE_TEST(gemm_matches_reference_with_threads) {
   // threaded path has to handle a short panel.
   expect_gemm_matches_reference(1000, 300, 700, 4);
   expect_gemm_matches_reference(1000, 300, 700, tge::cpu::resolve_thread_count(0));
+}
+
+TGE_TEST(gemv_matches_reference) {
+  expect_gemv_matches_reference(1, 1, 1);
+  expect_gemv_matches_reference(3, 7, 1);
+  expect_gemv_matches_reference(16, 16, 1);
+  expect_gemv_matches_reference(129, 257, 1);
+  expect_gemv_matches_reference(37, 1023, 1);
+}
+
+TGE_TEST(gemv_matches_reference_with_threads) {
+  const int workers = tge::cpu::resolve_thread_count(0);
+  expect_gemv_matches_reference(1000, 700, workers);
+  expect_gemv_matches_reference(999, 511, 3);
+}
+
+TGE_TEST(streaming_dispatch_never_reaches_past_its_features) {
+  constexpr int count = 4099;
+  std::vector<float> source(count);
+  std::vector<float> dispatched(count);
+  std::vector<float> scalar(count);
+  fill(source.data(), source.size(), 0x1BADB002u);
+
+  // The dispatch path must always be callable: it selects a portable kernel
+  // when AVX2 is absent instead of executing an unsupported instruction.
+  tge::kernels().copy_stream(dispatched.data(), source.data(), count);
+  tge::cpu::copy_stream_scalar(scalar.data(), source.data(), count);
+  TGE_CHECK_NEAR(
+      tge::ops::max_abs_diff(dispatched.data(), scalar.data(), count), 0.0F,
+      1e-9);
+
+  const float via_dispatch = tge::kernels().sum_stream(source.data(), count);
+  const float via_scalar = tge::cpu::sum_stream_scalar(source.data(), count);
+  TGE_CHECK_NEAR(via_dispatch, via_scalar, 2.0F);
 }
 
 TGE_TEST(vector_operations_are_correct) {

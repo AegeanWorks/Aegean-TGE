@@ -26,6 +26,18 @@ void gemm_ref(const cpu::GemmArgs& args, const cpu::GemmConfig& /*config*/) {
   }
 }
 
+void gemv_ref(const cpu::GemvArgs& args, const cpu::GemvConfig& /*config*/) {
+  for (int row = 0; row < args.rows; ++row) {
+    const float* matrix_row =
+        args.matrix + static_cast<std::size_t>(row) * args.ldm;
+    float total = 0.0F;
+    for (int col = 0; col < args.cols; ++col) {
+      total += matrix_row[col] * args.vector[col];
+    }
+    args.out[row] = total;
+  }
+}
+
 void add_inplace(float* dst, const float* src, std::int64_t n) {
   for (std::int64_t index = 0; index < n; ++index) {
     dst[index] += src[index];

@@ -50,13 +50,16 @@ add_library(tge_core STATIC
   src/memory/budget.cpp
   src/tensor/reference.cpp
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
+  src/cpu/scalar/mem_bandwidth_scalar.cpp
 )
 
 target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 tge_set_isa_flags(AVX2
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)
 
 find_package(Threads REQUIRED)

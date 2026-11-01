@@ -111,6 +111,37 @@ The calling thread participates as one of the workers, so `ThreadPool(1)` spawns
 nothing and runs every body inline. Pools are cached per thread count for the
 process lifetime so benchmark iterations do not pay thread creation cost.
 
+### `cpu::gemv_avx2` — the decode kernel
+
+Autoregressive decoding multiplies one activation vector by every weight matrix.
+That is a matrix-vector product, and using the GEMM for it would waste five
+sixths of every register tile and every load.
+
+`gemv_avx2` streams the matrix once. Four accumulators per output row give the
+load units enough independent work to cover DRAM latency; the activation vector
+is re-read per row but stays in L1.
+
+Threading is over contiguous row bands, four bands per worker. Contiguous bands
+are what the TLB and the hardware prefetcher both want. This is the single
+largest decode lever in the engine: measured bandwidth goes from 18.4 GB/s on one
+thread to 35.4 GB/s on sixteen for a 64 MiB matrix.
+
+There is deliberately **no software prefetch**. It was implemented and measured
+with and without; the hardware prefetcher already handles a contiguous band and
+the explicit hint cost more than it saved. See `docs/benchmarks.md` section 3.
+
+### Streaming kernels and the dispatch rule
+
+`copy_stream` and `sum_stream` measure the bandwidth ceiling and are used by the
+benchmark harness. They are selected through the same `KernelSet` as everything
+else, with portable scalar fallbacks.
+
+They were originally called directly from the CLI, which meant a machine without
+AVX2 would execute an illegal instruction during a measurement. That was a bug
+against ADR-0002: an unsupported instruction must never be reachable, in the
+inference path or in diagnostics. Every kernel entry point in `KernelSet` is now
+non-null and feature-selected.
+
 ### `tge::memory` — RAM as a first-class tier
 
 - `query_system_memory` reports installed, visible and available physical memory,

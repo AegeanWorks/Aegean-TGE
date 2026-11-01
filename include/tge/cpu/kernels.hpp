@@ -28,10 +28,40 @@ using GemmFn = void (*)(const GemmArgs& args, const GemmConfig& config);
 
 void gemm_avx2(const GemmArgs& args, const GemmConfig& config);
 
-/// Streaming kernels used to measure the memory bandwidth ceiling. These are
-/// diagnostics, not part of the inference path.
+/// Matrix-vector product: out[rows] = matrix[rows,cols] * vector[cols].
+///
+/// This, not GEMM, is the shape of autoregressive decoding: one token advances
+/// one activation vector through every weight matrix. The matrix is streamed
+/// once per call and never reused within it, so this is a pure bandwidth
+/// problem and is tuned as one.
+struct GemvArgs {
+  int rows = 0;
+  int cols = 0;
+  const float* matrix = nullptr;
+  int ldm = 0;
+  const float* vector = nullptr;
+  float* out = nullptr;
+};
+
+struct GemvConfig {
+  int threads = 0;
+};
+
+using GemvFn = void (*)(const GemvArgs& args, const GemvConfig& config);
+
+void gemv_avx2(const GemvArgs& args, const GemvConfig& config);
+
+/// Streaming kernels used to measure the memory bandwidth ceiling.
+using CopyStreamFn = void (*)(float* dst, const float* src, std::size_t count);
+using SumStreamFn = float (*)(const float* src, std::size_t count);
+
 void copy_stream_avx2(float* dst, const float* src, std::size_t count);
 float sum_stream_avx2(const float* src, std::size_t count);
+
+/// Portable fallbacks, used when AVX2 is unavailable so a measurement can
+/// never require an instruction the CPU does not have.
+void copy_stream_scalar(float* dst, const float* src, std::size_t count);
+float sum_stream_scalar(const float* src, std::size_t count);
 
 /// Turns a requested thread count into a usable one.
 int resolve_thread_count(int requested);

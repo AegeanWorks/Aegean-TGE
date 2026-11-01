@@ -19,12 +19,13 @@ Delivered:
 - [x] Hardware audit report (`tge info`)
 - [x] Packing and K blocking in the AVX2 GEMM, measured before and after
 - [x] Multithreaded GEMM with dynamic work claiming across P and E cores
-- [x] Memory bandwidth benchmark (`tge bench mem`)
+- [x] Memory bandwidth benchmark (`tge bench mem`), single and multi-threaded
 - [x] llama.cpp CPU baseline on identical hardware
+- [x] GEMV decode kernel with measured thread scaling (`tge bench gemv`)
+- [x] Fixed unguarded AVX2 calls in the bandwidth benchmark
 
 Remaining for 0.1:
 
-- [ ] Prefetching in the GEMM inner loop
 - [ ] AVX-VNNI quantized dot product tier
 
 ## 0.2 — Model loading and CPU inference

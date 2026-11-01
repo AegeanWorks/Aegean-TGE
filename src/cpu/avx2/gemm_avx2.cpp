@@ -117,13 +117,6 @@ void pack_b(int kc, int nc, const float* b, int ldb, float* packed) {
 
 }  // namespace
 
-int resolve_thread_count(int requested) {
-  if (requested > 0) {
-    return std::min(requested, 1024);
-  }
-  return core::default_thread_count();
-}
-
 void gemm_avx2(const GemmArgs& args, const GemmConfig& config) {
   if (args.m <= 0 || args.n <= 0 || args.k <= 0) {
     return;
