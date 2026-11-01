@@ -12,9 +12,10 @@ Aegean TGE (Token Generation Engine) is an independent inference runtime. It own
 its model loading, memory placement and kernels; it does not wrap llama.cpp,
 Ollama or any other engine.
 
-**Status: 0.1.0 — CPU foundation.** Hardware detection, reference tensor
-operations, an AVX2 GEMM with runtime dispatch, and a memory budget manager are
-implemented and tested. There is no inference yet.
+**Status: 0.1.0 — CPU inference.** Hardware detection, the AVX2 kernels, the
+memory budget manager and the Qwen2 decode path are implemented and tested.
+GGUF loading, the tokenizer, sampling and text generation work end to end; the
+GPU backends are not started.
 
 ## ⚡ 30-Second Cold-Start Quick Reference
 
@@ -36,6 +37,7 @@ cmake --build --preset release
 .\build\release\bin\tge.exe info
 .\build\release\bin\tge.exe gguf <model.gguf>
 .\build\release\bin\tge.exe generate --model <model.gguf> --prompt "The capital of France is" --n 32 --text
+.\build\release\bin\tge.exe fidelity --model <model.gguf> --corpus docs\architecture.md
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
 .\build\release\bin\tge.exe bench gemm --m 1024 --n 1024 --k 1024 --repeat 3
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
@@ -82,7 +84,7 @@ aegean-tge/
 ├── .aikit/                   <- this project's memory: record, ledger, decisions
 ├── assets/                   <- generated logo and social preview
 ├── apps/
-│   └── cli/                  <- `tge` executable: info, bench
+│   └── cli/                  <- `tge` executable: info, bench, gguf, plan, generate, fidelity
 ├── include/
 │   └── tge/
 │       ├── core/             <- detection, dispatch, thread pool
@@ -99,8 +101,8 @@ aegean-tge/
 │   ├── models/               <- GGUF reader and the Qwen2 decoder
 │   └── tensor/               <- reference operations
 ├── tests/                    <- dependency-free harness, run by CTest
-├── docs/                     <- architecture, roadmap, hardware, benchmarks, ADRs
-└── scripts/                  <- env.ps1 (toolchain), test.cmd (gate)
+├── docs/                     <- architecture, roadmap, hardware, benchmarks, measurement log, ADRs
+└── scripts/                  <- env.ps1 (toolchain), test.cmd (gate), measure.ps1 (snapshot)
 ```
 
 ## Verified on this machine
@@ -111,26 +113,36 @@ aegean-tge/
 | Best ISA detected | `avx-vnni` |
 | RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
-| **Decode, Qwen2.5-0.5B Q8_0** | **40-47 t/s short context; 23 t/s at 2048 (llama.cpp: 15.2 t/s, same file, same threads)** |
-| **Prompt, 510 tokens** | **152-199 t/s (llama.cpp: 285.3 t/s)** |
-| **Prompt, 2048 tokens** | **144-204 t/s after parallel attention** |
+| **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
+| **Prompt, 510 tokens** | **261-266 t/s (llama.cpp: 352.2 t/s, 6 threads)** |
+| **Prompt, 2048 tokens** | **225-246 t/s (llama.cpp: 287.9 t/s, 6 threads)** |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 54 cases, all passing |
+| Tests | 58 cases, all passing |
 
-Decode and prompt output were both validated token for token against llama.cpp,
-on Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). Prompts
-can be given as text (`--prompt`) or token ids (`--tokens`), and output prints as
+Greedy output matched llama.cpp token for token on the original arithmetic, on
+Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
+current vectorised/GQA schedules a 128-token raw-prompt run matches for ~95
+tokens, then a near-tie flips; `tge fidelity` prices the arithmetic at mean KL
+5e-12 against the scalar reference. The older "2x decode" result was against
+llama.cpp build a91eab6 (15.2 t/s at 6 threads); the installed build 11624 runs
+at 45.1 t/s, so short-context decode is now at parity, and prefill is behind.
+Prompts can be given as text (`--prompt`) or token ids (`--tokens`), and output prints as
 text with `--text`; the tokenizer was validated against `llama-tokenize` on
-punctuation, decimals, contractions and whitespace. Sampling supports
-temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
-greedy so they are reproducible. Control tokens such as `<|im_start|>` are
-matched from prompt text, omitted from text output, and generation stops at the
-model's end-of-sequence/end-of-turn id instead of continuing past it. Decode
-hands work to a spin-then-sleep pool, and attention spreads over the pool once
-the context is long enough to pay for the handoff. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
+punctuation, decimals, contractions and whitespace, including the reference
+splitter's optional leading space or punctuation character. Sampling supports
+temperature, top-k, top-p, min-p and repetition penalty; top-p and min-p no
+longer sort the whole vocabulary, and the benchmarks use greedy so they are
+reproducible. CONTROL and USER_DEFINED tokens such as `<|im_start|>` and
+`<tool_call>` are matched from prompt text, omitted from text output when they
+are structural, and `encode(..., false)` opts out for user content. Generation
+stops on the model's end-of-generation set (eos, eot, `eos_token_ids`, and
+Qwen's end-of-text id) instead of continuing past it. Decode hands work to a
+spin-then-sleep pool, and at long context attention runs in grouped-query
+chunks over positions as well as heads; `--attention head|gqa|scalar` selects
+the schedule and `tge fidelity` prices a change against the scalar oracle. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
 method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)

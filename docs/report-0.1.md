@@ -4,6 +4,10 @@
 - Machine: Intel Core i5-14400F / AMD Radeon RX 9060 XT / Windows 11 Pro 10.0.26200
 - Scope: milestone 0.1 of the Aegean TGE specification
 
+> **Superseded measurements.** The current llama.cpp build (11624) and the
+> near-tie parity result are in [measurement-log.md](measurement-log.md) section
+> 19. The "2x decode" and `a91eab6` figures below are historical.
+
 This report covers what was audited, what was built, what was measured and what
 is still missing. Where something was not done, it says so rather than implying
 completion.

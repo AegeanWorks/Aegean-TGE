@@ -57,11 +57,14 @@ that helps one routinely does nothing for the other.
 
 ## The reference point
 
-llama.cpp is built from source and run on the same file, the same machine and the
-same thread count. It serves two purposes: a throughput comparison, and a
-correctness oracle — greedy output is diffed token for token, including across
-prefill chunk boundaries. A fast engine that generates different tokens is not
-faster at anything.
+llama.cpp is run on the same file, the same machine and the same thread count.
+It serves two purposes: a throughput comparison, and a correctness oracle.
+Greedy output is diffed token for token, including across prefill chunk
+boundaries, but parity is only a first check: near-ties are common, so a
+vectorised or reordered kernel can diverge after a few dozen tokens without
+being less faithful. `tge fidelity` prices that difference as KL against the
+scalar reference; the current llama comparison and the near-tie that flips are
+in measurement-log section 19.
 
 ## Four traps this project has already fallen into
 

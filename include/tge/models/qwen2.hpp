@@ -8,6 +8,13 @@
 
 namespace tge::models {
 
+/// How decode attention is scheduled.
+///
+/// `Auto` uses grouped-query attention over position chunks once the history is
+/// long enough to pay for the reduction, and per-head attention below that.
+/// `Scalar` is the sequential oracle the fidelity harness compares against.
+enum class AttentionMode { Auto, Scalar, Head, Gqa };
+
 struct Qwen2Config {
   int block_count = 0;
   int embedding_length = 0;
@@ -23,10 +30,21 @@ struct Qwen2Config {
   /// the file does not name one.
   int eos_token_id = -1;
   int eot_token_id = -1;
+  /// Every id that ends generation: the file's eos/eot, any `eos_token_ids`
+  /// array, and for Qwen the end-of-text token, which is also its BOS.
+  std::vector<int> end_token_ids;
 
   int kv_dim() const { return head_count_kv * head_dim; }
   bool is_end_token(int token) const {
-    return token >= 0 && (token == eos_token_id || token == eot_token_id);
+    if (token < 0) {
+      return false;
+    }
+    for (const int id : end_token_ids) {
+      if (id == token) {
+        return true;
+      }
+    }
+    return false;
   }
 };
 
@@ -64,6 +82,10 @@ class Qwen2 {
 
   /// Worker threads used by every matrix-vector call. 0 selects the default.
   void set_threads(int threads) { threads_ = threads; }
+
+  /// Attention scheduling. See `AttentionMode`.
+  void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
+  AttentionMode attention_mode() const { return attention_mode_; }
 
   /// Advances the KV cache by one token and returns `vocab_size` logits. The
   /// pointer is owned by the model and valid until the next call.
@@ -116,6 +138,8 @@ class Qwen2 {
   void apply_rope(float* values, int heads, int position) const;
   /// All query heads for one decode token, spread over the pool.
   void attention(int layer, int position, const float* queries, float* out);
+  /// Grouped-query attention over position chunks, for long decode histories.
+  void attention_gqa(int layer, int position, const float* queries, float* out);
   /// Attention for every token in a prefill chunk, spread over the pool. Every
   /// key and value in the chunk is cached before this runs.
   void attention_batch(int layer, int start_position, int tokens);
@@ -128,6 +152,7 @@ class Qwen2 {
   Qwen2Config config_;
   int context_ = 0;
   int threads_ = 0;
+  AttentionMode attention_mode_ = AttentionMode::Auto;
 
   Matrix token_embd_;
   Matrix output_;
@@ -147,6 +172,12 @@ class Qwen2 {
   std::vector<float> up_;
   std::vector<float> logits_;
   std::vector<float> scores_;
+  // Grouped-query attention scratch: per-chunk online-softmax state for every
+  // query head in every KV group.
+  std::vector<float> group_maxima_;
+  std::vector<float> group_sums_;
+  std::vector<float> group_acc_;
+  std::vector<float> reduction_acc_;
   // Cosine and sine for every position and rotary half, built once at load.
   std::vector<float> rope_cos_;
   std::vector<float> rope_sin_;

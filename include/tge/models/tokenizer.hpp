@@ -37,7 +37,12 @@ class Tokenizer {
   /// Pre-tokenization approximates the model family's split rules. ASCII text
   /// matches the reference tokenizer exactly; unusual Unicode punctuation can
   /// split differently, which changes the ids but not the decoded text.
-  std::vector<int> encode(const std::string& text) const;
+  ///
+  /// `match_special` matches CONTROL and USER_DEFINED tokens literally. A
+  /// server should pass false for user content, so that content cannot forge a
+  /// chat template or a tool call.
+  std::vector<int> encode(const std::string& text,
+                          bool match_special = true) const;
 
   int vocab_size() const { return static_cast<int>(pieces_.size()); }
 

@@ -167,7 +167,8 @@ Two correctness details that are easy to get wrong and were not:
 - Qwen2 carries **QKV biases**, unlike Llama.
 
 Both were confirmed by reproducing llama.cpp's greedy output token for token on
-the same model.
+the same model, on the pre-vectorisation arithmetic; measurement-log section 19
+records the near-tie that now flips.
 
 ### `cpu::gemv_q8_0` — the quantized decode kernel
 

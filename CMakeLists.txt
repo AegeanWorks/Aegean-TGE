@@ -62,12 +62,14 @@ add_library(tge_core STATIC
   src/cpu/avx2/q8_batch_vnni.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
+  src/cpu/avx2/attention_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
   src/cpu/scalar/mem_bandwidth_scalar.cpp
   src/cpu/scalar/q8_gemv_scalar.cpp
   src/cpu/scalar/q8_batch_scalar.cpp
   src/cpu/scalar/dequant.cpp
   src/cpu/scalar/dequant_batch_scalar.cpp
+  src/cpu/scalar/attention_scalar.cpp
 )
 
 target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -80,6 +82,7 @@ tge_set_isa_flags(AVX2
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
+  src/cpu/avx2/attention_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)
 
 # AVX-VNNI is a separate tier. Reachable from the benchmark harness only;
@@ -116,6 +119,7 @@ if(TGE_BUILD_TESTS)
     tests/test_sampling.cpp
     tests/test_tensor.cpp
     tests/test_thread_pool.cpp
+    tests/test_attention.cpp
   )
   target_link_libraries(tge_tests PRIVATE tge_core)
   add_test(NAME tge_tests COMMAND tge_tests)

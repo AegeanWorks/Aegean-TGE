@@ -28,6 +28,10 @@ constexpr int kHardMaxContext = 32768;
 // the tail is left to the single-token path.
 constexpr int kPrefillChunk = 64;
 
+// Grouped-query attention splits decode positions into at most this many
+// chunks; the scratch is sized for the maximum.
+constexpr int kMaxGqaChunks = 16;
+
 float silu(float value) { return value / (1.0F + std::exp(-value)); }
 
 /// Maps a supported weight type onto the kernel's quant kind. Q8_0 has fused
@@ -89,6 +93,34 @@ Qwen2Config read_config(const gguf::File& file) {
   config.eos_token_id = read_token_id("tokenizer.ggml.eos_token_id");
   config.eot_token_id = read_token_id("tokenizer.ggml.eot_token_id");
 
+  const auto add_end = [&config](int id) {
+    if (id < 0) {
+      return;
+    }
+    for (const int existing : config.end_token_ids) {
+      if (existing == id) {
+        return;
+      }
+    }
+    config.end_token_ids.push_back(id);
+  };
+  add_end(config.eos_token_id);
+  add_end(config.eot_token_id);
+  if (const gguf::Value* ids = file.find("tokenizer.ggml.eos_token_ids");
+      ids != nullptr && ids->type == gguf::ValueType::Array) {
+    for (const gguf::Value& value : ids->elements) {
+      add_end(static_cast<int>(value.as_u64()));
+    }
+  }
+  // Qwen uses <|endoftext|> as BOS, padding and a valid end-of-text token, so
+  // a generation that emits it has ended even when it is not the eos id.
+  if (architecture.find("qwen") != std::string::npos) {
+    if (const gguf::Value* bos = file.find("tokenizer.ggml.bos_token_id");
+        bos != nullptr) {
+      add_end(static_cast<int>(bos->as_u64()));
+    }
+  }
+
   if (config.block_count <= 0 || config.embedding_length <= 0 ||
       config.head_count <= 0 || config.head_count_kv <= 0) {
     throw std::runtime_error("model configuration is incomplete");
@@ -96,6 +128,17 @@ Qwen2Config read_config(const gguf::File& file) {
   config.head_dim = static_cast<int>(file.get_u64(
       prefix + "attention.key_length",
       config.embedding_length / config.head_count));
+
+  // Grouped-query attention divides the query heads into whole KV groups, and
+  // every kernel needs a usable head width. A malformed file is rejected here
+  // instead of dividing by zero or silently mis-grouping later.
+  if (config.head_dim <= 0) {
+    throw std::runtime_error("model reports no usable head dimension");
+  }
+  if (config.head_count % config.head_count_kv != 0) {
+    throw std::runtime_error(
+        "attention head count is not a multiple of the KV head count");
+  }
 
   // The vocabulary size is the output projection's row count.
   if (const gguf::TensorInfo* output = file.tensor("output.weight");
@@ -193,6 +236,17 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
         std::max(static_cast<std::size_t>(config.head_count), prefill_rows);
     model->scores_.assign(score_rows * static_cast<std::size_t>(model->context_),
                           0.0F);
+    const int kv_heads = config.head_count_kv;
+    const int group = config.head_count / kv_heads;
+    const std::size_t gqa_states = static_cast<std::size_t>(kv_heads) *
+                                   kMaxGqaChunks *
+                                   static_cast<std::size_t>(group);
+    model->group_maxima_.assign(gqa_states, 0.0F);
+    model->group_sums_.assign(gqa_states, 0.0F);
+    model->group_acc_.assign(
+        gqa_states * static_cast<std::size_t>(config.head_dim), 0.0F);
+    model->reduction_acc_.assign(
+        static_cast<std::size_t>(config.head_dim), 0.0F);
     model->batch_x_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
     model->batch_h_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
     model->batch_q_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
@@ -452,46 +506,24 @@ void Qwen2::attention_head(int layer, int position, int head,
   const int kv_head = head / group;
   const std::size_t kv_head_offset =
       static_cast<std::size_t>(kv_head) * head_dim;
-  const float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
-  const int span = position + 1;
-
   const std::size_t layer_base =
       static_cast<std::size_t>(layer) * context_ * kv_dim;
-  const float* k_base = k_cache_.data() + layer_base;
-  const float* v_base = v_cache_.data() + layer_base;
 
-  float maximum = -INFINITY;
-  for (int token = 0; token < span; ++token) {
-    const float* key =
-        k_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
-    float product = 0.0F;
-    for (int index = 0; index < head_dim; ++index) {
-      product += query[index] * key[index];
-    }
-    const float scaled = product * scale;
-    scores[static_cast<std::size_t>(token)] = scaled;
-    maximum = std::max(maximum, scaled);
-  }
+  cpu::AttentionArgs args;
+  args.query = query;
+  args.keys = k_cache_.data() + layer_base + kv_head_offset;
+  args.values = v_cache_.data() + layer_base + kv_head_offset;
+  args.kv_stride = kv_dim;
+  args.span = position + 1;
+  args.head_dim = head_dim;
+  args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+  args.scores = scores;
+  args.out = out;
 
-  float total = 0.0F;
-  for (int token = 0; token < span; ++token) {
-    const float value =
-        std::exp(scores[static_cast<std::size_t>(token)] - maximum);
-    scores[static_cast<std::size_t>(token)] = value;
-    total += value;
-  }
-  const float inverse = 1.0F / total;
-
-  for (int index = 0; index < head_dim; ++index) {
-    out[index] = 0.0F;
-  }
-  for (int token = 0; token < span; ++token) {
-    const float weight = scores[static_cast<std::size_t>(token)] * inverse;
-    const float* value =
-        v_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
-    for (int index = 0; index < head_dim; ++index) {
-      out[index] += weight * value[index];
-    }
+  if (attention_mode_ == AttentionMode::Scalar) {
+    cpu::attention_head_scalar(args);
+  } else {
+    kernels().attention_head(args);
   }
 }
 
@@ -500,6 +532,14 @@ void Qwen2::attention(int layer, int position, const float* queries,
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+
+  const bool use_gqa =
+      attention_mode_ == AttentionMode::Gqa ||
+      (attention_mode_ == AttentionMode::Auto && position >= 256);
+  if (use_gqa && threads > 1) {
+    attention_gqa(layer, position, queries, out_buffer);
+    return;
+  }
 
   // At short context the pool round trip costs more than the work, so keep the
   // heads inline until there is enough history to pay for it.
@@ -521,6 +561,109 @@ void Qwen2::attention(int layer, int position, const float* queries,
                    scores_.data() +
                        static_cast<std::size_t>(head) * context_);
   });
+}
+
+void Qwen2::attention_gqa(int layer, int position, const float* queries,
+                          float* out) {
+  const int heads = config_.head_count;
+  const int kv_heads = config_.head_count_kv;
+  const int head_dim = config_.head_dim;
+  const int kv_dim = config_.kv_dim();
+  const int group = heads / kv_heads;
+  const int span = position + 1;
+  const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+  const int chunks =
+      std::min(kMaxGqaChunks,
+               std::max(1, (threads * 2 + kv_heads - 1) / kv_heads));
+  const int chunk_size = (span + chunks - 1) / chunks;
+  const int actual_chunks = (span + chunk_size - 1) / chunk_size;
+  const std::size_t layer_base =
+      static_cast<std::size_t>(layer) * context_ * kv_dim;
+
+  core::ThreadPool& pool = core::acquire_pool(threads);
+  pool.parallel_for(kv_heads * actual_chunks, 1, [&](int task) {
+    const int kv_head = task / actual_chunks;
+    const int chunk = task % actual_chunks;
+    const int start = chunk * chunk_size;
+    const int count = std::min(chunk_size, span - start);
+    const std::size_t state =
+        (static_cast<std::size_t>(kv_head) * actual_chunks + chunk) * group;
+    const std::size_t head_offset =
+        static_cast<std::size_t>(kv_head) * head_dim;
+    const std::size_t row_offset = static_cast<std::size_t>(start) * kv_dim;
+
+    cpu::AttentionGroupArgs args;
+    args.queries =
+        queries + static_cast<std::size_t>(kv_head) * group * head_dim;
+    args.keys = k_cache_.data() + layer_base + head_offset + row_offset;
+    args.values = v_cache_.data() + layer_base + head_offset + row_offset;
+    args.kv_stride = kv_dim;
+    args.count = count;
+    args.head_dim = head_dim;
+    args.group_heads = group;
+    args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    args.maxima = group_maxima_.data() + state;
+    args.sums = group_sums_.data() + state;
+    args.accumulators = group_acc_.data() + state * head_dim;
+    kernels().attention_group(args);
+  });
+
+  // Merge the per-chunk online-softmax states for each query head.
+  for (int head = 0; head < heads; ++head) {
+    const int kv_head = head / group;
+    const int group_head = head % group;
+    bool initialized = false;
+    float maximum = -INFINITY;
+    float sum = 0.0F;
+    for (int index = 0; index < head_dim; ++index) {
+      reduction_acc_[static_cast<std::size_t>(index)] = 0.0F;
+    }
+
+    for (int chunk = 0; chunk < actual_chunks; ++chunk) {
+      const std::size_t state =
+          (static_cast<std::size_t>(kv_head) * actual_chunks + chunk) * group +
+          static_cast<std::size_t>(group_head);
+      const float chunk_max = group_maxima_[state];
+      const float chunk_sum = group_sums_[state];
+      if (!(chunk_sum > 0.0F)) {
+        continue;
+      }
+      const float* chunk_acc = group_acc_.data() + state * head_dim;
+      if (!initialized) {
+        maximum = chunk_max;
+        sum = chunk_sum;
+        for (int index = 0; index < head_dim; ++index) {
+          reduction_acc_[static_cast<std::size_t>(index)] = chunk_acc[index];
+        }
+        initialized = true;
+        continue;
+      }
+
+      const float merged_max = std::max(maximum, chunk_max);
+      const float alpha = std::exp(maximum - merged_max);
+      const float beta = std::exp(chunk_max - merged_max);
+      sum = sum * alpha + chunk_sum * beta;
+      for (int index = 0; index < head_dim; ++index) {
+        reduction_acc_[static_cast<std::size_t>(index)] =
+            reduction_acc_[static_cast<std::size_t>(index)] * alpha +
+            chunk_acc[index] * beta;
+      }
+      maximum = merged_max;
+    }
+
+    float* head_out = out + static_cast<std::size_t>(head) * head_dim;
+    if (initialized && sum > 0.0F) {
+      const float inverse = 1.0F / sum;
+      for (int index = 0; index < head_dim; ++index) {
+        head_out[index] =
+            reduction_acc_[static_cast<std::size_t>(index)] * inverse;
+      }
+    } else {
+      for (int index = 0; index < head_dim; ++index) {
+        head_out[index] = 0.0F;
+      }
+    }
+  }
 }
 
 void Qwen2::attention_batch(int layer, int start_position, int tokens) {

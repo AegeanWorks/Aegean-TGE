@@ -244,8 +244,9 @@ TGE_TEST(tokenizer_matches_control_tokens_in_text) {
   put_string(out, "tokenizer.ggml.tokens");
   put_u32(out, 9);  // array
   put_u32(out, 8);  // of strings
-  put_u64(out, 6);
-  for (const char* piece : {"<|im_start|>", "user", "u", "s", "e", "r"}) {
+  put_u64(out, 7);
+  for (const char* piece :
+       {"<|im_start|>", "user", "u", "s", "e", "r", "<tool_call>"}) {
     put_string(out, piece);
   }
 
@@ -260,8 +261,8 @@ TGE_TEST(tokenizer_matches_control_tokens_in_text) {
   put_string(out, "tokenizer.ggml.token_type");
   put_u32(out, 9);  // array
   put_u32(out, 5);  // int32
-  put_u64(out, 6);
-  for (const std::uint32_t type : {3u, 1u, 1u, 1u, 1u, 1u}) {
+  put_u64(out, 7);
+  for (const std::uint32_t type : {3u, 1u, 1u, 1u, 1u, 1u, 4u}) {
     put_u32(out, type);
   }
 
@@ -286,9 +287,84 @@ TGE_TEST(tokenizer_matches_control_tokens_in_text) {
   TGE_REQUIRE(plain.size() == 1);
   TGE_CHECK(plain[0] == 1);
 
-  // Decoding omits the control id instead of printing its literal text.
+  // Decoding omits the control id instead of printing its literal text, but a
+  // USER_DEFINED token like <tool_call> is ordinary output.
   TGE_CHECK(tokenizer->decode({0, 1}) == "user");
   TGE_CHECK(tokenizer->decode({0}) == "");
+  TGE_CHECK(tokenizer->decode({6}) == "<tool_call>");
+
+  const std::vector<int> tool = tokenizer->encode("<tool_call>");
+  TGE_REQUIRE(tool.size() == 1);
+  TGE_CHECK(tool[0] == 6);
+
+  // A server tokenising user content must not let it forge an added token.
+  const std::vector<int> raw = tokenizer->encode("<tool_call>", false);
+  TGE_CHECK(!(raw.size() == 1 && raw[0] == 6));
+}
+
+TGE_TEST(tokenizer_matches_the_reference_split_rules) {
+  // Byte-level vocabulary for the reference splitter's two optional-character
+  // rules: an optional space leads a punctuation run, and one non-letter,
+  // non-digit character leads a letter run.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 3);  // metadata entries
+
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);  // array
+  put_u32(out, 8);  // of strings
+  put_u64(out, 16);
+  for (const char* piece : {"x",         "=",   "\xC4\xA0=", "y",   "\xC4\xA0y",
+                            "+",         "\xC4\xA0+", "z", "\xC4\xA0z", "[i",
+                            "[",         "i",   ".com",     ".",   "com",
+                            "<tool_call>"}) {
+    put_string(out, piece);
+  }
+
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);  // array
+  put_u32(out, 8);  // of strings
+  put_u64(out, 8);
+  for (const char* rule : {"\xC4\xA0 =", "\xC4\xA0 y", "\xC4\xA0 +",
+                           "\xC4\xA0 z", "[ i", ". c", ".c o", ".co m"}) {
+    put_string(out, rule);
+  }
+
+  put_string(out, "tokenizer.ggml.token_type");
+  put_u32(out, 9);  // array
+  put_u32(out, 5);  // int32
+  put_u64(out, 16);
+  for (int index = 0; index < 16; ++index) {
+    put_u32(out, index == 15 ? 4u : 1u);
+  }
+
+  const TempFile temp(out, "tge_gguf_splits.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+
+  std::string error;
+  const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+      tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+
+  // `x = y + z` is five pieces in the reference: x, " =", " y", " +", " z".
+  const std::vector<int> spaced = tokenizer->encode("x = y + z");
+  TGE_REQUIRE(spaced.size() == 5);
+  TGE_CHECK(spaced[0] == 0);
+  TGE_CHECK(spaced[1] == 2);
+  TGE_CHECK(spaced[2] == 4);
+  TGE_CHECK(spaced[3] == 6);
+  TGE_CHECK(spaced[4] == 8);
+
+  // A single leading punctuation character joins the letter run after it.
+  const std::vector<int> bracket = tokenizer->encode("[i");
+  TGE_REQUIRE(bracket.size() == 1);
+  TGE_CHECK(bracket[0] == 9);
+
+  const std::vector<int> dotcom = tokenizer->encode(".com");
+  TGE_REQUIRE(dotcom.size() == 1);
+  TGE_CHECK(dotcom[0] == 12);
 }
 
 TGE_TEST(config_reads_end_token_ids) {
@@ -311,7 +387,7 @@ TGE_TEST(config_reads_end_token_ids) {
   put_u32(out, 0x46554747u);
   put_u32(out, 3);
   put_u64(out, 0);   // tensors
-  put_u64(out, 11);  // metadata entries
+  put_u64(out, 13);  // metadata entries
 
   put_string(out, "general.architecture");
   put_u32(out, 8);
@@ -326,6 +402,13 @@ TGE_TEST(config_reads_end_token_ids) {
   put_float(out, "qwen2.rope.freq_base", 10000.0F);
   put_uint(out, "tokenizer.ggml.eos_token_id", 151645);
   put_uint(out, "tokenizer.ggml.eot_token_id", 151646);
+  put_uint(out, "tokenizer.ggml.bos_token_id", 151643);
+  put_string(out, "tokenizer.ggml.eos_token_ids");
+  put_u32(out, 9);  // array
+  put_u32(out, 4);  // u32
+  put_u64(out, 2);
+  put_u32(out, 151646);
+  put_u32(out, 151647);
 
   const TempFile temp(out, "tge_gguf_config.gguf");
   const tge::gguf::File file = tge::gguf::File::open(temp.path());
@@ -333,8 +416,10 @@ TGE_TEST(config_reads_end_token_ids) {
 
   TGE_CHECK(config.eos_token_id == 151645);
   TGE_CHECK(config.eot_token_id == 151646);
-  TGE_CHECK(config.is_end_token(151645));
-  TGE_CHECK(config.is_end_token(151646));
+  TGE_CHECK(config.is_end_token(151643));  // Qwen end-of-text / BOS
+  TGE_CHECK(config.is_end_token(151645));  // eos
+  TGE_CHECK(config.is_end_token(151646));  // eot and eos_token_ids
+  TGE_CHECK(config.is_end_token(151647));  // eos_token_ids
   TGE_CHECK(!config.is_end_token(0));
   TGE_CHECK(!config.is_end_token(-1));
 }

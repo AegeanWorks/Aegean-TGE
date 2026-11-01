@@ -149,3 +149,32 @@ TGE_TEST(repetition_penalty_uses_one_recent_occurrence) {
   // 2.0 / 1.05 = 1.905 > 1.9. Compounding over the history would pick token 1.
   TGE_CHECK(draw(scratch, logits, 2, params, history) == 0);
 }
+
+TGE_TEST(sampling_top_p_lowers_the_floor_for_its_nucleus) {
+  // The 1 - top_p floor holds only 80% of the mass here, so the nucleus reaches
+  // below it. The candidate floor must be lowered; a full sort would also be
+  // correct, but this covers the lowering path.
+  const float probabilities[9] = {0.20F, 0.18F, 0.16F, 0.14F, 0.12F,
+                                  0.08F, 0.06F, 0.04F, 0.02F};
+  float logits[9];
+  for (int index = 0; index < 9; ++index) {
+    logits[index] = std::log(probabilities[index]);
+  }
+
+  tge::models::SamplingParams params;
+  params.temperature = 1.0F;
+  params.top_p = 0.9F;
+
+  Scratch scratch;
+  const int draws = 100000;
+  int counts[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  for (int attempt = 0; attempt < draws; ++attempt) {
+    counts[draw(scratch, logits, 9, params)] += 1;
+  }
+
+  // The nucleus is the first seven entries, renormalised to 0.94.
+  TGE_CHECK(counts[7] == 0);
+  TGE_CHECK(counts[8] == 0);
+  TGE_CHECK_NEAR(static_cast<double>(counts[0]) / draws, 0.20 / 0.94, 0.01);
+  TGE_CHECK_NEAR(static_cast<double>(counts[6]) / draws, 0.06 / 0.94, 0.01);
+}

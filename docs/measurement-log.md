@@ -19,7 +19,7 @@ noise. Without the numbers, the plausible story survives.
 | OS | Windows 11 Pro 10.0.26200 |
 | Compiler | MinGW GCC 16.2, `-O3`, no `-march=native` |
 
-**Read every absolute number as Â±20 percent.** The machine runs with 2-4 GB free
+**Read every absolute number as Ã‚Â±20 percent.** The machine runs with 2-4 GB free
 of 16; VS Code, Defender and Memory Compression hold the rest. Two back-to-back
 runs of the same binary differ by up to 29 percent. Ratios measured within one
 run are reliable; absolute values across sessions are not.
@@ -31,11 +31,11 @@ one before and one after, repeated two or three times when the delta is small.
 
 | Date | Change | Metric | Before | After | Verdict |
 |---|---|---|---|---|---|
-| 2026-11-01 | Packed panels, 144/256/256 blocking, work-stealing pool | GEMM 2048Â³, 16 threads | 18.2 GFLOPS | 246.5 GFLOPS | **kept** |
-| 2026-11-01 | Pad packed A stride from 6 to 8 floats | GEMM 1024Â³ | 62.0 GFLOPS | 52.7 GFLOPS | reverted |
-| 2026-11-01 | Software prefetch in GEMV, distance 512 | GEMV 4096Â², 16 threads | 32.1 GB/s | 28.4 GB/s | reverted |
-| 2026-11-01 | `_MM_HINT_NTA` on that prefetch | GEMV 4096Â², 16 threads | 28.4 GB/s | 29.8 GB/s | reverted (noise) |
-| 2026-11-01 | Dedicated threaded GEMV decode kernel | GEMV 4096Â² | 18.4 GB/s (1T) | 35.4 GB/s (16T) | **kept** |
+| 2026-11-01 | Packed panels, 144/256/256 blocking, work-stealing pool | GEMM 2048Ã‚Â³, 16 threads | 18.2 GFLOPS | 246.5 GFLOPS | **kept** |
+| 2026-11-01 | Pad packed A stride from 6 to 8 floats | GEMM 1024Ã‚Â³ | 62.0 GFLOPS | 52.7 GFLOPS | reverted |
+| 2026-11-01 | Software prefetch in GEMV, distance 512 | GEMV 4096Ã‚Â², 16 threads | 32.1 GB/s | 28.4 GB/s | reverted |
+| 2026-11-01 | `_MM_HINT_NTA` on that prefetch | GEMV 4096Ã‚Â², 16 threads | 28.4 GB/s | 29.8 GB/s | reverted (noise) |
+| 2026-11-01 | Dedicated threaded GEMV decode kernel | GEMV 4096Ã‚Â² | 18.4 GB/s (1T) | 35.4 GB/s (16T) | **kept** |
 | 2026-11-01 | Decode threads: all logical to P-cores | decode 0.5B Q8_0 | 21.8 t/s (16T) | 32.5 t/s (6T) | **kept** |
 | 2026-11-01 | Per-matrix thread sizing for decode | decode 0.5B Q8_0 | 32.8 t/s | 27.5 t/s | reverted |
 | 2026-11-01 | Batched prefill (weight row reused across tokens) | prefill, 510 tokens | 11 t/s | 170.9 t/s | **kept** |
@@ -57,6 +57,16 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | Parallel attention, heads and chunk tokens | 2048-token prefill | 63.3/78.1 t/s | 144.0/203.6 t/s | **kept** |
 | 2026-11-01 | Same, decode at 2048 context | decode | 20.3/19.9 t/s | 22.9/23.8 t/s | **kept** |
 | 2026-11-01 | Same, short-context decode | decode | 36.9/43.1 t/s | 41.9/47.3 t/s | **kept** |
+| 2026-11-01 | Reference pre-tokenizer splits | `x = y + z`, `[i`, `.com` ids | 7 / 2 / 2 | 5 / 1 / 1 | **kept** |
+| 2026-11-01 | Match USER_DEFINED tokens and allow opt-out | `<tool_call>` ids | 5 | 1 | **kept** |
+| 2026-11-01 | Stop on the end-of-generation set | Qwen eos/eot/bos | eos+eot only | adds 151643 and `eos_token_ids` | **kept** |
+| 2026-11-01 | top-p/min-p without a full sort | 151,936 logits, T=0.8 | 18.2 / 19.2 ms | 4.1 / 4.1 ms | **kept** |
+| 2026-11-01 | Teacher-forced fidelity harness | 1023 positions, context 1024 | no harness | mean KL 6.0e-12, top-1 1023/1023 | **kept** |
+| 2026-11-01 | Vectorised attention (AVX2 dot + value sum) | 2048-token decode | 21.97 t/s | 31.38 t/s | **kept** |
+| 2026-11-01 | Same, 2048-token prefill | prefill | 182.0 t/s | 218.5 t/s | **kept** |
+| 2026-11-01 | GQA-aware decode attention (position chunks) | 2048-token decode | 35.11 t/s | 40.34 t/s | **kept** |
+| 2026-11-01 | Same, fidelity against scalar | 511 positions | â€” | mean KL 5.0e-12, top-1 511/511 | **kept** |
+| 2026-11-01 | Re-measured against llama.cpp build 11624 | 6 threads, Q8_0 | old log: llama tg128 15.2 t/s | TGE tg128 45.5 vs llama 45.1 t/s; prefill 261-266 vs 352; parity ~95 tokens | reference |
 
 ## 1. f32 GEMM
 
@@ -64,11 +74,11 @@ Reference kernel is the scalar oracle; `avx2-fma` is the shipped kernel.
 
 | Shape | Reference (1T) | Shipped (1T) | Shipped (16T) |
 |---|---|---|---|
-| 512Â³ | 16.8-17.2 GFLOPS | 51.4-75.9 | 120.6-122.5 |
-| 1024Â³ | 17.4-20.6 | 62.0-66.8 | 184.9-206.6 |
-| 2048Â³ | 3.2-8.7 | 27.2-43.3 | 180.4-246.5 |
+| 512Ã‚Â³ | 16.8-17.2 GFLOPS | 51.4-75.9 | 120.6-122.5 |
+| 1024Ã‚Â³ | 17.4-20.6 | 62.0-66.8 | 184.9-206.6 |
+| 2048Ã‚Â³ | 3.2-8.7 | 27.2-43.3 | 180.4-246.5 |
 
-Best observed 246.5 GFLOPS at 2048Â³; the same config measured 180.4 later under
+Best observed 246.5 GFLOPS at 2048Ã‚Â³; the same config measured 180.4 later under
 heavier background load. The reference kernel's own variance (3.2 to 8.7) shows
 how much the machine moves.
 
@@ -77,32 +87,32 @@ how much the machine moves.
 The 18.2 to 246.5 entry bundles three changes *and* a 1-to-16-thread comparison.
 `bench gemm --kernel unpacked|unblocked|packed` separates them.
 
-| 2048Â³, GFLOPS | 1 thread | 16 threads |
+| 2048Ã‚Â³, GFLOPS | 1 thread | 16 threads |
 |---|---|---|
 | unpacked (no packing, no blocking) | 18.80 | n/a (control is single-threaded) |
 | + packing, no blocking | 43.16 | 33.14 |
 | + blocking (shipped) | 27.23 | **180.37** |
 
-| 512Â³, GFLOPS | 1 thread | 16 threads |
+| 512Ã‚Â³, GFLOPS | 1 thread | 16 threads |
 |---|---|---|
 | unpacked | 72.75 | n/a |
 | + packing, no blocking | 33.59 | 24.36 |
 | + blocking (shipped) | 51.36 | **122.51** |
 
-- **The pool is the largest single factor**: 27.23 to 180.37 at 2048Â³, 6.6x.
+- **The pool is the largest single factor**: 27.23 to 180.37 at 2048Ã‚Â³, 6.6x.
 - **Blocking is the precondition for it.** Without blocking, more threads make
   the kernel *slower* (43.16 to 33.14): the panel spans the whole matrix and
   every worker re-reads it from DRAM. Blocking alone is a single-thread
   *regression* (43.16 to 27.23) and only pays at 16 threads.
-- **Packing trades small for large**: 18.80 to 43.16 at 2048Â³, but 72.75 to
-  33.59 at 512Â³. Blocking recovers most of the small-shape loss.
+- **Packing trades small for large**: 18.80 to 43.16 at 2048Ã‚Â³, but 72.75 to
+  33.59 at 512Ã‚Â³. Blocking recovers most of the small-shape loss.
 
 ## 2. GEMV f32 - the decode primitive
 
 | Matrix | 1 thread | 16 threads |
 |---|---|---|
-| 4096Â² (64 MiB) | 18.4 GB/s (15.9-20.8) | **35.4 GB/s** (29.6-35.7) |
-| 8192Â² (256 MiB) | 13.4 GB/s | 28.7 GB/s |
+| 4096Ã‚Â² (64 MiB) | 18.4 GB/s (15.9-20.8) | **35.4 GB/s** (29.6-35.7) |
+| 8192Ã‚Â² (256 MiB) | 13.4 GB/s | 28.7 GB/s |
 
 Against a plain threaded read of 256 MiB (25.6-29.4 GB/s) the kernel is at the
 hardware wall. The larger matrix loses bandwidth to TLB pressure; large pages
@@ -123,6 +133,9 @@ cannot be single-threaded.
 
 ## 4. End-to-end decode vs llama.cpp
 
+> Superseded by section 19. The installed llama.cpp build 11624 measures
+> 45.1 t/s tg128; the a91eab6 build below measured 15.2-17.9.
+
 Same file (`qwen2.5-0.5b-instruct-q8_0.gguf`, 638.74 MiB), same machine, greedy,
 128 generated tokens.
 
@@ -140,12 +153,15 @@ Output is **token-identical to llama.cpp** on both models tested.
 
 ## 5. End-to-end prefill vs llama.cpp
 
+> Superseded by section 19. Build 11624 measures 352.2 t/s pp512 and 287.9
+> pp2048; the a91eab6 numbers below are historical.
+
 510-token prompt, 64-token chunks.
 
 | Engine | Prompt (pp512) |
 |---|---|
 | TGE | **170.9 then 191.6 t/s** (before and after the token-group change) |
-| llama.cpp | 285.3 Â± 22.8, and **220.7 Â± 3.8** on a later run |
+| llama.cpp | 285.3 Ã‚Â± 22.8, and **220.7 Ã‚Â± 3.8** on a later run |
 
 Two llama runs on the same file, same binary, same session, differ by 29
 percent. TGE's own prefill spans 170-201. So TGE is **13-33 percent behind
@@ -235,6 +251,22 @@ same session, which is the size of the noise: the machine was loaded. A kernel
 worth 29.6 percent in isolation is invisible here, and stating that is more
 useful than quoting whichever run looked best.
 
+## 7c. Concurrent sessions
+
+0.5B Q8_0, 32 tokens each:
+
+| Sessions | Threads each | Per session | Aggregate |
+|---|---|---|---|
+| 1 | 6 | 17.37 t/s | 17.37 t/s |
+| 2 | 1 | 15.56 t/s | 31.11 t/s |
+| 4 | 1 | 12.06 t/s | 48.23 t/s |
+
+Aggregate nearly triples while per-session latency falls: one session on six threads leaves half the bandwidth unused, and the extra sessions fill it. 17.4 -> 48.2 t/s with no kernel change - the largest throughput gain here.
+
+Independence: every session gets the same seed, so identical transcripts prove no KV or workspace leakage. All matched.
+
+Limitation: sessions with more than one thread each crash (0xC0000005). The pool registry is process-wide and keyed by size, so sessions sharing a size share one pool. The benchmark now refuses that combination. Fix belongs in the dispatch layer.
+
 ## 8. Load and startup
 
 `generate` reports its own load and tokenizer timings.
@@ -266,13 +298,16 @@ Dequantising K-quants into a prepared form is a trap: Q4_K_M at 638 MiB becomes
 
 ## 9. llama.cpp baseline, other models
 
+> Build 11624, the current installed baseline, is in section 19. These a91eab6
+> numbers are historical.
+
 Built from source at `a91eab6` (ggml 0.28.0), GCC 16.2, `-mavx2 -mfma -mf16c`.
 
 | Model | Prompt (pp512) | Decode (tg128) |
 |---|---|---|
-| qwen2.5-0.5B Q4_K_M | 407.6 Â± 29.7 t/s | 8.73 Â± 2.30 t/s |
+| qwen2.5-0.5B Q4_K_M | 407.6 Ã‚Â± 29.7 t/s | 8.73 Ã‚Â± 2.30 t/s |
 | qwen2.5-0.5B Q8_0 | 278.6-285.3 t/s | 10.1-17.9 t/s |
-| qwen2.5-1.5B Q4_K_M | 207.6 Â± 0.7 t/s | 7.22 Â± 0.75 t/s |
+| qwen2.5-1.5B Q4_K_M | 207.6 Ã‚Â± 0.7 t/s | 7.22 Ã‚Â± 0.75 t/s |
 
 Decode on this hardware is bandwidth-bound: a 1.04 GiB model at 28-35 GB/s has a
 ceiling near 27-33 t/s, and llama.cpp reaches 7.2. That is roughly a quarter of
@@ -296,7 +331,7 @@ Q8_0 model:
 
 The projection is the useful part: **500.8 MiB per token against 28 GB/s gives a
 decode ceiling of 53.3 t/s.** The engine measures ~30 t/s, so decode runs at
-**56 percent of its bandwidth bound** â€” the other 44 percent is attention,
+**56 percent of its bandwidth bound** Ã¢â‚¬â€ the other 44 percent is attention,
 normalisation and the per-call barriers, not memory.
 
 **The loader now applies the same rule** rather than only reporting it: asking
@@ -306,13 +341,15 @@ instead of allocating and failing. Cost of consulting the plan: load went from
 
 Analysis costs **2.3 ms warm**, 50 ms on a cold file (the first read of the
 metadata region faults it in). Either way it is far cheaper than loading a model,
-and it makes "does this fit?" answerable before committing to an allocation â€”
+and it makes "does this fit?" answerable before committing to an allocation Ã¢â‚¬â€
 which is the whole point, since the failure it prevents is allocating first and
 discovering afterwards.
 
 ## 11. Correctness checks that back these numbers
 
-- Greedy output matches llama.cpp token for token on Q8_0 and on Q4_K_M.
+- Greedy output matched llama.cpp token for token on the pre-vectorisation
+  arithmetic. On the current schedules it matches for ~95 of 128 tokens and
+  then diverges at a near-tie; section 19 records the current comparison.
 - Prefill matches across chunk boundaries (136-token prompt, two boundaries).
 - Q4_K/Q5_K/Q6_K/Q5_0/Q4_0 dequantizers agree with their scalar references.
 - Batch kernels match scalar references across token counts hitting both the
@@ -328,7 +365,7 @@ correct on paper.
 
 | Change | Lost by | Reason, where known |
 |---|---|---|
-| Pad packed A stride 6 to 8 | 1024Â³ 62.0 to 52.7 GFLOPS | 33 percent more panel traffic beat fewer line splits |
+| Pad packed A stride 6 to 8 | 1024Ã‚Â³ 62.0 to 52.7 GFLOPS | 33 percent more panel traffic beat fewer line splits |
 | Software prefetch in GEMV | 32.1 to 28.4 GB/s | hardware prefetcher already covers a contiguous band |
 | `_MM_HINT_NTA` on it | 28.4 to 29.8, inside noise | no measurable difference |
 | Align chunk to token group | 191.6 to 185.4 t/s | measured worse; tail stays on the single-token path |
@@ -478,3 +515,146 @@ runs (11-token prefill of 1 s against 0.14 s idle), so short-context numbers are
 stated as measured pairs rather than as a single figure.
 
 Tests: 53 -> 54 cases, adding the 16-worker pool stress case.
+
+## 16. Input, termination and sampling cuts (2026-11-01)
+
+The second audit's remaining exact defects, each reproduced against 7a500c7.
+
+### Input: the reference splitter's two optional-character rules
+
+`x = y + z` tokenised to 7 ids because a space before a punctuation run was its
+own piece, and `[i`, `.com` took two ids because one non-letter, non-digit
+character did not lead the following letter run. Both rules are now implemented
+in the pre-tokenizer.
+
+| string | before | after |
+|---|---|---|
+| `x = y + z` | 7 ids | 5 ids |
+| `[i` | 2 ids | 1 id |
+| `.com` | 2 ids | 1 id |
+| `<tool_call>` | 5 ids | 1 id |
+
+USER_DEFINED entries are matched with CONTROL entries, and
+`Tokenizer::encode(text, false)` leaves both as ordinary text so a server can
+tokenise user content without letting it forge a template or a tool call.
+
+### Termination: the end-of-generation set
+
+The config now collects the file's eos and eot ids, every id in
+`tokenizer.ggml.eos_token_ids`, and for Qwen the BOS id, which is
+`<|endoftext|>` (151643 here) and a valid end-of-text token. Previously only
+151645 could end a turn.
+
+### Sampling: no full sort for top-p or min-p
+
+Both cuts sorted all 151,936 entries. The sampler now collects the tokens that
+could survive the cut, lowers the floor geometrically until a top-p nucleus fits
+inside the collected set, and sorts only that set. At a floor of zero every
+token is a candidate, which is the exact full-sort fallback.
+
+| 151,936 logits, T=0.8 | before | after |
+|---|---|---|
+| top-p 0.95 | 18.2 ms per draw | 4.1 ms |
+| min-p 0.05 | 19.2 ms per draw | 4.1 ms |
+
+End to end, an 11-token prompt and 64 generated tokens: top-p 0.95 ran at
+47.1 t/s and min-p 0.05 at 49.0 t/s, against 24-25 t/s with the old sampler
+(measured on a different prompt, so treat that pair as directional; the
+151,936-logit pair above is the paired measurement).
+
+Tests: 54 -> 55 cases.
+
+A later regression covers the top-p floor-lowering path; the suite is at 58
+cases.
+
+## 17. Fidelity harness and vectorised attention (2026-11-01)
+
+### The harness
+
+`tge fidelity --model PATH --corpus PATH` runs two models in lockstep,
+teacher-forced over the corpus: one forced to the scalar attention kernel and
+one on the dispatch-selected kernel. At each position it reports mean and worst
+KL in double precision, the largest logit difference, and top-1 agreement.
+`generate --attention scalar|auto` provides the same escape hatch for A/B
+timing.
+
+### Vectorised attention
+
+`attention_head_scalar` is the oracle: the exact sequential loops the engine
+used. `attention_head_avx2` vectorises the query-key dot product and the
+weighted value sum with FMA. The softmax exponential stays scalar in both
+paths, because a vectorised approximation changes the distribution and needs
+its own price first.
+
+| 1023 positions, context 1024 | value |
+|---|---|
+| mean KL | 6.0e-12 nats |
+| worst KL | 9.1e-10 nats |
+| max logit difference | 1.8e-4 |
+| top-1 agreement | 1023/1023 |
+| 256 free-running greedy tokens | identical |
+
+| 2048-token prompt | scalar | AVX2 |
+|---|---|---|
+| prefill | 182.0 t/s | 218.5 t/s |
+| decode | 21.97 t/s | 31.38 t/s |
+
+The kernel is selected by dispatch (`tge info` prints it) and the scalar path
+remains the reference the harness compares against.
+
+Tests: 55 -> 56 cases, adding the attention differential across spans and head
+widths.
+
+## 18. GQA-aware decode attention (2026-11-01)
+
+Decode split 14 query heads over 6 workers and re-read each KV row once per
+query head. `attention_gqa` splits each KV group's positions into chunks; every
+task reads each K and V row once for the seven query heads that share it and
+keeps an online softmax (running maximum, running sum, running value sum) per
+head. The caller merges the chunk states. `Auto` uses it from 256 positions of
+history; below that the per-head path is cheaper. `--attention head|gqa` forces
+either for A/B timing, and `scalar` remains the oracle.
+
+| 2048-token decode | per-head | GQA |
+|---|---|---|
+| decode | 35.11 t/s | 40.34 t/s |
+
+The online softmax is priced by the harness, not assumed: 511 positions gave
+mean KL 5.0e-12, worst 1.4e-10, max logit difference 1.4e-4, top-1 511/511, and
+256 free-running greedy tokens were identical to the per-head schedule.
+
+Tests: 56 -> 57 cases, adding the grouped-kernel differential.
+
+## 19. llama.cpp comparison, build 11624 (2026-11-01)
+
+The installed llama.cpp is build 11624 (commit af0579c78), CPU backend
+`alderlake`, which is much faster than the a91eab6 build the earlier sections
+measured. Same file (`qwen2.5-0.5b-instruct-q8_0.gguf`, 638.74 MiB), same
+machine, 6 threads, greedy. TGE runs with `--threads 6 --attention auto`;
+llama-bench is `-t 6 -ngl 0`. llama-cli 11624 has no raw-completion switch; it
+wraps every prompt in the model's chat template, so the output comparison used a
+pass-through template, `{{ messages[0]['content'] }}`, to give both engines the
+same raw text.
+
+| test | TGE | llama.cpp |
+|---|---|---|
+| pp512 | 261.4 / 265.6 t/s | 352.17 +/- 2.48 |
+| tg128 | 45.04 / 45.94 t/s | 45.10 +/- 1.22 |
+| pp2048 | 225.2 / 246.1 t/s | 287.93 +/- 9.30 |
+| tg32 at 2048 | 38.33 t/s (GQA) | 46.92 +/- 2.17 |
+
+TGE is at decode parity at short context, at ~75-85% of llama's prefill, and at
+~82% of its 2k decode. llama-bench uses an f16 KV cache by default while TGE
+keeps f32, and llama.cpp's CPU path quantises activations to 8 bits before its
+dot products (ADR-0006). Both differences favour llama on speed.
+
+### Output parity
+
+A 128-token greedy run from the same raw prompt is identical for the first ~95
+tokens, then a near-tie flips: llama continues "and a constant", TGE "with a
+variable". Both are plausible; after that token the traces separate. The
+fidelity harness prices TGE's arithmetic at mean KL 5.0e-12 against the scalar
+reference, while llama.cpp's 8-bit activation path is a larger deviation from
+exact f32. The token-identical claims in sections 4, 5, 7 and 11 were measured
+on the pre-vectorisation arithmetic and the older llama build; they are
+superseded here, not withdrawn as observations.

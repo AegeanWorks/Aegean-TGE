@@ -33,15 +33,20 @@ Remaining for 0.1:
 - [x] GGUF header, metadata and tensor-info parsing, memory mapped
 - [x] Q8_0 quantized matrix-vector kernel with runtime dispatch
 - [x] Qwen2 decoder: RMSNorm, NeoX RoPE, GQA attention, SwiGLU, KV cache
-- [x] Greedy decode loop validated against llama.cpp token for token
-- [x] End-to-end decode benchmark: ~2x llama.cpp on identical Q8_0 weights
-- [x] Batched prompt processing (170.9 t/s against llama.cpp's 285.3)
+- [x] Greedy decode loop validated against llama.cpp token for token (pre-vectorisation; see log section 19 for near-ties)
+- [x] End-to-end decode at parity with llama.cpp 11624 at short context (45.5 vs 45.1 t/s); behind at 2k (38.3 vs 46.9)
+- [x] Batched prompt processing (261-266 t/s against llama.cpp 11624's 352.2 at 512)
 - [x] Sampling: temperature, top-k, top-p, min-p, repetition penalty, seed
 - [x] Nucleus draw over the kept mass; penalty once per distinct token
-- [x] Control tokens matched in prompt text; stop at the model's end ids
+- [x] Top-p and min-p without a full-vocabulary sort
+- [x] Reference pre-tokenizer splits; USER_DEFINED tokens; opt-out for user content
+- [x] Stop on the end-of-generation set (eos, eot, eos_token_ids, Qwen end-of-text)
 - [x] RoPE sin/cos precomputed per position
 - [x] Spin-then-sleep fork-join pool (handoff 39 us -> 0.5 us)
 - [x] Parallel attention across query heads and prefill chunk tokens
+- [x] Vectorised attention inner loops (AVX2 dot and value sum)
+- [x] Teacher-forced fidelity harness (`tge fidelity`, KL and top-1)
+- [x] GQA-aware decode attention over positions and KV groups
 - [x] Quantized formats: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K
 - [x] Detokenizer: token ids to text
 - [x] Tokenizer encoding: text to ids via BPE merges, validated against llama.cpp

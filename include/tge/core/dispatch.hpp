@@ -28,6 +28,10 @@ struct KernelSet {
   cpu::DequantBatchFn gemv_dequant_batch = nullptr;
   std::string gemv_dequant_name;
 
+  cpu::AttentionHeadFn attention_head = nullptr;
+  std::string attention_name;
+  cpu::AttentionGroupFn attention_group = nullptr;
+
   cpu::CopyStreamFn copy_stream = nullptr;
   cpu::SumStreamFn sum_stream = nullptr;
   std::string stream_name;

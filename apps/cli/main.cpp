@@ -1,10 +1,13 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -55,6 +58,8 @@ void print_usage() {
       "  gguf <path>          inspect a GGUF model file\n"
       "  plan [opts]          memory budget and decode ceiling, before loading\n"
       "        --model PATH --context N --sessions N --bandwidth GB/s\n"
+      "  bench sessions [opts] concurrent decoding over shared weights\n"
+      "        --model PATH --sessions N --tokens N --threads N --context N\n"
       "  generate [opts]      greedy decode and token-rate measurement\n"
       "        --model PATH     GGUF model to load\n"
       "        --tokens \"a b c\"  prompt token ids\n"
@@ -70,8 +75,14 @@ void print_usage() {
       "        --repeat-penalty R  penalty for already seen tokens (default 1)\n"
       "        --penalty-window N  recent tokens the penalty sees; 0 is all (default 64)\n"
       "        --seed N         random seed for sampling\n"
+      "        --attention A    auto|scalar|head|gqa attention (default auto)\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
+      "  fidelity [opts]      scalar vs selected attention, teacher-forced\n"
+      "        --model PATH --corpus PATH\n"
+      "        --context N      context used by both models (default 1024)\n"
+      "        --tokens N       stop after N corpus tokens (default all)\n"
+      "        --threads N      worker threads (default: all logical)\n"
       "  version              print the engine version\n",
       TGE_VERSION);
 }
@@ -418,7 +429,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      bool print_ids,
                      const tge::models::SamplingParams& sampling,
                      int context_limit, bool print_text,
-                     VocabularyMode vocabulary) {
+                     VocabularyMode vocabulary,
+                     tge::models::AttentionMode attention_mode) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -447,6 +459,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                 context_limit, model->max_context());
   }
   model->set_threads(threads);
+  model->set_attention_mode(attention_mode);
 
   const tge::models::Qwen2Config& config = model->config();
 
@@ -712,6 +725,88 @@ int command_plan(const std::string& path, int context, int sessions,
   return 0;
 }
 
+int command_sessions_bench(const std::string& path, int sessions, int tokens,
+                           int threads_per_session, int context) {
+  std::vector<std::unique_ptr<tge::models::Qwen2>> models;
+  models.reserve(static_cast<std::size_t>(sessions));
+
+  // The thread pool registry is process-wide and keyed by size, so two sessions
+  // requesting the same thread count share one pool and corrupt it. Until pools
+  // are per-session, concurrency is single-threaded per session.
+  if (sessions > 1 && threads_per_session != 1) {
+    std::fprintf(stderr,
+                 "bench sessions: %d sessions need --threads 1\n"
+                 "  Why: the thread pool registry is process-wide, so sessions\n"
+                 "       sharing a pool size corrupt each other (0xC0000005).\n"
+                 "  Fix: pass --threads 1, or give each session its own pool.\n",
+                 sessions);
+    return 2;
+  }
+
+  const auto load_start = Clock::now();
+  for (int index = 0; index < sessions; ++index) {
+    std::string error;
+    auto model = tge::models::Qwen2::load(path, error, context, false);
+    if (!model) {
+      std::fprintf(stderr, "bench sessions: %s\n", error.c_str());
+      return 1;
+    }
+    model->set_threads(threads_per_session);
+    models.push_back(std::move(model));
+  }
+  const auto load_end = Clock::now();
+
+  // Every session gets the same seed, so identical output is the independence
+  // check: if any state leaked between them, the transcripts would diverge.
+  const int seed_token = 128;
+  std::vector<std::vector<int>> generated(static_cast<std::size_t>(sessions));
+  std::vector<std::thread> workers;
+  workers.reserve(static_cast<std::size_t>(sessions));
+
+  const auto start = Clock::now();
+  for (int index = 0; index < sessions; ++index) {
+    workers.emplace_back([&models, &generated, index, tokens, seed_token]() {
+      tge::models::Qwen2& model = *models[static_cast<std::size_t>(index)];
+      std::vector<int>& out = generated[static_cast<std::size_t>(index)];
+      out.reserve(static_cast<std::size_t>(tokens));
+      const float* logits = model.forward(seed_token, 0);
+      for (int step = 0; step < tokens; ++step) {
+        const int next = tge::models::Qwen2::argmax(logits, model.vocab_size());
+        out.push_back(next);
+        logits = model.forward(next, step + 1);
+      }
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+  const auto finish = Clock::now();
+
+  const double seconds = std::chrono::duration<double>(finish - start).count();
+  const double load_seconds =
+      std::chrono::duration<double>(load_end - load_start).count();
+
+  bool identical = true;
+  for (int index = 1; index < sessions; ++index) {
+    if (generated[static_cast<std::size_t>(index)] !=
+        generated[static_cast<std::size_t>(0)]) {
+      identical = false;
+    }
+  }
+
+  const double per_session = static_cast<double>(tokens) / seconds;
+  std::printf("sessions : %d x %d tokens, %d thread(s) each\n", sessions, tokens,
+              threads_per_session);
+  std::printf("load     : %.1f ms for %d models\n", load_seconds * 1e3, sessions);
+  std::printf("wall     : %.3f s\n", seconds);
+  std::printf("decode   : %.2f t/s per session, %.2f t/s aggregate\n",
+              per_session, per_session * sessions);
+  std::printf("state    : %s\n",
+              identical ? "independent (all transcripts identical)"
+                        : "LEAKED - sessions disagree");
+  return identical ? 0 : 1;
+}
+
 int command_info(bool json) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::memory::SystemMemory memory = tge::memory::query_system_memory();
@@ -736,6 +831,7 @@ int command_info(bool json) {
   std::printf("\nKERNELS\n");
   std::printf("  gemm f32      : %s\n", kernels.gemm_name.c_str());
   std::printf("  gemv f32      : %s\n", kernels.gemv_name.c_str());
+  std::printf("  attention     : %s\n", kernels.attention_name.c_str());
   std::printf("  streaming     : %s\n", kernels.stream_name.c_str());
   std::printf("  threads       : %d logical, %d for decode\n",
               tge::cpu::resolve_thread_count(0),
@@ -794,6 +890,7 @@ int run_generate(int argc, char** argv) {
   bool print_ids = false;
   bool print_text = false;
   VocabularyMode vocabulary = VocabularyMode::Auto;
+  tge::models::AttentionMode attention_mode = tge::models::AttentionMode::Auto;
   tge::models::SamplingParams sampling;
   int seed = 0;
 
@@ -838,6 +935,20 @@ int run_generate(int argc, char** argv) {
       }
     } else if (std::strcmp(flag, "--seed") == 0) {
       ok = parse_int(value, seed);
+    } else if (std::strcmp(flag, "--attention") == 0) {
+      if (std::strcmp(value, "scalar") == 0) {
+        attention_mode = tge::models::AttentionMode::Scalar;
+      } else if (std::strcmp(value, "head") == 0) {
+        attention_mode = tge::models::AttentionMode::Head;
+      } else if (std::strcmp(value, "gqa") == 0) {
+        attention_mode = tge::models::AttentionMode::Gqa;
+      } else if (std::strcmp(value, "auto") == 0) {
+        attention_mode = tge::models::AttentionMode::Auto;
+      } else {
+        std::fprintf(stderr,
+                     "generate: --attention takes auto|scalar|head|gqa\n");
+        return 2;
+      }
     } else if (std::strcmp(flag, "--top-k") == 0) {
       ok = parse_int(value, sampling.top_k);
     } else if (std::strcmp(flag, "--temp") == 0) {
@@ -867,7 +978,7 @@ int run_generate(int argc, char** argv) {
   sampling.seed = static_cast<std::uint32_t>(seed);
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
-                          vocabulary);
+                          vocabulary, attention_mode);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -976,6 +1087,213 @@ int run_mem_bench(int argc, char** argv, int first) {
   return command_mem_bench(size_mb, repeat, threads);
 }
 
+int command_fidelity(const std::string& path, const std::string& corpus_path,
+                     int context, int max_tokens, int threads) {
+  std::ifstream corpus_stream(corpus_path, std::ios::binary);
+  if (!corpus_stream) {
+    std::fprintf(stderr, "fidelity: cannot read %s\n", corpus_path.c_str());
+    return 1;
+  }
+  std::ostringstream corpus_buffer;
+  corpus_buffer << corpus_stream.rdbuf();
+  const std::string corpus = corpus_buffer.str();
+  if (corpus.empty()) {
+    std::fprintf(stderr, "fidelity: corpus is empty\n");
+    return 1;
+  }
+
+  std::string error;
+  const auto load_start = Clock::now();
+  // The scalar reference loads the vocabulary eagerly, because the tokenizer
+  // reuses those arrays instead of parsing the file a second time.
+  std::unique_ptr<tge::models::Qwen2> reference =
+      tge::models::Qwen2::load(path, error, context, true);
+  if (!reference) {
+    std::fprintf(stderr, "fidelity: %s\n", error.c_str());
+    return 1;
+  }
+  std::unique_ptr<tge::models::Qwen2> candidate =
+      tge::models::Qwen2::load(path, error, context, false);
+  if (!candidate) {
+    std::fprintf(stderr, "fidelity: %s\n", error.c_str());
+    return 1;
+  }
+  const auto load_end = Clock::now();
+
+  reference->set_threads(threads);
+  candidate->set_threads(threads);
+  reference->set_attention_mode(tge::models::AttentionMode::Scalar);
+
+  const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+      tge::models::Tokenizer::from_gguf(reference->file(), error);
+  if (!tokenizer) {
+    std::fprintf(stderr, "fidelity: %s\n", error.c_str());
+    return 1;
+  }
+  const std::vector<int> tokens = tokenizer->encode(corpus);
+  if (tokens.empty()) {
+    std::fprintf(stderr, "fidelity: corpus has no tokens\n");
+    return 1;
+  }
+
+  const int usable = std::min(reference->max_context(), candidate->max_context());
+  int limit = static_cast<int>(tokens.size());
+  if (max_tokens > 0) {
+    limit = std::min(limit, max_tokens);
+  }
+  limit = std::min(limit, usable);
+  if (limit < 2) {
+    std::fprintf(stderr,
+                 "fidelity: corpus needs two tokens within the %d-token context\n",
+                 usable);
+    return 2;
+  }
+
+  const int vocab_size = reference->vocab_size();
+  std::vector<double> left(static_cast<std::size_t>(vocab_size));
+  std::vector<double> right(static_cast<std::size_t>(vocab_size));
+  double kl_sum = 0.0;
+  double kl_worst = 0.0;
+  double max_difference = 0.0;
+  int top1_agree = 0;
+  const int positions = limit - 1;
+
+  const auto start = Clock::now();
+  for (int position = 0; position < positions; ++position) {
+    const float* reference_logits =
+        reference->forward(tokens[static_cast<std::size_t>(position)], position);
+    const float* candidate_logits =
+        candidate->forward(tokens[static_cast<std::size_t>(position)], position);
+
+    int best_reference = 0;
+    int best_candidate = 0;
+    for (int index = 1; index < vocab_size; ++index) {
+      if (reference_logits[index] > reference_logits[best_reference]) {
+        best_reference = index;
+      }
+      if (candidate_logits[index] > candidate_logits[best_candidate]) {
+        best_candidate = index;
+      }
+    }
+    for (int index = 0; index < vocab_size; ++index) {
+      const double difference =
+          std::fabs(static_cast<double>(reference_logits[index]) -
+                    static_cast<double>(candidate_logits[index]));
+      if (difference > max_difference) {
+        max_difference = difference;
+      }
+    }
+    if (best_reference == best_candidate) {
+      ++top1_agree;
+    }
+
+    const double reference_max = reference_logits[best_reference];
+    const double candidate_max = candidate_logits[best_candidate];
+    double reference_sum = 0.0;
+    double candidate_sum = 0.0;
+    for (int index = 0; index < vocab_size; ++index) {
+      left[static_cast<std::size_t>(index)] =
+          std::exp(static_cast<double>(reference_logits[index]) - reference_max);
+      right[static_cast<std::size_t>(index)] =
+          std::exp(static_cast<double>(candidate_logits[index]) - candidate_max);
+      reference_sum += left[static_cast<std::size_t>(index)];
+      candidate_sum += right[static_cast<std::size_t>(index)];
+    }
+
+    double kl = 0.0;
+    for (int index = 0; index < vocab_size; ++index) {
+      const double p = left[static_cast<std::size_t>(index)] / reference_sum;
+      if (p <= 0.0) {
+        continue;
+      }
+      const double q = right[static_cast<std::size_t>(index)] / candidate_sum;
+      if (q <= 0.0) {
+        continue;
+      }
+      kl += p * std::log(p / q);
+    }
+    kl_sum += kl;
+    if (kl > kl_worst) {
+      kl_worst = kl;
+    }
+  }
+  const auto finish = Clock::now();
+
+  const char* mode_name = "auto";
+  switch (candidate->attention_mode()) {
+    case tge::models::AttentionMode::Auto:
+      mode_name = "auto";
+      break;
+    case tge::models::AttentionMode::Scalar:
+      mode_name = "scalar";
+      break;
+    case tge::models::AttentionMode::Head:
+      mode_name = "head";
+      break;
+    case tge::models::AttentionMode::Gqa:
+      mode_name = "gqa";
+      break;
+  }
+  std::printf("fidelity : scalar vs %s attention (%s)\n",
+              tge::kernels().attention_name.c_str(), mode_name);
+  std::printf("load     : %.1f ms\n",
+              std::chrono::duration<double>(load_end - load_start).count() * 1e3);
+  std::printf("corpus   : %d positions, context %d\n", positions, usable);
+  std::printf("KL       : mean %.3e, worst %.3e nats\n", kl_sum / positions,
+              kl_worst);
+  std::printf("logits   : max |diff| %.3e\n", max_difference);
+  std::printf("top-1    : %d/%d agree\n", top1_agree, positions);
+  std::printf("time     : %.2f s\n",
+              std::chrono::duration<double>(finish - start).count());
+  return 0;
+}
+
+int run_fidelity(int argc, char** argv) {
+  std::string model_path;
+  std::string corpus_path;
+  int context = 1024;
+  int max_tokens = 0;
+  int threads = 0;
+
+  for (int index = 2; index < argc; index += 2) {
+    if (index + 1 >= argc) {
+      std::fprintf(stderr, "fidelity: '%s' needs a value\n", argv[index]);
+      return 2;
+    }
+    const char* flag = argv[index];
+    const char* value = argv[index + 1];
+    bool ok = true;
+    if (std::strcmp(flag, "--model") == 0) {
+      model_path = value;
+    } else if (std::strcmp(flag, "--corpus") == 0) {
+      corpus_path = value;
+    } else if (std::strcmp(flag, "--context") == 0) {
+      ok = parse_int(value, context);
+    } else if (std::strcmp(flag, "--tokens") == 0) {
+      ok = parse_int(value, max_tokens);
+    } else if (std::strcmp(flag, "--threads") == 0) {
+      ok = parse_int(value, threads);
+    } else {
+      std::fprintf(stderr, "fidelity: unknown option '%s'\n", flag);
+      return 2;
+    }
+    if (!ok) {
+      std::fprintf(stderr, "fidelity: invalid value for '%s'\n", flag);
+      return 2;
+    }
+  }
+
+  if (model_path.empty()) {
+    std::fprintf(stderr, "fidelity: --model is required\n");
+    return 2;
+  }
+  if (corpus_path.empty()) {
+    std::fprintf(stderr, "fidelity: --corpus is required\n");
+    return 2;
+  }
+  return command_fidelity(model_path, corpus_path, context, max_tokens, threads);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1015,6 +1333,36 @@ int main(int argc, char** argv) {
     return command_gguf(argv[2]);
   }
 
+  if (command == "bench" && argc >= 3 && std::strcmp(argv[2], "sessions") == 0) {
+    std::string model_path;
+    int sessions = 2;
+    int tokens = 32;
+    int threads_per_session = 0;
+    int context = 0;
+    for (int index = 3; index < argc; index += 2) {
+      const char* flag = argv[index];
+      const char* value = index + 1 < argc ? argv[index + 1] : "";
+      bool ok = true;
+      if (std::strcmp(flag, "--model") == 0) model_path = value;
+      else if (std::strcmp(flag, "--sessions") == 0) ok = parse_int(value, sessions);
+      else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
+      else if (std::strcmp(flag, "--threads") == 0) ok = parse_int(value, threads_per_session);
+      else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
+      else { std::fprintf(stderr, "bench sessions: unknown option '%s'\n", flag); return 2; }
+      if (!ok) { std::fprintf(stderr, "bench sessions: invalid value\n"); return 2; }
+    }
+    if (model_path.empty()) {
+      std::fprintf(stderr, "bench sessions: --model is required\n");
+      return 2;
+    }
+    if (sessions < 1) {
+      std::fprintf(stderr, "bench sessions: --sessions must be positive\n");
+      return 2;
+    }
+    return command_sessions_bench(model_path, sessions, tokens,
+                                  threads_per_session, context);
+  }
+
   if (command == "plan") {
     std::string model_path;
     int context = 4096;
@@ -1045,6 +1393,10 @@ int main(int argc, char** argv) {
 
   if (command == "generate") {
     return run_generate(argc, argv);
+  }
+
+  if (command == "fidelity") {
+    return run_fidelity(argc, argv);
   }
 
   if (command == "bench") {

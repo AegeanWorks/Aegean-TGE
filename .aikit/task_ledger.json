@@ -1,55 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-QUALITY",
+    "task_id": "TGE-VERIFY",
     "last_phase": "verification",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1793550677.8363802,
+    "updated_at": 1793563973.6994205,
     "owner": "commandcode:1",
     "started_by": "commandcode:1",
     "continuations": [],
-    "completed_at": 1793550719.5401578
+    "completed_at": 1793563973.837939
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-FORMATS",
-      "phase": "phase 1",
-      "phase_num": 1,
-      "description": "[1/1] Quantized formats, selectable context, detokenizer",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793519885.386864,
-      "timestamp_str": "2026-11-01 10:58:05",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "Only Q8_0 ran, context was fixed at 2048, and output was ids only",
-        "benefits": "Q4_K_M and similar models run correctly; text output; configurable KV",
-        "risks": "Wrong dequant math decodes plausible garbage; per-type row strides",
-        "mitigation": "Validated against llama.cpp on a Q4_K_M file that mixes four formats; row stride derived from type"
-      }
-    },
-    {
-      "task_id": "TGE-FORMATS",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; 44/44 tests; Q4_K_M matches llama.cpp token for token; context 8192 verified",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793519885.928665,
-      "timestamp_str": "2026-11-01 10:58:05",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-FORMATS",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-TOKENIZER' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793520800.5653422,
-      "timestamp_str": "2026-11-01 11:13:20",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-TOKENIZER",
       "phase": "phase 1",
@@ -248,6 +210,44 @@
       "status": "completed",
       "timestamp": 1793550719.5401592,
       "timestamp_str": "2026-11-01 19:31:59",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-VERIFY",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/2] Verify the handoff/attention work and align the llama comparison",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793563964.8263285,
+      "timestamp_str": "2026-11-01 23:12:44",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "The second audit's input, termination and sampler defects are fixed; the fidelity harness and vectorised/GQA attention need verification before delivery, and the old llama baseline is superseded.",
+        "benefits": "Reference-correct tokenization, end-of-generation stopping, greedy-speed sampling, KL-priced attention changes, and an accurate llama comparison.",
+        "risks": "contract: new AttentionMode, encode(..., false), --attention modes and tge fidelity; dependency: standard library only, llama binaries are external references; concurrency: GQA scratch per model and disjoint pool tasks, single-session; state: no persistent format changes",
+        "mitigation": "Unit and differential tests, the fidelity harness, 58/58 tests, 4/4 gates, and the measurement log updated"
+      }
+    },
+    {
+      "task_id": "TGE-VERIFY",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 58/58 tests; tokenizer 7->5/2->1/2->1/5->1; sampler 18.2/19.2->4.1/4.1 ms; fidelity KL 5e-12; GQA 35.11->40.34 t/s at 2k; llama 45.1/352.2/287.9/46.9; parity ~95 tokens",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793563973.6994205,
+      "timestamp_str": "2026-11-01 23:12:53",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-VERIFY",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-VERIFY' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793563973.8379402,
+      "timestamp_str": "2026-11-01 23:12:53",
       "agent": "commandcode:1"
     }
   ]

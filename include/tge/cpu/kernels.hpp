@@ -147,6 +147,56 @@ void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
 void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
                                const GemvConfig& config);
 
+/// One query head's attention against its key/value cache.
+///
+/// The kernel owns the two inner loops (query-key dot products and the
+/// weighted value sum); the softmax exponential stays scalar in both paths so
+/// the rounding of `std::exp` cannot differ between them.
+struct AttentionArgs {
+  const float* query = nullptr;   // head_dim values
+  const float* keys = nullptr;    // span rows, stride kv_stride
+  const float* values = nullptr;  // span rows, stride kv_stride
+  int kv_stride = 0;
+  int span = 0;
+  int head_dim = 0;
+  float scale = 1.0F;
+  float* scores = nullptr;  // span values, overwritten with the softmax
+  float* out = nullptr;     // head_dim values
+};
+
+using AttentionHeadFn = void (*)(const AttentionArgs& args);
+
+/// Sequential reference. This is the oracle the vectorised path is compared
+/// against, so its summation order must not change.
+void attention_head_scalar(const AttentionArgs& args);
+void attention_head_avx2(const AttentionArgs& args);
+
+/// One KV group's attention over one position chunk, with an online softmax.
+///
+/// Grouped-query attention has several query heads sharing each KV head. This
+/// kernel reads every K and V row once for the group and keeps an online
+/// (running maximum, running sum, running value sum) state per query head.
+/// The caller merges the chunks, which is what lets decode split positions
+/// across the pool as well as heads.
+struct AttentionGroupArgs {
+  const float* queries = nullptr;   // group_heads * head_dim
+  const float* keys = nullptr;      // count rows, stride kv_stride
+  const float* values = nullptr;    // count rows, stride kv_stride
+  int kv_stride = 0;
+  int count = 0;
+  int head_dim = 0;
+  int group_heads = 0;
+  float scale = 1.0F;
+  float* maxima = nullptr;        // group_heads
+  float* sums = nullptr;          // group_heads
+  float* accumulators = nullptr;  // group_heads * head_dim
+};
+
+using AttentionGroupFn = void (*)(const AttentionGroupArgs& args);
+
+void attention_group_scalar(const AttentionGroupArgs& args);
+void attention_group_avx2(const AttentionGroupArgs& args);
+
 /// Bytes occupied by one Q8_0 block: 2-byte scale plus 32 signed bytes.
 inline constexpr std::size_t kQ8BlockBytes = 34;
 inline constexpr int kQ8BlockElements = 32;

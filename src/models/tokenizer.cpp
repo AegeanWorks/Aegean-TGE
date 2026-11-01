@@ -182,20 +182,41 @@ std::vector<std::string> split_pre_tokens(const std::string& text) {
       }
       std::size_t after = 0;
       const std::uint32_t following = peek(position + run, after);
-      if (following != 0 && is_letter(following)) {
+      if (following != 0 &&
+          (is_letter(following) || is_punctuation(following))) {
         if (run > 1) {
-          // Emit the excess spaces, then let the next round take " " + word.
+          // Emit the excess spaces, then let the next round take " " + word or
+          // " " + punctuation run.
           pieces.push_back(text.substr(start, run - 1));
           position += run - 1;
           continue;
         }
-        position += 1;  // consume the single space with the word
-        while (position < size) {
-          code_point = peek(position, length);
-          if (!is_letter(code_point)) {
-            break;
+        position += 1;  // consume the single space
+        if (is_letter(following)) {
+          while (position < size) {
+            code_point = peek(position, length);
+            if (!is_letter(code_point)) {
+              break;
+            }
+            position += length;
           }
-          position += length;
+        } else {
+          // An optional space leads a punctuation run in the reference pattern,
+          // so ` =` and ` +` stay single pieces.
+          while (position < size) {
+            code_point = peek(position, length);
+            if (!is_punctuation(code_point)) {
+              break;
+            }
+            position += length;
+          }
+          while (position < size) {
+            code_point = peek(position, length);
+            if (code_point != '\r' && code_point != '\n') {
+              break;
+            }
+            position += length;
+          }
         }
         pieces.push_back(text.substr(start, position - start));
         continue;
@@ -223,14 +244,33 @@ std::vector<std::string> split_pre_tokens(const std::string& text) {
       continue;
     }
 
-    // Punctuation run, plus any newlines immediately after it.
+    // Punctuation run. One non-letter, non-digit character may lead the
+    // following letter run: `[i`, `.com` and `/path` are single pieces in the
+    // reference splitter.
+    int punctuation_count = 0;
     while (position < size) {
       code_point = peek(position, length);
       if (!is_punctuation(code_point)) {
         break;
       }
       position += length;
+      ++punctuation_count;
     }
+    if (punctuation_count == 1) {
+      const std::uint32_t following = peek(position, length);
+      if (following != 0 && is_letter(following)) {
+        while (position < size) {
+          code_point = peek(position, length);
+          if (!is_letter(code_point)) {
+            break;
+          }
+          position += length;
+        }
+        pieces.push_back(text.substr(start, position - start));
+        continue;
+      }
+    }
+    // Newlines immediately after a punctuation run stay with it.
     while (position < size) {
       code_point = peek(position, length);
       if (code_point != '\r' && code_point != '\n') {
@@ -302,18 +342,23 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
     }
   }
 
-  // Control tokens are matched literally during encoding. The GGUF token-type
-  // table marks them (3 is CONTROL); without it, text keeps its byte-pair
-  // behaviour.
+  // CONTROL and USER_DEFINED tokens are matched literally during encoding. The
+  // GGUF token-type table marks them (3 is CONTROL, 4 is USER_DEFINED); without
+  // it, text keeps its byte-pair behaviour.
   if (const gguf::Value* types = file.find("tokenizer.ggml.token_type");
       types != nullptr && types->type == gguf::ValueType::Array) {
     constexpr std::uint64_t kControl = 3;
+    constexpr std::uint64_t kUserDefined = 4;
     tokenizer->control_.assign(tokenizer->pieces_.size(), 0);
     for (std::size_t index = 0;
          index < types->elements.size() && index < tokenizer->pieces_.size();
          ++index) {
-      if (types->elements[index].as_u64() == kControl) {
+      const std::uint64_t type = types->elements[index].as_u64();
+      if (type == kControl) {
         tokenizer->control_[index] = 1;
+        tokenizer->control_tokens_.emplace_back(
+            tokenizer->pieces_[index], static_cast<int>(index));
+      } else if (type == kUserDefined) {
         tokenizer->control_tokens_.emplace_back(
             tokenizer->pieces_[index], static_cast<int>(index));
       }
@@ -471,10 +516,14 @@ int Tokenizer::match_control(const std::string& text,
   return -1;
 }
 
-std::vector<int> Tokenizer::encode(const std::string& text) const {
+std::vector<int> Tokenizer::encode(const std::string& text,
+                                   bool match_special) const {
   std::vector<int> ids;
   if (text.empty()) {
     return ids;
+  }
+  if (!match_special) {
+    return encode_plain(text);
   }
 
   // A control token is one id even when it is typed as text, so a chat

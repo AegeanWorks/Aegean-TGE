@@ -17,6 +17,30 @@ float next_random(std::uint32_t& state) {
   return static_cast<float>(state >> 8) / 16777216.0F;
 }
 
+void apply_repeat_penalty(std::vector<float>& scores, int count,
+                          const SamplingParams& params, const int* history,
+                          int history_size) {
+  if (!(params.repeat_penalty > 0.0F && params.repeat_penalty != 1.0F &&
+        history != nullptr && history_size > 0)) {
+    return;
+  }
+  const int begin = params.penalty_window > 0
+                        ? std::max(0, history_size - params.penalty_window)
+                        : 0;
+  // One penalty per distinct token, however often it appears in the window.
+  std::unordered_set<int> seen;
+  seen.reserve(static_cast<std::size_t>(history_size - begin));
+  for (int index = history_size - 1; index >= begin; --index) {
+    const int token = history[index];
+    if (token < 0 || token >= count || !seen.insert(token).second) {
+      continue;
+    }
+    float& value = scores[static_cast<std::size_t>(token)];
+    value = value > 0.0F ? value / params.repeat_penalty
+                         : value * params.repeat_penalty;
+  }
+}
+
 }  // namespace
 
 int sample_token(const float* logits, int count, const SamplingParams& params,
@@ -28,25 +52,7 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
   }
 
   scores.assign(logits, logits + count);
-
-  if (params.repeat_penalty > 0.0F && params.repeat_penalty != 1.0F &&
-      history != nullptr && history_size > 0) {
-    const int begin = params.penalty_window > 0
-                          ? std::max(0, history_size - params.penalty_window)
-                          : 0;
-    // One penalty per distinct token, however often it appears in the window.
-    std::unordered_set<int> seen;
-    seen.reserve(static_cast<std::size_t>(history_size - begin));
-    for (int index = history_size - 1; index >= begin; --index) {
-      const int token = history[index];
-      if (token < 0 || token >= count || !seen.insert(token).second) {
-        continue;
-      }
-      float& value = scores[static_cast<std::size_t>(token)];
-      value = value > 0.0F ? value / params.repeat_penalty
-                           : value * params.repeat_penalty;
-    }
-  }
+  apply_repeat_penalty(scores, count, params, history, history_size);
 
   if (params.temperature <= 0.0F) {
     int best = 0;
@@ -92,13 +98,122 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
     return count - 1;
   }
 
-  const int keep = params.top_k > 0 ? std::min(params.top_k, count) : count;
-  order.resize(static_cast<std::size_t>(count));
-  std::iota(order.begin(), order.end(), 0);
   const auto better = [&scores](int left, int right) {
     return scores[static_cast<std::size_t>(left)] >
            scores[static_cast<std::size_t>(right)];
   };
+
+  // Without top-k, a top-p or min-p cut still needs the largest probabilities
+  // first. Sort only the tokens that could survive a cut: top-p skips tokens
+  // below `1 - top_p` unless the nucleus reaches that far, in which case the
+  // floor is lowered until the whole nucleus is included. min-p keeps
+  // everything above its own floor.
+  if (params.top_k <= 0 && (params.top_p < 1.0F || params.min_p > 0.0F)) {
+    const bool min_filter = params.min_p > 0.0F;
+
+    float total_all = 0.0F;
+    float maximum_probability = -1.0F;
+    int maximum_index = 0;
+    for (int index = 0; index < count; ++index) {
+      const float probability = std::exp(
+          (scores[static_cast<std::size_t>(index)] - maximum) *
+          inverse_temperature);
+      scores[static_cast<std::size_t>(index)] = probability;
+      total_all += probability;
+      if (probability > maximum_probability) {
+        maximum_probability = probability;
+        maximum_index = index;
+      }
+    }
+
+    const float min_floor = min_filter ? params.min_p : 2.0F;
+    const float nucleus_floor =
+        params.top_p < 1.0F ? 1.0F - params.top_p : 2.0F;
+    float threshold = std::min(min_floor, nucleus_floor);
+
+    float candidate_mass = 0.0F;
+    for (;;) {
+      order.clear();
+      candidate_mass = 0.0F;
+      for (int index = 0; index < count; ++index) {
+        const float probability = scores[static_cast<std::size_t>(index)];
+        if (probability >= threshold) {
+          order.push_back(index);
+          candidate_mass += probability;
+        }
+      }
+      // min-p's candidates are the survivors by construction. For top-p, the
+      // nucleus must fit above the floor; lower it until it does. At zero the
+      // scan includes every token, which is the exact fallback.
+      if (min_filter || params.top_p >= 1.0F ||
+          candidate_mass >= params.top_p * total_all || threshold <= 0.0F) {
+        break;
+      }
+      threshold *= 0.5F;
+    }
+
+    if (order.empty()) {
+      return maximum_index;
+    }
+
+    std::sort(order.begin(), order.end(), better);
+
+    float total = total_all;
+    if (min_filter) {
+      const float floor_value =
+          params.min_p * scores[static_cast<std::size_t>(order[0])];
+      std::size_t kept = 0;
+      total = 0.0F;
+      for (const int token : order) {
+        const float probability = scores[static_cast<std::size_t>(token)];
+        if (probability >= floor_value) {
+          total += probability;
+          order[kept++] = token;
+        }
+      }
+      order.resize(kept);
+    }
+
+    int limit = static_cast<int>(order.size());
+    if (limit <= 0 || total <= 0.0F) {
+      return maximum_index;
+    }
+    if (params.top_p < 1.0F) {
+      float cumulative = 0.0F;
+      for (int index = 0; index < limit; ++index) {
+        cumulative +=
+            scores[static_cast<std::size_t>(
+                order[static_cast<std::size_t>(index)])] /
+            total;
+        if (cumulative >= params.top_p) {
+          limit = index + 1;
+          break;
+        }
+      }
+    }
+
+    float kept_mass = 0.0F;
+    for (int index = 0; index < limit; ++index) {
+      kept_mass += scores[static_cast<std::size_t>(
+          order[static_cast<std::size_t>(index)])];
+    }
+    if (!(kept_mass > 0.0F)) {
+      return maximum_index;
+    }
+    float target = next_random(random_state) * kept_mass;
+    for (int index = 0; index < limit; ++index) {
+      const int token = order[static_cast<std::size_t>(index)];
+      target -= scores[static_cast<std::size_t>(token)];
+      if (target <= 0.0F) {
+        return token;
+      }
+    }
+    return order[static_cast<std::size_t>(limit - 1)];
+  }
+
+  const int keep = params.top_k > 0 ? std::min(params.top_k, count) : count;
+  order.resize(static_cast<std::size_t>(count));
+  std::iota(order.begin(), order.end(), 0);
   std::partial_sort(order.begin(), order.begin() + keep, order.end(), better);
 
   float total = 0.0F;
@@ -144,9 +259,7 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
     return order[0];
   }
 
-  // Draw over the mass that survived the cuts, not over the total. Dividing by
-  // the nucleus mass gives the excluded tail zero probability instead of
-  // handing it to the weakest kept token.
+  // Draw over the mass that survived the cuts, not over the total.
   float kept_mass = 0.0F;
   for (int index = 0; index < limit; ++index) {
     kept_mass +=

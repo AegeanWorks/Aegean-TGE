@@ -25,7 +25,7 @@ if (-not (Test-Path $exe)) {
 $exe = (Resolve-Path $exe).Path
 
 # Which kernels this machine selected. A kernel change shows up here first.
-$kernels = & $exe info | Select-String 'gemm f32|gemv f32|streaming|threads'
+$kernels = & $exe info | Select-String 'gemm f32|gemv f32|attention|streaming|threads'
 foreach ($line in $kernels) {
     "kernel  $($line.Line.Trim())"
 }
