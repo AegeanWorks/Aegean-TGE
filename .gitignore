@@ -13,7 +13,8 @@ out/
 .cache/
 compile_commands.json
 
-# Models and measurement artifacts are never committed
-models/
+# Model weights are never committed. Anchored to the repository root so source
+# directories called "models" are not swallowed by the pattern.
+/models/
 *.gguf
 benchmarks/results/*.json

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 
 namespace tge::cpu {
 
@@ -51,6 +53,62 @@ using GemvFn = void (*)(const GemvArgs& args, const GemvConfig& config);
 
 void gemv_avx2(const GemvArgs& args, const GemvConfig& config);
 
+/// Q8_0 matrix-vector product: out[rows] = W[rows,cols] * vector[cols], where W
+/// is stored as GGUF Q8_0 blocks (fp16 scale + 32 int8 per 34-byte block).
+///
+/// This is the decode path for real models. Eight bits per weight instead of
+/// thirty-two is the difference between four bytes and one byte crossing the
+/// bus per weight per token, and decode is bandwidth-bound.
+struct Q8GemvArgs {
+  const std::uint8_t* data = nullptr;
+  int rows = 0;
+  int cols = 0;
+  const float* vector = nullptr;
+  float* out = nullptr;
+};
+
+using Q8GemvFn = void (*)(const Q8GemvArgs& args, const GemvConfig& config);
+
+void gemv_q8_0_avx2(const Q8GemvArgs& args, const GemvConfig& config);
+void gemv_q8_0_scalar(const Q8GemvArgs& args, const GemvConfig& config);
+
+/// Bytes occupied by one Q8_0 block: 2-byte scale plus 32 signed bytes.
+inline constexpr std::size_t kQ8BlockBytes = 34;
+inline constexpr int kQ8BlockElements = 32;
+
+/// Converts one IEEE half to float. Inline so the scalar and vector paths agree
+/// bit for bit on scale decoding without a call per block.
+inline float half_to_float(std::uint16_t value) {
+  const std::uint32_t sign = static_cast<std::uint32_t>(value & 0x8000u) << 16;
+  std::uint32_t exponent = (value >> 10) & 0x1Fu;
+  std::uint32_t mantissa = value & 0x3FFu;
+
+  std::uint32_t bits = 0;
+  if (exponent == 0) {
+    if (mantissa == 0) {
+      bits = sign;
+    } else {
+      // Subnormal: renormalise into a float exponent.
+      int shift = 0;
+      while ((mantissa & 0x400u) == 0) {
+        mantissa <<= 1;
+        ++shift;
+      }
+      mantissa &= 0x3FFu;
+      bits = sign | (static_cast<std::uint32_t>(127 - 15 - shift + 1) << 23) |
+             (mantissa << 13);
+    }
+  } else if (exponent == 31) {
+    bits = sign | 0x7F800000u | (mantissa << 13);
+  } else {
+    bits = sign | ((exponent - 15 + 127) << 23) | (mantissa << 13);
+  }
+
+  float result = 0.0F;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
 /// Streaming kernels used to measure the memory bandwidth ceiling.
 using CopyStreamFn = void (*)(float* dst, const float* src, std::size_t count);
 using SumStreamFn = float (*)(const float* src, std::size_t count);
@@ -65,5 +123,13 @@ float sum_stream_scalar(const float* src, std::size_t count);
 
 /// Turns a requested thread count into a usable one.
 int resolve_thread_count(int requested);
+
+/// Thread count for memory-bound decode work.
+///
+/// Deliberately below the logical processor count. Measured on this 6P+4E part:
+/// 4-6 workers sustain about 33 tokens/s while 16 workers fall to 22, because
+/// per-call synchronisation and E-core contention cost more than the extra
+/// bandwidth returns. Prefill is compute-bound and keeps the full count.
+int resolve_decode_threads();
 
 }  // namespace tge::cpu

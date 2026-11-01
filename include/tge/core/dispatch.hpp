@@ -19,6 +19,9 @@ struct KernelSet {
   cpu::GemvFn gemv_f32 = nullptr;
   std::string gemv_name;
 
+  cpu::Q8GemvFn gemv_q8 = nullptr;
+  std::string gemv_q8_name;
+
   cpu::CopyStreamFn copy_stream = nullptr;
   cpu::SumStreamFn sum_stream = nullptr;
   std::string stream_name;

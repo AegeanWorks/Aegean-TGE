@@ -30,6 +30,8 @@ implemented and tested. There is no inference yet.
 cmake --preset release
 cmake --build --preset release
 .\build\release\bin\tge.exe info
+.\build\release\bin\tge.exe gguf <model.gguf>
+.\build\release\bin\tge.exe generate --model <model.gguf> --tokens "785 6722 315 9625 374" --n 129
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
 .\build\release\bin\tge.exe bench gemm --m 1024 --n 1024 --k 1024 --repeat 3
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
@@ -38,13 +40,13 @@ cmake --build --preset release
 `tge info` prints the detected CPU, its instruction sets, the P/E core split, the
 cache hierarchy, system memory, and the resulting memory budget.
 
-`tge bench gemv` measures the **decode** shape: one activation vector through a
-weight matrix, streamed once. It reports sustained GB/s and the token rate a
-1 GiB model would reach at that bandwidth. This is the number that governs token
-generation.
+`tge generate` runs real greedy decoding on a GGUF model and reports prefill and
+decode token rates. Token ids are supplied directly, so a tokenizer is not
+needed to measure speed; `tge gguf` dumps the metadata and tensors.
 
-`tge bench gemm` measures prompt processing at one and at all threads against the
-reference. `tge bench mem` measures the raw bandwidth ceiling.
+`tge bench gemv` measures the decode shape in isolation: one activation vector
+through a weight matrix, streamed once. `tge bench gemm` measures prompt
+processing. `tge bench mem` measures the raw bandwidth ceiling.
 
 ## 📦 What's Inside
 
@@ -62,13 +64,19 @@ aegean-tge/
 ├── apps/
 │   └── cli/                  <- `tge` executable: info, bench
 ├── include/
-│   └── tge/                  <- public headers: core, cpu, memory, tensor
+│   └── tge/
+│       ├── core/             <- detection, dispatch, thread pool
+│       ├── cpu/              <- kernel signatures and dispatch types
+│       ├── memory/           <- RAM query, allocator, budget
+│       ├── models/           <- GGUF reader and Qwen2 decoder
+│       └── tensor/           <- reference operation declarations
 ├── src/
 │   ├── core/                 <- cpu detection, dispatch, thread pool
 │   ├── cpu/
 │   │   ├── avx2/             <- ISA-specific, compiled with -mavx2 -mfma
 │   │   └── scalar/           <- portable fallbacks for every ISA tier
 │   ├── memory/               <- system RAM, aligned allocation, budget
+│   ├── models/               <- GGUF reader and the Qwen2 decoder
 │   └── tensor/               <- reference operations
 ├── tests/                    <- dependency-free harness, run by CTest
 ├── docs/                     <- architecture, roadmap, hardware, benchmarks, ADRs
@@ -83,14 +91,15 @@ aegean-tge/
 | Best ISA detected | `avx-vnni` |
 | RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
-| **GEMV decode 4096²** | 18.4 GB/s on 1 thread, **35.4 GB/s on 16** |
+| **Decode, Qwen2.5-0.5B Q8_0** | **30-33 t/s (llama.cpp: 15.2 t/s, same file, same threads)** |
+| GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| llama.cpp baseline (1.5B Q4_K_M) | 207.6 prompt t/s, 7.22 decode t/s |
-| Tests | 27 cases, all passing |
+| Tests | 30 cases, all passing |
 
-The decode ceiling implied by 28-35 GB/s is 27-33 tokens/s for a 1 GiB model.
-llama.cpp achieves 7.22 on a 1.04 GiB model, so decode is running at roughly a
-quarter of available memory bandwidth. Details: [docs/benchmarks.md](docs/benchmarks.md).
+Decode output was validated token for token against llama.cpp on the same model.
+Prompt processing is **not** comparable yet: TGE feeds prompt tokens one at a
+time (~11 t/s) while llama.cpp batches them (~279 t/s). Details and caveats:
+[docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 

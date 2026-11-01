@@ -16,6 +16,10 @@ measurement, and the dispatch fix for the streaming kernels. It also records the
 finding that matters most: decode has roughly 4x of headroom over the measured
 llama.cpp baseline on this machine.
 
+Revision 4 (same day) adds GGUF loading and a Qwen2 decoder so the engine can be
+compared against llama.cpp end to end. Decode is about **2x faster**, validated
+token for token. Prompt processing is not comparable yet: it is not batched.
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -149,11 +153,14 @@ Full description: `docs/architecture.md`.
 | AVX2 + FMA GEMV, threaded decode kernel | `src/cpu/avx2/gemv_avx2.cpp` | tested for numerical agreement |
 | Streaming bandwidth kernels | `src/cpu/avx2/mem_bandwidth_avx2.cpp` | tested |
 | Scalar streaming fallbacks | `src/cpu/scalar/mem_bandwidth_scalar.cpp` | tested |
+| Q8_0 GEMV (decode weights) | `src/cpu/avx2/q8_gemv_avx2.cpp` | tested against scalar |
+| GGUF reader (memory mapped) | `src/models/gguf.cpp` | exercised on real models |
+| Qwen2 decoder and greedy loop | `src/models/qwen2.cpp` | matches llama.cpp token for token |
 | System memory query | `src/memory/system_ram.cpp` | tested |
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (27 cases) | `tests/` | 27/27 passing |
+| Test harness (30 cases) | `tests/` | 30/30 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
@@ -214,16 +221,24 @@ In the order that matters:
 
 ## 9. Known limitations
 
-- No inference. No model loading. No tokenizer. No KV cache.
+- **Prompt processing is not batched.** TGE feeds prompt tokens one at a time
+  (~11 t/s) against llama.cpp's batched ~279 t/s. Decode, the metric this
+  milestone targeted, is where the comparison is valid.
+- No tokenizer. Tokens are supplied and returned as ids. This matches how
+  `llama-bench` measures and is the reason a speed comparison was possible at
+  all, but it is not a usable end-user path yet.
+- Greedy sampling only; no temperature, top-k, top-p, min-p or repetition
+  penalty.
+- Context is capped at 2048 tokens by allocation, not by the model.
+- Only Q8_0 and F32 weights are supported. Q4_K, Q5_K and Q6_K are parsed and
+  identified but not executable.
+- The Q8 kernel widens int8 to float every element; an integer-domain inner loop
+  and AVX-VNNI are the next arithmetic lever.
 - The AVX2 GEMM is packed, blocked and threaded, but has no per-thread scratch
   reuse. At 512 cubed single-threaded it is about 14 percent slower than the
-  simpler kernel it replaced, because packing overhead cannot be amortized on a
-  small cache-resident problem.
+  simpler kernel it replaced.
 - Software prefetch was tried in both the GEMV and the bandwidth path and removed
   in both: the hardware prefetcher already covers a contiguous per-thread stream.
-- AVX-VNNI is detected but unused, even though it is the highest-value remaining
-  CPU feature on this hardware for quantized dot products.
-- No SSE/AVX tier kernels exist; only scalar and AVX2.
 - Large pages are unavailable on this account, so the TLB lever is unverified.
 - Every performance number is a GCC build. No MSVC build has been compiled.
 - The budget policy fractions (62/23/8/7) are policy guesses, not measurements.

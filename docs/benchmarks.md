@@ -122,7 +122,67 @@ quantized weights has a large gap to close.
 It also says what to optimize. Faster GEMM will not help. Smaller weights,
 better bandwidth utilisation, and keeping the KV cache resident will.
 
-## What to measure next
+## 6. End-to-end decode against llama.cpp
+
+This is the comparison that matters, and it is like for like: the **same model
+file** (`qwen2.5-0.5b-instruct-q8_0.gguf`, 638.74 MiB, 630.17 M parameters), the
+same machine, the same thread count, greedy sampling, 128 generated tokens.
+
+```powershell
+.\build\release\bin\tge.exe generate --model <q8_0.gguf> \
+    --tokens "785 6722 315 9625 374" --n 129
+llama-bench -m <q8_0.gguf> -p 128 -n 128 -t 6 -r 5
+```
+
+| Engine | Threads | Decode |
+|---|---|---|
+| TGE | 6 (its default) | **30.3 t/s median, 33.1 best** |
+| llama.cpp | 6 | 15.2 ± 2.1 t/s |
+| TGE | 16 | 21.8 t/s |
+| llama.cpp | 16 | 10.1 t/s |
+
+**TGE decodes about two times faster than llama.cpp on identical weights and
+hardware.** Both engines lose badly at 16 threads, which is the same phenomenon
+in both: synchronisation and E-core contention outweigh the extra bandwidth.
+
+### Correctness, not just speed
+
+A fast decoder producing the wrong tokens would be worthless, so the greedy
+output was compared token for token. Prompt "The capital of France is"
+(ids 785 6722 315 9625 374):
+
+- llama.cpp: ` Paris. It is the largest city in Europe and the second largest in the world`
+- TGE token ids: `12095 13 1084 374 279 7772 3283 304 4505 323 279 2086 7772 304 279 1879`
+
+Those ids detokenize to exactly the same sentence. The forward pass — RMSNorm,
+NeoX rotary embedding, grouped-query attention, SwiGLU, QKV biases — agrees with
+llama.cpp on every position of that span.
+
+### Honest caveats
+
+- **Prompt processing is not comparable.** TGE feeds prompt tokens one at a
+  time and reports ~11 t/s; llama.cpp batches the prompt and reports ~279 t/s.
+  Batched prefill is not implemented. Decode is the metric this milestone
+  targeted, and prefill will be addressed separately.
+- Context is capped at 2048 tokens in this build, not the model's 32768.
+- Greedy sampling only; no temperature, top-k, top-p or repetition penalty.
+- No tokenizer. Token ids are supplied and returned directly, which is exactly
+  what `llama-bench` does as well.
+
+## 7. Where the remaining decode time goes
+
+Single-threaded decode reaches 16.6 t/s, which is about 8.3 GB/s of weight
+traffic. A standalone GEMV on the same machine reaches 18.4 GB/s on one thread.
+So the Q8 kernel is spending roughly half its time outside memory: it widens
+every int8 to int32 and then to float before multiplying.
+
+That is the next lever, and it is an arithmetic one rather than a bandwidth one:
+quantize the activation vector to int8 as well, so the inner loop stays in
+integer domain (`maddubs`/`dpbusd`) and the widen-convert chain disappears. It
+also makes AVX-VNNI, which this CPU supports and does not yet use, directly
+applicable.
+
+## 8. What to measure next
 
 1. TGE inference against this baseline (needs GGUF loading and a decoder).
 2. Whether decode wants fewer threads than prefill once real work is interleaved

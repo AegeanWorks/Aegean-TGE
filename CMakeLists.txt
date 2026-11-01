@@ -49,10 +49,14 @@ add_library(tge_core STATIC
   src/memory/allocator.cpp
   src/memory/budget.cpp
   src/tensor/reference.cpp
+  src/models/gguf.cpp
+  src/models/qwen2.cpp
   src/cpu/avx2/gemm_avx2.cpp
   src/cpu/avx2/gemv_avx2.cpp
+  src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
   src/cpu/scalar/mem_bandwidth_scalar.cpp
+  src/cpu/scalar/q8_gemv_scalar.cpp
 )
 
 target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -60,6 +64,7 @@ target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
 tge_set_isa_flags(AVX2
   src/cpu/avx2/gemm_avx2.cpp
   src/cpu/avx2/gemv_avx2.cpp
+  src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)
 
 find_package(Threads REQUIRED)
@@ -80,6 +85,7 @@ if(TGE_BUILD_TESTS)
     tests/run_tests.cpp
     tests/test_cpu.cpp
     tests/test_memory.cpp
+    tests/test_q8.cpp
     tests/test_tensor.cpp
     tests/test_thread_pool.cpp
   )

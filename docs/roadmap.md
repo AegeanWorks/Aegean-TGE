@@ -30,15 +30,17 @@ Remaining for 0.1:
 
 ## 0.2 — Model loading and CPU inference
 
-- GGUF header, metadata and tensor-info parsing
-- Tokenizer integration
-- Quantized tensor loading (Q4, Q5, Q6, Q8, F16)
-- Transformer execution for Llama-compatible decoders
-- KV cache
-- Autoregressive decoding with greedy, temperature, top-k, top-p, min-p
-- CPU memory pools backed by the budget manager
-
-Deliverable: independent CPU inference engine, measured in tokens/sec.
+- [x] GGUF header, metadata and tensor-info parsing, memory mapped
+- [x] Q8_0 quantized matrix-vector kernel with runtime dispatch
+- [x] Qwen2 decoder: RMSNorm, NeoX RoPE, GQA attention, SwiGLU, KV cache
+- [x] Greedy decode loop validated against llama.cpp token for token
+- [x] End-to-end decode benchmark: ~2x llama.cpp on identical Q8_0 weights
+- [ ] Batched prompt processing (currently one token at a time)
+- [ ] Tokenizer: encode and detokenize
+- [ ] Additional quantized types: Q4_K, Q5_K, Q6_K
+- [ ] Integer-domain Q8 x Q8 inner loop, then AVX-VNNI
+- [ ] Sampling: temperature, top-k, top-p, min-p, repetition penalty
+- [ ] Context beyond the 2048 tokens this build allocates
 
 ## 0.3 — System RAM and memory manager
 

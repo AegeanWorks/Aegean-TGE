@@ -1,20 +1,14 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-DECODE",
-    "last_phase": "phase 1",
-    "active_phase": 1,
+    "task_id": "TGE-COMPARE",
+    "last_phase": "phase 4",
+    "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793497102.0006146,
+    "updated_at": 1793497880.1376762,
     "owner": "unidentified",
     "started_by": "unidentified",
-    "continuations": [],
-    "impact_assessment": {
-      "why": "Token generation is matrix-vector, not matrix-matrix, and had no kernel",
-      "benefits": "2x sustained decode bandwidth; identifies remaining headroom over the baseline",
-      "risks": "Thread oversubscription, cache pollution from hints, ISA leakage in diagnostics",
-      "mitigation": "Measured thread scaling; prefetch and NTA A/B tested and removed; all kernel entry points feature-selected"
-    }
+    "continuations": []
   },
   "checkpoints": [
     {
@@ -82,6 +76,44 @@
         "risks": "Thread oversubscription, cache pollution from hints, ISA leakage in diagnostics",
         "mitigation": "Measured thread scaling; prefetch and NTA A/B tested and removed; all kernel entry points feature-selected"
       }
+    },
+    {
+      "task_id": "TGE-DECODE",
+      "phase": "superseded",
+      "phase_num": 1,
+      "description": "Superseded by 'TGE-COMPARE' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793497879.809646,
+      "timestamp_str": "2026-11-01 04:51:19",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-COMPARE",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/1] End-to-end decode: GGUF loader, Qwen2 decoder, Q8_0 GEMV, measured against llama.cpp",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793497879.809646,
+      "timestamp_str": "2026-11-01 04:51:19",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "A speed claim needs an end-to-end measurement on identical weights",
+        "benefits": "2x llama.cpp decode, validated token for token",
+        "risks": "Numerics diverge if RoPE layout or biases are wrong; thread oversubscription",
+        "mitigation": "Greedy output diffed against llama.cpp; measured thread sweep produced a decode thread policy"
+      }
+    },
+    {
+      "task_id": "TGE-COMPARE",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 30/30 tests; decode 30-33 t/s vs llama.cpp 15.2 t/s on identical Q8_0 weights",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793497880.1376762,
+      "timestamp_str": "2026-11-01 04:51:20",
+      "agent": "unidentified"
     }
   ]
 }

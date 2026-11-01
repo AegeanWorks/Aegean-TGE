@@ -142,6 +142,44 @@ against ADR-0002: an unsupported instruction must never be reachable, in the
 inference path or in diagnostics. Every kernel entry point in `KernelSet` is now
 non-null and feature-selected.
 
+### Model layer: GGUF and a Qwen2 decoder
+
+`gguf::File` maps a model read-only and parses the header, metadata and tensor
+table. Weights are never copied: `tensor_data` points straight into the mapping,
+so the OS page cache is the only thing deciding what is resident. That is the
+memory architecture the project intends to build on, used from the start rather
+than bolted on later.
+
+`models::Qwen2` runs the decoder graph: embedding lookup, RMSNorm, QKV
+projections with biases, NeoX rotary embedding, grouped-query attention with a
+KV cache, SwiGLU feed-forward, and the output projection.
+
+It exists to make the speed claim measurable rather than to be the finished
+model layer. It is deliberately narrow: one token at a time, greedy sampling, no
+tokenizer, no batching, 2048-token context.
+
+Two correctness details that are easy to get wrong and were not:
+
+- Qwen2 rotates the **first half of a head against the second half** (NeoX
+  layout), not adjacent pairs. Getting this backwards still produces plausible
+  numbers and complete nonsense text.
+- Qwen2 carries **QKV biases**, unlike Llama.
+
+Both were confirmed by reproducing llama.cpp's greedy output token for token on
+the same model.
+
+### `cpu::gemv_q8_0` — the quantized decode kernel
+
+Q8_0 stores each 32 weights as a 34-byte block: one fp16 scale and 32 signed
+bytes. The kernel widens each group of eight int8 values to int32, converts to
+float, and accumulates with FMA, applying the block scale once.
+
+That widening chain is the current bottleneck: single-threaded decode reaches
+about 8.3 GB/s against 18.4 GB/s for the f32 GEMV, so roughly half the time is
+spent converting rather than streaming. The fix is to quantize the activation
+vector as well and keep the inner loop in integer domain; see
+`docs/benchmarks.md` section 7.
+
 ### `tge::memory` — RAM as a first-class tier
 
 - `query_system_memory` reports installed, visible and available physical memory,

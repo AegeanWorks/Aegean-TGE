@@ -18,6 +18,8 @@ KernelSet build(const cpu::Features& features) {
     set.gemm_name = "avx2-fma";
     set.gemv_f32 = &cpu::gemv_avx2;
     set.gemv_name = "avx2-fma";
+    set.gemv_q8 = &cpu::gemv_q8_0_avx2;
+    set.gemv_q8_name = "avx2-fma";
     set.copy_stream = &cpu::copy_stream_avx2;
     set.sum_stream = &cpu::sum_stream_avx2;
     set.stream_name = "avx2";
@@ -26,6 +28,8 @@ KernelSet build(const cpu::Features& features) {
     set.gemm_name = "reference";
     set.gemv_f32 = &ops::gemv_ref;
     set.gemv_name = "reference";
+    set.gemv_q8 = &cpu::gemv_q8_0_scalar;
+    set.gemv_q8_name = "scalar";
     set.copy_stream = &cpu::copy_stream_scalar;
     set.sum_stream = &cpu::sum_stream_scalar;
     set.stream_name = "scalar";
@@ -54,6 +58,20 @@ int resolve_thread_count(int requested) {
     return std::min(requested, 1024);
   }
   return core::default_thread_count();
+}
+
+int resolve_decode_threads() {
+  static const int threads = [] {
+    const CpuInfo info = detect();
+    if (info.topology.performance_cores > 0) {
+      return static_cast<int>(info.topology.performance_cores);
+    }
+    if (info.topology.physical_cores > 0) {
+      return static_cast<int>(info.topology.physical_cores);
+    }
+    return core::default_thread_count();
+  }();
+  return threads;
 }
 
 }  // namespace tge::cpu

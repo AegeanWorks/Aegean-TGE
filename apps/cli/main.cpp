@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,6 +14,8 @@
 #include "tge/memory/allocator.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/memory/system_ram.hpp"
+#include "tge/models/gguf.hpp"
+#include "tge/models/qwen2.hpp"
 #include "tge/tensor/ops.hpp"
 
 namespace {
@@ -43,6 +47,13 @@ void print_usage() {
       "        --size-mb N      buffer size per direction (default 256)\n"
       "        --repeat N       timed repetitions (default 5)\n"
       "        --threads N      worker threads (default: all logical)\n"
+      "  gguf <path>          inspect a GGUF model file\n"
+      "  generate [opts]      greedy decode and token-rate measurement\n"
+      "        --model PATH     GGUF model to load\n"
+      "        --tokens \"a b c\"  prompt token ids\n"
+      "        --n N            tokens to generate (default 32)\n"
+      "        --threads N      worker threads (default: all logical)\n"
+      "        --print-ids      print generated token ids\n"
       "  version              print the engine version\n",
       TGE_VERSION);
 }
@@ -307,6 +318,147 @@ int command_mem_bench(int size_mb, int repeat, int threads) {
   return 0;
 }
 
+int command_gguf(const char* path) {
+  try {
+    const tge::gguf::File file = tge::gguf::File::open(path);
+
+    std::printf("gguf v%u, %llu bytes, alignment %llu\n", file.version(),
+                static_cast<unsigned long long>(file.file_size()),
+                static_cast<unsigned long long>(file.alignment()));
+
+    std::printf("\nmetadata (%zu keys)\n", file.metadata().size());
+    std::vector<std::string> keys;
+    keys.reserve(file.metadata().size());
+    for (const auto& entry : file.metadata()) {
+      keys.push_back(entry.first);
+    }
+    std::sort(keys.begin(), keys.end());
+    for (const std::string& key : keys) {
+      const tge::gguf::Value* value = file.find(key);
+      if (value == nullptr) {
+        continue;
+      }
+      if (value->type == tge::gguf::ValueType::String) {
+        std::string text = value->as_string();
+        if (text.size() > 60) {
+          text = text.substr(0, 57) + "...";
+        }
+        std::printf("  %-44s = \"%s\"\n", key.c_str(), text.c_str());
+      } else if (value->type == tge::gguf::ValueType::Array) {
+        std::printf("  %-44s = array[%zu]\n", key.c_str(),
+                    value->elements.size());
+      } else if (value->type == tge::gguf::ValueType::Float32 ||
+                 value->type == tge::gguf::ValueType::Float64) {
+        std::printf("  %-44s = %g\n", key.c_str(), value->as_f64());
+      } else {
+        std::printf("  %-44s = %llu\n", key.c_str(),
+                    static_cast<unsigned long long>(value->as_u64()));
+      }
+    }
+
+    std::printf("\ntensors (%zu)\n", file.tensors().size());
+    std::uint64_t total_bytes = 0;
+    for (const tge::gguf::TensorInfo& info : file.tensors()) {
+      total_bytes += info.bytes;
+      std::printf("  %-40s ", info.name.c_str());
+      for (std::size_t axis = 0; axis < info.shape.size(); ++axis) {
+        std::printf("%s%llu", axis == 0 ? "" : "x",
+                    static_cast<unsigned long long>(info.shape[axis]));
+      }
+      std::printf("  %-5s %8.2f MiB\n", tge::gguf::type_name(info.type),
+                  static_cast<double>(info.bytes) / (1024.0 * 1024.0));
+    }
+    std::printf("  total %.2f MiB\n",
+                static_cast<double>(total_bytes) / (1024.0 * 1024.0));
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "gguf: %s\n", error.what());
+    return 1;
+  }
+  return 0;
+}
+
+int command_generate(const std::string& path, const std::vector<int>& prompt,
+                     int count, int threads, bool print_ids) {
+  if (count <= 0) {
+    std::fprintf(stderr, "generate: token count must be positive\n");
+    return 2;
+  }
+
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(path, error);
+  if (!model) {
+    std::fprintf(stderr, "generate: %s\n", error.c_str());
+    return 1;
+  }
+  model->set_threads(threads);
+
+  const tge::models::Qwen2Config& config = model->config();
+  if (prompt.empty()) {
+    std::fprintf(stderr, "generate: at least one prompt token is required\n");
+    return 2;
+  }
+  if (static_cast<int>(prompt.size()) + count + 1 > model->max_context()) {
+    std::fprintf(stderr,
+                 "generate: %zu prompt tokens + %d generated exceeds the %d "
+                 "token context this build allocates\n",
+                 prompt.size(), count, model->max_context());
+    return 2;
+  }
+  for (const int token : prompt) {
+    if (token < 0 || token >= model->vocab_size()) {
+      std::fprintf(stderr, "generate: token %d is outside the vocabulary\n",
+                   token);
+      return 2;
+    }
+  }
+
+  std::printf("model    : %s, %d layers, %d dim, %d/%d heads, vocab %d\n",
+              path.c_str(), config.block_count, config.embedding_length,
+              config.head_count, config.head_count_kv, config.vocab_size);
+
+  const auto prefill_start = Clock::now();
+  const float* logits = nullptr;
+  for (std::size_t index = 0; index < prompt.size(); ++index) {
+    logits = model->forward(prompt[index], static_cast<int>(index));
+  }
+  const auto prefill_end = Clock::now();
+  const double prefill_seconds =
+      std::chrono::duration<double>(prefill_end - prefill_start).count();
+
+  std::printf("prefill  : %zu tokens in %.2f ms (%.1f tok/s)\n", prompt.size(),
+              prefill_seconds * 1e3,
+              static_cast<double>(prompt.size()) / prefill_seconds);
+
+  std::vector<int> generated;
+  generated.push_back(tge::models::Qwen2::argmax(logits, model->vocab_size()));
+
+  int position = static_cast<int>(prompt.size());
+  const auto decode_start = Clock::now();
+  for (int index = 1; index < count; ++index) {
+    logits = model->forward(generated.back(), position++);
+    generated.push_back(tge::models::Qwen2::argmax(logits, model->vocab_size()));
+  }
+  const auto decode_end = Clock::now();
+  const double decode_seconds =
+      std::chrono::duration<double>(decode_end - decode_start).count();
+
+  const int timed_tokens = static_cast<int>(generated.size()) - 1;
+  if (timed_tokens > 0 && decode_seconds > 0.0) {
+    std::printf("decode   : %d tokens in %.2f ms (%.2f tok/s)\n", timed_tokens,
+                decode_seconds * 1e3, timed_tokens / decode_seconds);
+  }
+
+  if (print_ids) {
+    std::printf("ids      :");
+    for (const int token : generated) {
+      std::printf(" %d", token);
+    }
+    std::printf("\n");
+  }
+  return 0;
+}
+
 int command_info(bool json) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::memory::SystemMemory memory = tge::memory::query_system_memory();
@@ -332,8 +484,9 @@ int command_info(bool json) {
   std::printf("  gemm f32      : %s\n", kernels.gemm_name.c_str());
   std::printf("  gemv f32      : %s\n", kernels.gemv_name.c_str());
   std::printf("  streaming     : %s\n", kernels.stream_name.c_str());
-  std::printf("  threads       : %d logical\n",
-              tge::cpu::resolve_thread_count(0));
+  std::printf("  threads       : %d logical, %d for decode\n",
+              tge::cpu::resolve_thread_count(0),
+              tge::cpu::resolve_decode_threads());
   return 0;
 }
 
@@ -345,6 +498,71 @@ bool parse_int(const char* text, int& value) {
   }
   value = static_cast<int>(parsed);
   return true;
+}
+
+std::vector<int> parse_token_list(const char* text) {
+  std::vector<int> tokens;
+  const char* cursor = text;
+  while (*cursor != '\0') {
+    while (*cursor == ' ' || *cursor == ',' || *cursor == '\t') {
+      ++cursor;
+    }
+    if (*cursor == '\0') {
+      break;
+    }
+    char* end = nullptr;
+    const long value = std::strtol(cursor, &end, 10);
+    if (end == cursor) {
+      break;
+    }
+    tokens.push_back(static_cast<int>(value));
+    cursor = end;
+  }
+  return tokens;
+}
+
+int run_generate(int argc, char** argv) {
+  std::string model_path;
+  std::vector<int> prompt;
+  int count = 32;
+  int threads = 0;
+  bool print_ids = false;
+
+  for (int index = 2; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--print-ids") == 0) {
+      print_ids = true;
+      continue;
+    }
+    if (index + 1 >= argc) {
+      std::fprintf(stderr, "generate: '%s' needs a value\n", argv[index]);
+      return 2;
+    }
+    const char* flag = argv[index];
+    const char* value = argv[++index];
+    bool ok = true;
+    if (std::strcmp(flag, "--model") == 0) {
+      model_path = value;
+    } else if (std::strcmp(flag, "--tokens") == 0) {
+      prompt = parse_token_list(value);
+    } else if (std::strcmp(flag, "--n") == 0) {
+      ok = parse_int(value, count);
+    } else if (std::strcmp(flag, "--threads") == 0) {
+      ok = parse_int(value, threads);
+    } else {
+      std::fprintf(stderr, "generate: unknown option '%s'\n", flag);
+      return 2;
+    }
+    if (!ok) {
+      std::fprintf(stderr, "generate: invalid value for '%s'\n", flag);
+      return 2;
+    }
+  }
+
+  if (model_path.empty()) {
+    std::fprintf(stderr, "generate: --model is required\n");
+    return 2;
+  }
+  return command_generate(model_path, prompt, count, threads, print_ids);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -478,6 +696,18 @@ int main(int argc, char** argv) {
       }
     }
     return command_info(json);
+  }
+
+  if (command == "gguf") {
+    if (argc < 3) {
+      std::fprintf(stderr, "gguf: a model path is required\n");
+      return 2;
+    }
+    return command_gguf(argv[2]);
+  }
+
+  if (command == "generate") {
+    return run_generate(argc, argv);
   }
 
   if (command == "bench") {
