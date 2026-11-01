@@ -53,6 +53,46 @@ bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {
 
 }  // namespace
 
+Qwen2Config read_config(const gguf::File& file) {
+  const std::string architecture = file.get_string("general.architecture", "");
+  if (architecture.empty()) {
+    throw std::runtime_error("model has no general.architecture");
+  }
+  const std::string prefix = architecture + ".";
+
+  Qwen2Config config;
+  config.block_count = static_cast<int>(file.get_u64(prefix + "block_count", 0));
+  config.embedding_length =
+      static_cast<int>(file.get_u64(prefix + "embedding_length", 0));
+  config.feed_forward_length =
+      static_cast<int>(file.get_u64(prefix + "feed_forward_length", 0));
+  config.head_count =
+      static_cast<int>(file.get_u64(prefix + "attention.head_count", 0));
+  config.head_count_kv = static_cast<int>(
+      file.get_u64(prefix + "attention.head_count_kv", config.head_count));
+  config.context_length =
+      static_cast<int>(file.get_u64(prefix + "context_length", 0));
+  config.rms_epsilon = static_cast<float>(
+      file.get_f64(prefix + "layer_norm_rms_epsilon", 1e-6));
+  config.rope_theta =
+      static_cast<float>(file.get_f64(prefix + "rope.freq_base", 10000.0));
+
+  if (config.block_count <= 0 || config.embedding_length <= 0 ||
+      config.head_count <= 0 || config.head_count_kv <= 0) {
+    throw std::runtime_error("model configuration is incomplete");
+  }
+  config.head_dim = static_cast<int>(file.get_u64(
+      prefix + "attention.key_length",
+      config.embedding_length / config.head_count));
+
+  // The vocabulary size is the output projection's row count.
+  if (const gguf::TensorInfo* output = file.tensor("output.weight");
+      output != nullptr && output->shape.size() == 2) {
+    config.vocab_size = static_cast<int>(output->shape[1]);
+  }
+  return config;
+}
+
 std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                                    int context_limit, bool eager_vocabulary) {
   std::unique_ptr<Qwen2> model(new Qwen2());
@@ -60,45 +100,13 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     // The body needs no metadata arrays; building the vocabulary here would cost
     // more than mapping the weights. Unless the caller says it will want them.
     model->file_ = gguf::File::open(path, eager_vocabulary);
-
-    const std::string architecture =
-        model->file_.get_string("general.architecture", "");
-    if (architecture.empty()) {
-      throw std::runtime_error("model has no general.architecture");
-    }
-    const std::string prefix = architecture + ".";
-
+    model->config_ = read_config(model->file_);
     Qwen2Config& config = model->config_;
-    config.block_count =
-        static_cast<int>(model->file_.get_u64(prefix + "block_count", 0));
-    config.embedding_length =
-        static_cast<int>(model->file_.get_u64(prefix + "embedding_length", 0));
-    config.feed_forward_length =
-        static_cast<int>(model->file_.get_u64(prefix + "feed_forward_length", 0));
-    config.head_count =
-        static_cast<int>(model->file_.get_u64(prefix + "attention.head_count", 0));
-    config.head_count_kv = static_cast<int>(
-        model->file_.get_u64(prefix + "attention.head_count_kv", config.head_count));
-    config.context_length =
-        static_cast<int>(model->file_.get_u64(prefix + "context_length", 0));
-    config.rms_epsilon = static_cast<float>(
-        model->file_.get_f64(prefix + "layer_norm_rms_epsilon", 1e-6));
-    config.rope_theta = static_cast<float>(
-        model->file_.get_f64(prefix + "rope.freq_base", 10000.0));
-
-    if (config.block_count <= 0 || config.embedding_length <= 0 ||
-        config.head_count <= 0 || config.head_count_kv <= 0) {
-      throw std::runtime_error("model configuration is incomplete");
-    }
-    config.head_dim = static_cast<int>(model->file_.get_u64(
-        prefix + "attention.key_length",
-        config.embedding_length / config.head_count));
 
     model->token_embd_ = model->matrix("token_embd.weight");
     model->output_ = model->matrix("output.weight");
     model->output_norm_ = model->vector("output_norm.weight",
                                         config.embedding_length);
-    config.vocab_size = model->output_.rows;
 
     const int model_context =
         config.context_length > 0 ? config.context_length : kDefaultContext;

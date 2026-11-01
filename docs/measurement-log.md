@@ -218,7 +218,34 @@ Decode on this hardware is bandwidth-bound: a 1.04 GiB model at 28-35 GB/s has a
 ceiling near 27-33 t/s, and llama.cpp reaches 7.2. That is roughly a quarter of
 available bandwidth, which is why decode has headroom while prefill does not.
 
-## 10. Correctness checks that back these numbers
+## 10. Planning before allocating
+
+`tge plan` computes the whole memory budget from the GGUF tensor table without
+reading weight data, then decides whether the request fits. Measured on the 0.5B
+Q8_0 model:
+
+| | |
+|---|---|
+| weights (all tensors) | 638.7 MiB |
+| read per decode token | 500.8 MiB (embedding row excluded) |
+| KV per token | 24 KiB (24 layers x 128 values x 2 x 4 bytes) |
+| KV at 8192 tokens | 192.0 MiB per session |
+| usable budget here | 1.74 GiB |
+| headroom after weights | 1.11 GiB |
+| verdict, 8192 x 2 sessions | fits |
+
+The projection is the useful part: **500.8 MiB per token against 28 GB/s gives a
+decode ceiling of 53.3 t/s.** The engine measures ~30 t/s, so decode runs at
+**56 percent of its bandwidth bound** — the other 44 percent is attention,
+normalisation and the per-call barriers, not memory.
+
+Analysis costs **2.3 ms warm**, 50 ms on a cold file (the first read of the
+metadata region faults it in). Either way it is far cheaper than loading a model,
+and it makes "does this fit?" answerable before committing to an allocation —
+which is the whole point, since the failure it prevents is allocating first and
+discovering afterwards.
+
+## 11. Correctness checks that back these numbers
 
 - Greedy output matches llama.cpp token for token on Q8_0 and on Q4_K_M.
 - Prefill matches across chunk boundaries (136-token prompt, two boundaries).

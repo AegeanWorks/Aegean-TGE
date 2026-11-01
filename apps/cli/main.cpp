@@ -15,6 +15,7 @@
 #include "tge/memory/budget.hpp"
 #include "tge/memory/system_ram.hpp"
 #include "tge/models/gguf.hpp"
+#include "tge/models/plan.hpp"
 #include "tge/models/qwen2.hpp"
 #include "tge/models/sampling.hpp"
 #include "tge/models/tokenizer.hpp"
@@ -52,6 +53,8 @@ void print_usage() {
       "  bench batch [opts]   one prefill matrix-vector kernel, in isolation\n"
       "        --rows N --cols N --tokens N --repeat N\n"
       "  gguf <path>          inspect a GGUF model file\n"
+      "  plan [opts]          memory budget and decode ceiling, before loading\n"
+      "        --model PATH --context N --sessions N --bandwidth GB/s\n"
       "  generate [opts]      greedy decode and token-rate measurement\n"
       "        --model PATH     GGUF model to load\n"
       "        --tokens \"a b c\"  prompt token ids\n"
@@ -626,6 +629,41 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
   return 0;
 }
 
+int command_plan(const std::string& path, int context, int sessions,
+                 double bandwidth_gbs) {
+  std::string error;
+  try {
+    const auto start = Clock::now();
+    // Metadata only: the tensor table states every size, so the whole budget is
+    // known without reading weight data or committing memory.
+    const tge::gguf::File file = tge::gguf::File::open(path, false);
+    const tge::models::ModelPlan plan = tge::models::analyse(file, context);
+    const auto finish = Clock::now();
+
+    const tge::memory::MemoryBudget budget;
+    const tge::memory::BudgetSnapshot snapshot = budget.snapshot();
+    const tge::models::PlacementDecision decision = tge::models::place(
+        plan, static_cast<std::int64_t>(snapshot.usable), plan.context, sessions);
+
+    std::printf("plan     : analysed in %.2f ms\n",
+                std::chrono::duration<double>(finish - start).count() * 1e3);
+    std::printf("MODEL\n%s", tge::models::describe(plan).c_str());
+    std::printf("\nPLACEMENT\n%s", tge::models::describe(decision).c_str());
+
+    const double ceiling =
+        tge::models::projected_tokens_per_second(plan, bandwidth_gbs * 1e9);
+    std::printf("\nPROJECTION\n");
+    std::printf("  decode ceiling   : %.1f t/s at %.0f GB/s sustained\n", ceiling,
+                bandwidth_gbs);
+    std::printf("  (bandwidth is the measured threaded read figure; a real "
+                "decode also pays attention and sampling)\n");
+  } catch (const std::exception& exception) {
+    std::fprintf(stderr, "plan: %s\n", exception.what());
+    return 1;
+  }
+  return 0;
+}
+
 int command_info(bool json) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::memory::SystemMemory memory = tge::memory::query_system_memory();
@@ -925,6 +963,34 @@ int main(int argc, char** argv) {
       return 2;
     }
     return command_gguf(argv[2]);
+  }
+
+  if (command == "plan") {
+    std::string model_path;
+    int context = 4096;
+    int sessions = 1;
+    float bandwidth = 28.0F;
+    for (int index = 2; index < argc; index += 2) {
+      if (index + 1 >= argc) {
+        std::fprintf(stderr, "plan: '%s' needs a value\n", argv[index]);
+        return 2;
+      }
+      const char* flag = argv[index];
+      const char* value = argv[index + 1];
+      bool ok = true;
+      if (std::strcmp(flag, "--model") == 0) model_path = value;
+      else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
+      else if (std::strcmp(flag, "--sessions") == 0) ok = parse_int(value, sessions);
+      else if (std::strcmp(flag, "--bandwidth") == 0) ok = parse_float(value, bandwidth);
+      else { std::fprintf(stderr, "plan: unknown option '%s'\n", flag); return 2; }
+      if (!ok) { std::fprintf(stderr, "plan: invalid value\n"); return 2; }
+    }
+    if (model_path.empty()) {
+      std::fprintf(stderr, "plan: --model is required\n");
+      return 2;
+    }
+    return command_plan(model_path, context, sessions,
+                        static_cast<double>(bandwidth));
   }
 
   if (command == "generate") {

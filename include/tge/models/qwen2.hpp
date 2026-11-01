@@ -23,6 +23,11 @@ struct Qwen2Config {
   int kv_dim() const { return head_count_kv * head_dim; }
 };
 
+/// Reads the decoder configuration from a model file. Throws when it is
+/// incomplete. Shared by the loader and the memory planner, which needs the
+/// geometry without touching weights.
+Qwen2Config read_config(const gguf::File& file);
+
 /// A Qwen2-family decoder (Qwen2.5 uses the same graph as Llama with QKV biases
 /// and NeoX-style rotary embedding).
 ///

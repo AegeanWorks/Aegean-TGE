@@ -53,6 +53,7 @@ add_library(tge_core STATIC
   src/models/qwen2.cpp
   src/models/sampling.cpp
   src/models/tokenizer.cpp
+  src/models/plan.cpp
   src/cpu/avx2/gemm_avx2.cpp
   src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
