@@ -123,6 +123,12 @@ std::size_t quant_row_bytes(QuantKind kind, int cols);
 void dequantize_row(QuantKind kind, const std::uint8_t* source, float* destination,
                     int cols);
 
+/// Vectorised dequantisation for the formats that are measured hot. Falls back
+/// to the scalar path for the rest, and must stay bit-identical to it - see
+/// `q4k_avx2_matches_scalar_exactly` in the test suite.
+void dequantize_row_avx2(QuantKind kind, const std::uint8_t* source,
+                         float* destination, int cols);
+
 struct DequantBatchArgs {
   const std::uint8_t* data = nullptr;
   QuantKind kind = QuantKind::Q4_K;

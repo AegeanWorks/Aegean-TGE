@@ -71,7 +71,7 @@ void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
         args.data + static_cast<std::size_t>(begin) * row_bytes;
 
     for (int index = begin; index < end; ++index) {
-      dequantize_row(args.kind, row, weights.data(), cols);
+      dequantize_row_avx2(args.kind, row, weights.data(), cols);
       for (int token = 0; token < tokens; ++token) {
         const float* input = args.input + static_cast<std::size_t>(token) * cols;
         args.out[static_cast<std::size_t>(token) * rows + index] =

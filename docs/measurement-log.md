@@ -186,24 +186,42 @@ compute-bound on the dequantisation, not limited by how few bytes it reads -
 which is why a 28 percent smaller file decodes three times slower. A fused
 K-quant dot has to make the unpack cheaper, not just avoid the scratch buffer.
 
-## 7b. Rejected: vectorised Q4_K dequant (+15%, wrong answers)
+## 7b. Vectorised Q4_K dequant (+29.6%, kept)
 
-The dequant was a scalar loop in a non-AVX2 translation unit, so it was rewritten
-with explicit AVX2. It measured 18.40 -> 21.26 GFLOPS / 5.18 -> 5.98 GB/s at one
-token, and a later variant reached 27.20 GFLOPS / 7.65 GB/s.
+The dequant was a scalar loop in a non-AVX2 translation unit. It is now explicit
+AVX2: nibble split, `cvtepi8_epi32`, multiply then subtract - never fused, so the
+result is bit-identical to the scalar path rather than merely close.
 
-It also produced 23990 92795 34163 7 79368 95880 instead of 12095 13 576 6722 315
-15344 on 1.5B Q4_K_M. The scale/min unpack was wrong: the d fragment comes from
-q[j-4] and the m fragment from q[j], and one attempt had them reversed in each
-direction.
+| 896x4864 Q4_K | before | after |
+|---|---|---|
+| 1 token | 18.41 GFLOPS, 5.18 GB/s | **23.87 GFLOPS, 6.71 GB/s** |
 
-Reverted in full. The faster number came from a kernel that silently computed
-different weights, which is the failure this benchmark setup exists to catch -
-and token parity caught it on real weights, not the GFLOPS figure. It did not
-look wrong.
+**+29.6 percent on decode**, and token parity on 1.5B Q4_K_M is unchanged:
+`12095 13 576 6722 315 15344`, " Paris. The capital of Italy".
 
-Reopening this needs a differential test (AVX2 dequant against the scalar path on
-the same bytes) before the kernel is timed at all.
+This was attempted once before and reverted, because it produced
+`23990 92795 34163 7 79368 95880` instead of that. The bug: the scalar path packs
+the **low** nibbles of 32 values into all 32 bytes of the chunk, then the same 32
+bytes' high nibbles into the next 32. The first attempt split the 16-byte range
+between the two halves instead, so the scales were right and the values were in
+the wrong order - plausible enough to survive a glance.
+
+Reopening it properly meant writing the differential test first: AVX2 against
+scalar on identical bytes, `memcmp` for exact equality, at one block and across
+three. That test now guards the kernel, and it is why this attempt could be
+trusted in one pass.
+
+The path is still 6.71 GB/s against Q8_0's 21.85, so the dequant was not the
+whole cost - the remaining gap is the per-row scratch round-trip and the dot.
+Fusing the two is the next step, and it needs the same treatment: test first,
+then time.
+
+**No end-to-end gain is claimed.** Decode on 0.5B Q4_K_M measured 10.55 and 6.63
+t/s in consecutive runs on the same binary, against a logged 10.8 before the
+change - indistinguishable. The Q8_0 control fell from ~30 to 21.34 t/s in the
+same session, which is the size of the noise: the machine was loaded. A kernel
+worth 29.6 percent in isolation is invisible here, and stating that is more
+useful than quoting whichever run looked best.
 
 ## 8. Load and startup
 

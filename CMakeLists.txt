@@ -61,6 +61,7 @@ add_library(tge_core STATIC
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/q8_batch_vnni.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
+  src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
   src/cpu/scalar/mem_bandwidth_scalar.cpp
   src/cpu/scalar/q8_gemv_scalar.cpp
@@ -78,6 +79,7 @@ tge_set_isa_flags(AVX2
   src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
+  src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)
 
 # AVX-VNNI is a separate tier. Reachable from the benchmark harness only;
@@ -106,6 +108,7 @@ if(TGE_BUILD_TESTS)
   enable_testing()
   add_executable(tge_tests
     tests/run_tests.cpp
+    tests/test_dequant.cpp
     tests/test_cpu.cpp
     tests/test_gguf.cpp
     tests/test_memory.cpp
