@@ -3,24 +3,15 @@
   "active_task": {
     "task_id": "TGE-QUALITY",
     "last_phase": "verification",
-    "active_phase": 4,
-    "status": "in_progress",
+    "active_phase": 5,
+    "status": "completed",
     "updated_at": 1793550677.8363802,
     "owner": "commandcode:1",
     "started_by": "commandcode:1",
-    "continuations": []
+    "continuations": [],
+    "completed_at": 1793550719.5401578
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PREFILL",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-FORMATS' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793519885.386864,
-      "timestamp_str": "2026-11-01 10:58:05",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-FORMATS",
       "phase": "phase 1",
@@ -247,6 +238,16 @@
       "status": "in_progress",
       "timestamp": 1793550677.8363802,
       "timestamp_str": "2026-11-01 19:31:17",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-QUALITY",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-QUALITY' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793550719.5401592,
+      "timestamp_str": "2026-11-01 19:31:59",
       "agent": "commandcode:1"
     }
   ]
