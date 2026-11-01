@@ -157,6 +157,51 @@ TGE_TEST(gguf_rejects_an_unsupported_version) {
   TGE_CHECK(open_throws(bytes, "tge_gguf_version.gguf"));
 }
 
+TGE_TEST(tokenizer_encodes_with_merges) {
+  // A miniature byte-level vocabulary: the characters of "hello", the bang, and
+  // one merged piece built by four rules.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 2);  // metadata entries
+
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 6);
+  for (const char* piece : {"h", "e", "l", "o", "!", "hello"}) {
+    put_string(out, piece);
+  }
+
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 4);
+  for (const char* rule : {"h e", "he l", "hel l", "hell o"}) {
+    put_string(out, rule);
+  }
+
+  const TempFile temp(out, "tge_gguf_merges.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+
+  std::string error;
+  const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+      tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+
+  // The merge chain must collapse "hello" to the single learned piece, and the
+  // splitter must keep "!" as its own token.
+  const std::vector<int> hello = tokenizer->encode("hello");
+  TGE_REQUIRE(hello.size() == 1);
+  TGE_CHECK(hello[0] == 5);
+
+  const std::vector<int> shouted = tokenizer->encode("hello!");
+  TGE_REQUIRE(shouted.size() == 2);
+  TGE_CHECK(shouted[0] == 5);
+  TGE_CHECK(shouted[1] == 4);
+}
+
 TGE_TEST(tokenizer_decodes_byte_level_pieces) {
   // Three pieces in the GPT-2 representation: space, "hello", "!".
   std::vector<std::uint8_t> out;

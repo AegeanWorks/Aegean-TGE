@@ -211,10 +211,18 @@ to produce once and reuse across every token in a batch.
 in the same file, so assuming any single layout for the embedding table silently
 decodes garbage.
 
-`models::Tokenizer` decodes ids back to text. GGUF stores vocabulary entries in
-the GPT-2 byte-level representation, so decoding is a table lookup per character
-rather than a BPE search. Encoding is the other half and is not implemented: it
-needs the merge table and a pre-tokenizer that matches the model family.
+`models::Tokenizer` converts both ways. GGUF stores vocabulary entries in the
+GPT-2 byte-level representation, so decoding is a table lookup per character.
+Encoding runs the other direction: split the text into pre-tokens, map each byte
+onto the byte-level alphabet, then repeatedly apply the lowest-ranked adjacent
+merge from `tokenizer.ggml.merges`.
+
+Pre-tokenization is the approximate part. It implements the split rules
+procedurally — contractions, optional leading space with a letter run, single
+digits, punctuation runs with trailing newlines, whitespace runs — rather than
+through the family's Unicode-aware regular expression. ASCII text matches the
+reference tokenizer exactly; exotic Unicode punctuation is folded into the
+letter run instead of being split, which changes the ids but not the text.
 
 ### `tge::memory` — RAM as a first-class tier
 

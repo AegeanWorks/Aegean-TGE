@@ -37,6 +37,11 @@ them — and reproducing llama.cpp's output token for token. **Context is
 selectable** (`--context`, default 4096, up to 32768). Token ids now **decode to
 text**. Two items remain: text-to-ids encoding, and the prefill arithmetic gap.
 
+Revision 8 (same day) closes the tokenizer. Text encodes to ids through the BPE
+merge table, validated against `llama-tokenize` on punctuation, decimals,
+percent signs, contractions and double spaces. The only remaining item from the
+caveat list is the prefill arithmetic gap.
+
 ## 1. Hardware audit
 
 | Item | Measured |
@@ -251,8 +256,9 @@ In the order that matters:
 - Quantized formats supported: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K. Validated by
   running a Q4_K_M model, which mixes four of them, and reproducing llama.cpp's
   output token for token.
-- Token ids decode to text (`--text`). Encoding text to ids is **not**
-  implemented, so prompts are still supplied as ids.
+- Token ids decode to text (`--text`) and text encodes to ids (`--prompt`),
+  validated against `llama-tokenize` on ASCII punctuation, numbers, contractions
+  and double spaces.
 - Three robustness gaps were closed in the GGUF reader: an array length that
   could exhaust memory before it was validated, pointer arithmetic that could
   overflow on a corrupt length field, and row widths that are not whole Q8

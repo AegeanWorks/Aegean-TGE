@@ -1,11 +1,11 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-FORMATS",
+    "task_id": "TGE-TOKENIZER",
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793519885.928665,
+    "updated_at": 1793520800.9097056,
     "owner": "unidentified",
     "started_by": "unidentified",
     "continuations": []
@@ -227,6 +227,44 @@
       "status": "in_progress",
       "timestamp": 1793519885.928665,
       "timestamp_str": "2026-11-01 10:58:05",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-FORMATS",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-TOKENIZER' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793520800.5653422,
+      "timestamp_str": "2026-11-01 11:13:20",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-TOKENIZER",
+      "phase": "phase 1",
+      "phase_num": 1,
+      "description": "[1/1] BPE encoding: text to token ids",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793520800.5653422,
+      "timestamp_str": "2026-11-01 11:13:20",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "Without encoding the engine could not accept a text prompt",
+        "benefits": "End-to-end usable: text in, text out",
+        "risks": "Pre-tokenization divergence changes ids silently",
+        "mitigation": "Differential test against llama-tokenize on punctuation, decimals, contractions, double spaces"
+      }
+    },
+    {
+      "task_id": "TGE-TOKENIZER",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "checklists: passed; 45/45 tests; tokenizer matches llama-tokenize on all four probe strings",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793520800.9097056,
+      "timestamp_str": "2026-11-01 11:13:20",
       "agent": "unidentified"
     }
   ]

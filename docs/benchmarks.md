@@ -191,8 +191,11 @@ llama.cpp on every position of that span.
   once.
 - **Context** defaults to 4096 tokens and is selectable with `--context`, capped
   by the model's own maximum and a 32768 hard limit.
-- **Tokenization is half done**: ids decode to text, so output is readable.
-  Encoding text to ids is not implemented, so prompts are still supplied as ids.
+- **Tokenizer**: ids decode to text and text encodes to ids. Encoding was
+  validated against `llama-tokenize` on punctuation, decimal numbers, percent
+  signs, contractions ("don't") and double spaces — all matched exactly. Unicode
+  punctuation outside ASCII is folded into the letter run, which can change ids
+  without changing the decoded text.
 - Sampling supports temperature, top-k, top-p, min-p and repetition penalty, but
   the comparison above uses greedy so the numbers are reproducible.
 - Prefill arithmetic is still behind: the batch kernel sustains about 207 GFLOPS

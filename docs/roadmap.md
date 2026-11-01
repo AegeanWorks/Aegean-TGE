@@ -39,8 +39,8 @@ Remaining for 0.1:
 - [x] Sampling: temperature, top-k, top-p, min-p, repetition penalty, seed
 - [x] Quantized formats: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K
 - [x] Detokenizer: token ids to text
+- [x] Tokenizer encoding: text to ids via BPE merges, validated against llama.cpp
 - [x] Context selectable up to 32768, default 4096
-- [ ] Tokenizer encoding: text to token ids (BPE merges and pre-tokenization)
 - [x] Integer-domain Q8 x Q8 inner loop — measured, no gain, reverted (ADR-0006)
 - [ ] Weight packing and register blocking across output rows for prefill
 - [ ] Fuse QKV and gate/up into single parallel regions to cut per-token barriers

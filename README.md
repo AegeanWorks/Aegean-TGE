@@ -35,7 +35,7 @@ cmake --preset release
 cmake --build --preset release
 .\build\release\bin\tge.exe info
 .\build\release\bin\tge.exe gguf <model.gguf>
-.\build\release\bin\tge.exe generate --model <model.gguf> --tokens "785 6722 315 9625 374" --n 129
+.\build\release\bin\tge.exe generate --model <model.gguf> --prompt "The capital of France is" --n 32 --text
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
 .\build\release\bin\tge.exe bench gemm --m 1024 --n 1024 --k 1024 --repeat 3
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
@@ -102,14 +102,15 @@ aegean-tge/
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 44 cases, all passing |
+| Tests | 45 cases, all passing |
 
 Decode and prompt output were both validated token for token against llama.cpp,
-on Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). Sampling
-supports temperature, top-k, top-p, min-p and repetition penalty; the benchmarks
-use greedy so they are reproducible. Generated ids decode to text with `--text`.
-Text-to-ids encoding is not implemented yet, so prompts are supplied as ids.
-Details: [docs/benchmarks.md](docs/benchmarks.md).
+on Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). Prompts
+can be given as text (`--prompt`) or token ids (`--tokens`), and output prints as
+text with `--text`; the tokenizer was validated against `llama-tokenize` on
+punctuation, decimals, contractions and whitespace. Sampling supports
+temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
+greedy so they are reproducible. Details: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 

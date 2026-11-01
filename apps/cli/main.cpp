@@ -53,6 +53,7 @@ void print_usage() {
       "  generate [opts]      greedy decode and token-rate measurement\n"
       "        --model PATH     GGUF model to load\n"
       "        --tokens \"a b c\"  prompt token ids\n"
+      "        --prompt \"text\"   prompt as text, tokenized by the model\n"
       "        --n N            tokens to generate (default 32)\n"
       "        --threads N      worker threads (default: all logical)\n"
       "        --context N      KV cache length (default 4096, capped by model)\n"
@@ -387,8 +388,9 @@ int command_gguf(const char* path) {
   return 0;
 }
 
-int command_generate(const std::string& path, const std::vector<int>& prompt,
-                     int count, int threads, bool print_ids,
+int command_generate(const std::string& path, const std::vector<int>& prompt_ids,
+                     const std::string& prompt_text, int count, int threads,
+                     bool print_ids,
                      const tge::models::SamplingParams& sampling,
                      int context_limit, bool print_text) {
   if (count <= 0) {
@@ -406,6 +408,28 @@ int command_generate(const std::string& path, const std::vector<int>& prompt,
   model->set_threads(threads);
 
   const tge::models::Qwen2Config& config = model->config();
+
+  std::vector<int> tokens = prompt_ids;
+  if (tokens.empty() && !prompt_text.empty()) {
+    std::string tokenizer_error;
+    const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+        tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error);
+    if (!tokenizer) {
+      std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
+      return 1;
+    }
+    tokens = tokenizer->encode(prompt_text);
+    std::printf("prompt   : %zu tokens from text\n", tokens.size());
+    if (print_ids) {
+      std::printf("promptids:");
+      for (const int token : tokens) {
+        std::printf(" %d", token);
+      }
+      std::printf("\n");
+    }
+  }
+  const std::vector<int>& prompt = tokens;
+
   if (prompt.empty()) {
     std::fprintf(stderr, "generate: at least one prompt token is required\n");
     return 2;
@@ -569,6 +593,7 @@ bool parse_float(const char* text, float& value) {
 int run_generate(int argc, char** argv) {
   std::string model_path;
   std::vector<int> prompt;
+  std::string prompt_text;
   int count = 32;
   int threads = 0;
   int context_limit = 0;
@@ -597,6 +622,8 @@ int run_generate(int argc, char** argv) {
       model_path = value;
     } else if (std::strcmp(flag, "--tokens") == 0) {
       prompt = parse_token_list(value);
+    } else if (std::strcmp(flag, "--prompt") == 0) {
+      prompt_text = value;
     } else if (std::strcmp(flag, "--n") == 0) {
       ok = parse_int(value, count);
     } else if (std::strcmp(flag, "--threads") == 0) {
@@ -630,8 +657,8 @@ int run_generate(int argc, char** argv) {
     return 2;
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
-  return command_generate(model_path, prompt, count, threads, print_ids,
-                          sampling, context_limit, print_text);
+  return command_generate(model_path, prompt, prompt_text, count, threads,
+                          print_ids, sampling, context_limit, print_text);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
