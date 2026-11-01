@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "tge/core/dispatch.hpp"
+#include "tge/core/thread_pool.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/models/plan.hpp"
 
@@ -78,6 +79,15 @@ Qwen2Config read_config(const gguf::File& file) {
       file.get_f64(prefix + "layer_norm_rms_epsilon", 1e-6));
   config.rope_theta =
       static_cast<float>(file.get_f64(prefix + "rope.freq_base", 10000.0));
+
+  // The tokenizer metadata names the ids that end a sequence. A file without
+  // them keeps -1, which never matches a real token.
+  const auto read_token_id = [&file](const char* key) {
+    const gguf::Value* value = file.find(key);
+    return value == nullptr ? -1 : static_cast<int>(value->as_u64());
+  };
+  config.eos_token_id = read_token_id("tokenizer.ggml.eos_token_id");
+  config.eot_token_id = read_token_id("tokenizer.ggml.eot_token_id");
 
   if (config.block_count <= 0 || config.embedding_length <= 0 ||
       config.head_count <= 0 || config.head_count_kv <= 0) {
@@ -175,10 +185,14 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->up_.assign(static_cast<std::size_t>(config.feed_forward_length),
                       0.0F);
     model->logits_.assign(static_cast<std::size_t>(config.vocab_size), 0.0F);
-    model->scores_.assign(static_cast<std::size_t>(model->context_), 0.0F);
-
     const std::size_t prefill_rows = static_cast<std::size_t>(
         std::min(kPrefillChunk, model->context_));
+    // Attention writes one score slice per parallel task: one per query head
+    // for decode, one per chunk token for prefill.
+    const std::size_t score_rows =
+        std::max(static_cast<std::size_t>(config.head_count), prefill_rows);
+    model->scores_.assign(score_rows * static_cast<std::size_t>(model->context_),
+                          0.0F);
     model->batch_x_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
     model->batch_h_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
     model->batch_q_.assign(prefill_rows * static_cast<std::size_t>(dim), 0.0F);
@@ -190,12 +204,30 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->batch_up_.assign(
         prefill_rows * static_cast<std::size_t>(config.feed_forward_length), 0.0F);
 
-    model->rope_freq_.resize(static_cast<std::size_t>(config.head_dim / 2));
-    for (int index = 0; index < config.head_dim / 2; ++index) {
-      model->rope_freq_[static_cast<std::size_t>(index)] =
+    // Every layer and head rotates by the same angle at a given position, so
+    // the trigonometry is done once here instead of per head per layer.
+    const int half = config.head_dim / 2;
+    std::vector<float> frequencies(static_cast<std::size_t>(half));
+    for (int index = 0; index < half; ++index) {
+      frequencies[static_cast<std::size_t>(index)] =
           std::pow(config.rope_theta,
                    -2.0F * static_cast<float>(index) /
                        static_cast<float>(config.head_dim));
+    }
+    model->rope_cos_.resize(static_cast<std::size_t>(model->context_) *
+                            static_cast<std::size_t>(half));
+    model->rope_sin_.resize(model->rope_cos_.size());
+    for (int position = 0; position < model->context_; ++position) {
+      const std::size_t base =
+          static_cast<std::size_t>(position) * static_cast<std::size_t>(half);
+      for (int index = 0; index < half; ++index) {
+        const float angle = static_cast<float>(position) *
+                            frequencies[static_cast<std::size_t>(index)];
+        model->rope_cos_[base + static_cast<std::size_t>(index)] =
+            std::cos(angle);
+        model->rope_sin_[base + static_cast<std::size_t>(index)] =
+            std::sin(angle);
+      }
     }
 
     return model;
@@ -392,13 +424,15 @@ void Qwen2::rms_norm(float* out, const float* in, const float* weight) const {
 
 void Qwen2::apply_rope(float* values, int heads, int position) const {
   const int half = config_.head_dim / 2;
+  const std::size_t base =
+      static_cast<std::size_t>(position) * static_cast<std::size_t>(half);
+  const float* cosines = rope_cos_.data() + base;
+  const float* sines = rope_sin_.data() + base;
   for (int head = 0; head < heads; ++head) {
     float* vector = values + static_cast<std::size_t>(head) * config_.head_dim;
     for (int index = 0; index < half; ++index) {
-      const float angle =
-          static_cast<float>(position) * rope_freq_[static_cast<std::size_t>(index)];
-      const float cosine = std::cos(angle);
-      const float sine = std::sin(angle);
+      const float cosine = cosines[index];
+      const float sine = sines[index];
       // Qwen2 rotates the first half of the head against the second half
       // (NeoX layout), not adjacent pairs.
       const float low = vector[index];
@@ -409,13 +443,15 @@ void Qwen2::apply_rope(float* values, int heads, int position) const {
   }
 }
 
-void Qwen2::attention(int layer, int position, const float* queries,
-                      float* out_buffer) {
-  const int heads = config_.head_count;
-  const int kv_heads = config_.head_count_kv;
+void Qwen2::attention_head(int layer, int position, int head,
+                           const float* query, float* out,
+                           float* scores) const {
   const int head_dim = config_.head_dim;
   const int kv_dim = config_.kv_dim();
-  const int group = heads / kv_heads;
+  const int group = config_.head_count / config_.head_count_kv;
+  const int kv_head = head / group;
+  const std::size_t kv_head_offset =
+      static_cast<std::size_t>(kv_head) * head_dim;
   const float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
   const int span = position + 1;
 
@@ -424,45 +460,89 @@ void Qwen2::attention(int layer, int position, const float* queries,
   const float* k_base = k_cache_.data() + layer_base;
   const float* v_base = v_cache_.data() + layer_base;
 
-  for (int head = 0; head < heads; ++head) {
-    const float* query = queries + static_cast<std::size_t>(head) * head_dim;
-    const int kv_head = head / group;
-    const std::size_t kv_head_offset = static_cast<std::size_t>(kv_head) * head_dim;
-
-    float maximum = -INFINITY;
-    for (int token = 0; token < span; ++token) {
-      const float* key =
-          k_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
-      float product = 0.0F;
-      for (int index = 0; index < head_dim; ++index) {
-        product += query[index] * key[index];
-      }
-      scores_[static_cast<std::size_t>(token)] = product * scale;
-      maximum = std::max(maximum, product * scale);
-    }
-
-    float total = 0.0F;
-    for (int token = 0; token < span; ++token) {
-      const float value =
-          std::exp(scores_[static_cast<std::size_t>(token)] - maximum);
-      scores_[static_cast<std::size_t>(token)] = value;
-      total += value;
-    }
-    const float inverse = 1.0F / total;
-
-    float* out = out_buffer + static_cast<std::size_t>(head) * head_dim;
+  float maximum = -INFINITY;
+  for (int token = 0; token < span; ++token) {
+    const float* key =
+        k_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
+    float product = 0.0F;
     for (int index = 0; index < head_dim; ++index) {
-      out[index] = 0.0F;
+      product += query[index] * key[index];
     }
-    for (int token = 0; token < span; ++token) {
-      const float weight = scores_[static_cast<std::size_t>(token)] * inverse;
-      const float* value =
-          v_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
-      for (int index = 0; index < head_dim; ++index) {
-        out[index] += weight * value[index];
-      }
+    const float scaled = product * scale;
+    scores[static_cast<std::size_t>(token)] = scaled;
+    maximum = std::max(maximum, scaled);
+  }
+
+  float total = 0.0F;
+  for (int token = 0; token < span; ++token) {
+    const float value =
+        std::exp(scores[static_cast<std::size_t>(token)] - maximum);
+    scores[static_cast<std::size_t>(token)] = value;
+    total += value;
+  }
+  const float inverse = 1.0F / total;
+
+  for (int index = 0; index < head_dim; ++index) {
+    out[index] = 0.0F;
+  }
+  for (int token = 0; token < span; ++token) {
+    const float weight = scores[static_cast<std::size_t>(token)] * inverse;
+    const float* value =
+        v_base + static_cast<std::size_t>(token) * kv_dim + kv_head_offset;
+    for (int index = 0; index < head_dim; ++index) {
+      out[index] += weight * value[index];
     }
   }
+}
+
+void Qwen2::attention(int layer, int position, const float* queries,
+                      float* out_buffer) {
+  const int heads = config_.head_count;
+  const int head_dim = config_.head_dim;
+  const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+
+  // At short context the pool round trip costs more than the work, so keep the
+  // heads inline until there is enough history to pay for it.
+  if (threads <= 1 || position < 64) {
+    for (int head = 0; head < heads; ++head) {
+      attention_head(layer, position, head,
+                     queries + static_cast<std::size_t>(head) * head_dim,
+                     out_buffer + static_cast<std::size_t>(head) * head_dim,
+                     scores_.data());
+    }
+    return;
+  }
+
+  core::ThreadPool& pool = core::acquire_pool(threads);
+  pool.parallel_for(heads, 1, [&](int head) {
+    attention_head(layer, position, head,
+                   queries + static_cast<std::size_t>(head) * head_dim,
+                   out_buffer + static_cast<std::size_t>(head) * head_dim,
+                   scores_.data() +
+                       static_cast<std::size_t>(head) * context_);
+  });
+}
+
+void Qwen2::attention_batch(int layer, int start_position, int tokens) {
+  const int heads = config_.head_count;
+  const int head_dim = config_.head_dim;
+  const int dim = config_.embedding_length;
+  const int threads = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
+
+  core::ThreadPool& pool = core::acquire_pool(threads);
+  pool.parallel_for(tokens, 1, [&](int token) {
+    const int position = start_position + token;
+    const float* queries =
+        batch_q_.data() + static_cast<std::size_t>(token) * dim;
+    float* out = batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+    float* scores =
+        scores_.data() + static_cast<std::size_t>(token) * context_;
+    for (int head = 0; head < heads; ++head) {
+      attention_head(layer, position, head,
+                     queries + static_cast<std::size_t>(head) * head_dim,
+                     out + static_cast<std::size_t>(head) * head_dim, scores);
+    }
+  });
 }
 
 const float* Qwen2::forward(int token, int position) {
@@ -602,12 +682,9 @@ const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
       }
 
       // Every key and value in this chunk is in the cache before attention
-      // runs, so each token sees exactly the causal prefix it should.
-      for (int token = 0; token < chunk; ++token) {
-        attention(index, chunk_start + token,
-                  batch_q_.data() + static_cast<std::size_t>(token) * dim,
-                  batch_attn_.data() + static_cast<std::size_t>(token) * dim);
-      }
+      // runs, so each token sees exactly the causal prefix it should, and the
+      // tokens can be attended in parallel.
+      attention_batch(index, chunk_start, chunk);
 
       batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), chunk);
       for (int token = 0; token < chunk; ++token) {

@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +9,7 @@
 
 #include "harness.hpp"
 #include "tge/models/gguf.hpp"
+#include "tge/models/qwen2.hpp"
 #include "tge/models/tokenizer.hpp"
 
 namespace {
@@ -228,4 +230,111 @@ TGE_TEST(tokenizer_decodes_byte_level_pieces) {
 
   const std::vector<int> ids = {0, 1, 2};
   TGE_CHECK(tokenizer->decode(ids) == " hello!");
+}
+
+TGE_TEST(tokenizer_matches_control_tokens_in_text) {
+  // A control token and a four-letter word. The token-type table marks index 0
+  // as CONTROL (3), which is how a chat template stays one id when typed.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 3);  // metadata entries
+
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);  // array
+  put_u32(out, 8);  // of strings
+  put_u64(out, 6);
+  for (const char* piece : {"<|im_start|>", "user", "u", "s", "e", "r"}) {
+    put_string(out, piece);
+  }
+
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 3);
+  for (const char* rule : {"u s", "us e", "use r"}) {
+    put_string(out, rule);
+  }
+
+  put_string(out, "tokenizer.ggml.token_type");
+  put_u32(out, 9);  // array
+  put_u32(out, 5);  // int32
+  put_u64(out, 6);
+  for (const std::uint32_t type : {3u, 1u, 1u, 1u, 1u, 1u}) {
+    put_u32(out, type);
+  }
+
+  const TempFile temp(out, "tge_gguf_control.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+
+  std::string error;
+  const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+      tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+
+  const std::vector<int> alone = tokenizer->encode("<|im_start|>");
+  TGE_REQUIRE(alone.size() == 1);
+  TGE_CHECK(alone[0] == 0);
+
+  const std::vector<int> tagged = tokenizer->encode("<|im_start|>user");
+  TGE_REQUIRE(tagged.size() == 2);
+  TGE_CHECK(tagged[0] == 0);
+  TGE_CHECK(tagged[1] == 1);
+
+  const std::vector<int> plain = tokenizer->encode("user");
+  TGE_REQUIRE(plain.size() == 1);
+  TGE_CHECK(plain[0] == 1);
+
+  // Decoding omits the control id instead of printing its literal text.
+  TGE_CHECK(tokenizer->decode({0, 1}) == "user");
+  TGE_CHECK(tokenizer->decode({0}) == "");
+}
+
+TGE_TEST(config_reads_end_token_ids) {
+  const auto put_uint = [](std::vector<std::uint8_t>& out, const char* key,
+                           std::uint32_t value) {
+    put_string(out, key);
+    put_u32(out, 4);  // u32
+    put_u32(out, value);
+  };
+  const auto put_float = [](std::vector<std::uint8_t>& out, const char* key,
+                            float value) {
+    put_string(out, key);
+    put_u32(out, 6);  // f32;
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    put_u32(out, bits);
+  };
+
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);   // tensors
+  put_u64(out, 11);  // metadata entries
+
+  put_string(out, "general.architecture");
+  put_u32(out, 8);
+  put_string(out, "qwen2");
+  put_uint(out, "qwen2.block_count", 1);
+  put_uint(out, "qwen2.embedding_length", 8);
+  put_uint(out, "qwen2.feed_forward_length", 16);
+  put_uint(out, "qwen2.attention.head_count", 2);
+  put_uint(out, "qwen2.attention.head_count_kv", 1);
+  put_uint(out, "qwen2.context_length", 16);
+  put_float(out, "qwen2.layer_norm_rms_epsilon", 1e-6F);
+  put_float(out, "qwen2.rope.freq_base", 10000.0F);
+  put_uint(out, "tokenizer.ggml.eos_token_id", 151645);
+  put_uint(out, "tokenizer.ggml.eot_token_id", 151646);
+
+  const TempFile temp(out, "tge_gguf_config.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  const tge::models::Qwen2Config config = tge::models::read_config(file);
+
+  TGE_CHECK(config.eos_token_id == 151645);
+  TGE_CHECK(config.eot_token_id == 151646);
+  TGE_CHECK(config.is_end_token(151645));
+  TGE_CHECK(config.is_end_token(151646));
+  TGE_CHECK(!config.is_end_token(0));
+  TGE_CHECK(!config.is_end_token(-1));
 }

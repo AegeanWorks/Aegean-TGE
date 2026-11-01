@@ -1,7 +1,9 @@
 #include "tge/models/tokenizer.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <utility>
 
 namespace tge::models {
 namespace {
@@ -300,6 +302,37 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
     }
   }
 
+  // Control tokens are matched literally during encoding. The GGUF token-type
+  // table marks them (3 is CONTROL); without it, text keeps its byte-pair
+  // behaviour.
+  if (const gguf::Value* types = file.find("tokenizer.ggml.token_type");
+      types != nullptr && types->type == gguf::ValueType::Array) {
+    constexpr std::uint64_t kControl = 3;
+    tokenizer->control_.assign(tokenizer->pieces_.size(), 0);
+    for (std::size_t index = 0;
+         index < types->elements.size() && index < tokenizer->pieces_.size();
+         ++index) {
+      if (types->elements[index].as_u64() == kControl) {
+        tokenizer->control_[index] = 1;
+        tokenizer->control_tokens_.emplace_back(
+            tokenizer->pieces_[index], static_cast<int>(index));
+      }
+    }
+  }
+  std::sort(tokenizer->control_tokens_.begin(),
+            tokenizer->control_tokens_.end(),
+            [](const auto& left, const auto& right) {
+              return left.first.size() > right.first.size();
+            });
+  for (std::size_t index = 0; index < tokenizer->control_tokens_.size();
+       ++index) {
+    const std::string& piece = tokenizer->control_tokens_[index].first;
+    if (!piece.empty()) {
+      tokenizer->control_by_first_[piece.front()].push_back(
+          static_cast<int>(index));
+    }
+  }
+
   return tokenizer;
 }
 
@@ -328,6 +361,12 @@ std::string Tokenizer::decode_span(const int* tokens, int count) const {
     if (id < 0 || id >= static_cast<int>(pieces_.size())) {
       continue;
     }
+    // Control tokens are structural, not text. Printing them would put
+    // `<|im_end|>` in the middle of the answer.
+    if (static_cast<std::size_t>(id) < control_.size() &&
+        control_[static_cast<std::size_t>(id)] != 0) {
+      continue;
+    }
     const std::string& piece = pieces_[static_cast<std::size_t>(id)];
     std::size_t position = 0;
     while (position < piece.size()) {
@@ -348,7 +387,7 @@ std::string Tokenizer::decode(const std::vector<int>& tokens) const {
   return decode_span(tokens.data(), static_cast<int>(tokens.size()));
 }
 
-std::vector<int> Tokenizer::encode(const std::string& text) const {
+std::vector<int> Tokenizer::encode_plain(const std::string& text) const {
   std::vector<int> ids;
   if (text.empty()) {
     return ids;
@@ -413,6 +452,56 @@ std::vector<int> Tokenizer::encode(const std::string& text) const {
     }
   }
 
+  return ids;
+}
+
+int Tokenizer::match_control(const std::string& text,
+                             std::size_t position) const {
+  const auto bucket = control_by_first_.find(text[position]);
+  if (bucket == control_by_first_.end()) {
+    return -1;
+  }
+  for (const int index : bucket->second) {
+    const std::string& piece =
+        control_tokens_[static_cast<std::size_t>(index)].first;
+    if (text.compare(position, piece.size(), piece) == 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+std::vector<int> Tokenizer::encode(const std::string& text) const {
+  std::vector<int> ids;
+  if (text.empty()) {
+    return ids;
+  }
+
+  // A control token is one id even when it is typed as text, so a chat
+  // template can be written as a prompt. Everything between control tokens
+  // goes through the ordinary byte-pair path.
+  std::size_t plain_start = 0;
+  std::size_t position = 0;
+  while (position < text.size()) {
+    const int match = match_control(text, position);
+    if (match < 0) {
+      ++position;
+      continue;
+    }
+    if (position > plain_start) {
+      const std::vector<int> plain =
+          encode_plain(text.substr(plain_start, position - plain_start));
+      ids.insert(ids.end(), plain.begin(), plain.end());
+    }
+    const auto& control = control_tokens_[static_cast<std::size_t>(match)];
+    ids.push_back(control.second);
+    position += control.first.size();
+    plain_start = position;
+  }
+  if (plain_start < text.size()) {
+    const std::vector<int> plain = encode_plain(text.substr(plain_start));
+    ids.insert(ids.end(), plain.begin(), plain.end());
+  }
   return ids;
 }
 

@@ -19,6 +19,9 @@ struct SamplingParams {
   float min_p = 0.0F;
   /// 1.0 disables it. Values above 1.0 push down tokens already in the history.
   float repeat_penalty = 1.0F;
+  /// How many recent history tokens the penalty sees. 0 means the whole
+  /// history. Each distinct token is penalised once, not once per occurrence.
+  int penalty_window = 64;
   /// 0 selects a fixed default seed, so a run without --seed is reproducible.
   std::uint32_t seed = 0;
 };

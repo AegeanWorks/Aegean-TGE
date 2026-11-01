@@ -1,82 +1,16 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-VNNI",
-    "last_phase": "phase 4",
+    "task_id": "TGE-QUALITY",
+    "last_phase": "verification",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793525613.0855494,
-    "owner": "unidentified",
-    "started_by": "unidentified",
+    "updated_at": 1793550677.8363802,
+    "owner": "commandcode:1",
+    "started_by": "commandcode:1",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-HARDEN",
-      "phase": "phase 1",
-      "phase_num": 1,
-      "description": "[1/1] Harden GGUF reader and decoder, test the parser, evaluate integer Q8 kernel",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793518816.5081666,
-      "timestamp_str": "2026-11-01 10:40:16",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "New model-layer code had no tests and several unchecked inputs",
-        "benefits": "Malformed files cannot exhaust memory; parser and decoder guards are covered by tests",
-        "risks": "Rejecting a valid but unusual file; changing numerics by optimization",
-        "mitigation": "Round-trip test built from the format spec; integer kernel measured then reverted to preserve token parity"
-      }
-    },
-    {
-      "task_id": "TGE-HARDEN",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 35/35 tests; token parity with llama.cpp restored; no performance change",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793518816.8560202,
-      "timestamp_str": "2026-11-01 10:40:16",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-HARDEN",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-PREFILL' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793519296.1725247,
-      "timestamp_str": "2026-11-01 10:48:16",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-PREFILL",
-      "phase": "phase 1",
-      "phase_num": 1,
-      "description": "[1/1] Batched prefill and sampling; close the prompt-processing and greedy-only caveats",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793519296.1725247,
-      "timestamp_str": "2026-11-01 10:48:16",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "Prompt processing was 25x behind llama.cpp because every weight was re-read per token",
-        "benefits": "15x prefill improvement to 60 percent of llama.cpp, with token-identical output across chunk boundaries",
-        "risks": "Batching changes numerics if K/V ordering or chunk boundaries are wrong",
-        "mitigation": "Greedy output diffed against llama.cpp on a 136-token prompt that crosses two chunk boundaries; batch kernel tested against its scalar reference including the tail path"
-      }
-    },
-    {
-      "task_id": "TGE-PREFILL",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 43/43 tests; prefill 170.9 t/s, decode 23.4 t/s at 510-token context; token parity intact",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793519296.5076916,
-      "timestamp_str": "2026-11-01 10:48:16",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-PREFILL",
       "phase": "superseded",
@@ -253,6 +187,67 @@
       "timestamp": 1793525613.0855494,
       "timestamp_str": "2026-11-01 12:33:33",
       "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-QUALITY",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/5] Fix the confirmed quality handoffs and precompute RoPE",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793548835.813675,
+      "timestamp_str": "2026-11-01 19:00:35",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "The report's defects were reproduced in this tree: control tokens split into 8 ids, generation ignores the end token, top-p leaks excluded tail mass to the weakest kept token, and the repetition penalty compounds per occurrence. RoPE also recomputes 12,288 trig pairs per token.",
+        "benefits": "Special tokens tokenise as one id; generation stops at end-of-turn; nucleus sampling preserves the requested distribution; penalty is per distinct token; 32 trig pairs per position instead of 12,288.",
+        "risks": "contract: SamplingParams gains penalty_window, Qwen2Config gains eos/eot ids, Tokenizer gains control-token matching; dependency: standard library only, no new packages; concurrency: RoPE table is read-only after load and sampling stays single-threaded; state: no persistence or file-format changes",
+        "mitigation": "Unit tests for each defect, greedy token ids compared before and after, tokenizer ids compared with the reference, and the full project gate run before commit"
+      }
+    },
+    {
+      "task_id": "TGE-VNNI",
+      "phase": "superseded",
+      "phase_num": 4,
+      "description": "Superseded by 'TGE-QUALITY' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793548835.813675,
+      "timestamp_str": "2026-11-01 19:00:35",
+      "agent": "commandcode:1",
+      "continued_from": "unidentified"
+    },
+    {
+      "task_id": "TGE-QUALITY",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 53/53 tests; stop at end id 127->52 tokens; control ids 8->2; top-p .200->.158; sampler 16.75->0.61 ms; RoPE 12288->0 trig pairs; greedy ids parity",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793549121.9504204,
+      "timestamp_str": "2026-11-01 19:05:21",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-QUALITY",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 54/54 tests; pool handoff 39.4/64.3us->0.51/0.80us; short decode 31.2/28.1->36.9/43.1->41.9/47.3 t/s; 2k prefill 63.3/78.1->144.0/203.6 t/s; 2k decode 20.3/19.9->22.9/23.8 t/s; greedy ids identical; store-buffer handshake fixed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793550410.5382028,
+      "timestamp_str": "2026-11-01 19:26:50",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-QUALITY",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 54/54 tests; handoffs + detokenizer + --penalty-window; pool 39.4/64.3->0.51/0.80us; 2k prefill 63.3/78.1->144.0/203.6 t/s; ids identical",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793550677.8363802,
+      "timestamp_str": "2026-11-01 19:31:17",
+      "agent": "commandcode:1"
     }
   ]
 }

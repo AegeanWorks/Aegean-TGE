@@ -19,8 +19,15 @@ struct Qwen2Config {
   int vocab_size = 0;
   float rms_epsilon = 1e-6F;
   float rope_theta = 10000.0F;
+  /// End-of-sequence and end-of-turn ids from the tokenizer metadata. -1 when
+  /// the file does not name one.
+  int eos_token_id = -1;
+  int eot_token_id = -1;
 
   int kv_dim() const { return head_count_kv * head_dim; }
+  bool is_end_token(int token) const {
+    return token >= 0 && (token == eos_token_id || token == eot_token_id);
+  }
 };
 
 /// Reads the decoder configuration from a model file. Throws when it is
@@ -107,7 +114,15 @@ class Qwen2 {
 
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
+  /// All query heads for one decode token, spread over the pool.
   void attention(int layer, int position, const float* queries, float* out);
+  /// Attention for every token in a prefill chunk, spread over the pool. Every
+  /// key and value in the chunk is cached before this runs.
+  void attention_batch(int layer, int start_position, int tokens);
+  /// One query head against its key/value cache. `scores` holds `position + 1`
+  /// values and must not overlap another task's slice.
+  void attention_head(int layer, int position, int head, const float* query,
+                      float* out, float* scores) const;
 
   gguf::File file_;
   Qwen2Config config_;
@@ -132,7 +147,9 @@ class Qwen2 {
   std::vector<float> up_;
   std::vector<float> logits_;
   std::vector<float> scores_;
-  std::vector<float> rope_freq_;
+  // Cosine and sine for every position and rotary half, built once at load.
+  std::vector<float> rope_cos_;
+  std::vector<float> rope_sin_;
 
   // Prefill workspace, sized for one chunk of prompt tokens.
   std::vector<float> batch_x_;

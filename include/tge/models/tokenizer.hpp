@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "tge/models/gguf.hpp"
@@ -42,11 +44,24 @@ class Tokenizer {
  private:
   Tokenizer() = default;
 
+  /// Byte-pair encodes a run with no control tokens in it.
+  std::vector<int> encode_plain(const std::string& text) const;
+
+  /// Index into `control_tokens_` of the control token that starts at
+  /// `position`, or -1. Control tokens are matched literally, before the
+  /// pre-tokenizer, so a chat template typed as text stays one id.
+  int match_control(const std::string& text, std::size_t position) const;
+
   std::vector<std::string> pieces_;
   std::array<std::int32_t, 512> byte_of_codepoint_{};
   std::array<std::uint32_t, 256> codepoint_of_byte_{};
   std::unordered_map<std::string, int> vocab_;
   std::unordered_map<std::string, int> merge_rank_;
+  std::vector<std::pair<std::string, int>> control_tokens_;
+  std::unordered_map<char, std::vector<int>> control_by_first_;
+  /// One flag per vocabulary entry. Control tokens are matched in text but
+  /// omitted from decoded output, as the reference tokenizer does.
+  std::vector<std::uint8_t> control_;
 };
 
 }  // namespace tge::models

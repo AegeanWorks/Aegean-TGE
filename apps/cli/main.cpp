@@ -68,6 +68,7 @@ void print_usage() {
       "        --top-p P        nucleus probability mass (default 1.0)\n"
       "        --min-p P        drop tokens below this fraction of the best\n"
       "        --repeat-penalty R  penalty for already seen tokens (default 1)\n"
+      "        --penalty-window N  recent tokens the penalty sees; 0 is all (default 64)\n"
       "        --seed N         random seed for sampling\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
@@ -536,11 +537,19 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
 
   int position = static_cast<int>(prompt.size());
   const auto decode_start = Clock::now();
-  for (int index = 1; index < count; ++index) {
+  // Stop where the model stops: an end-of-sequence or end-of-turn id ends the
+  // turn instead of being fed back and answered as if it were a new prompt.
+  while (static_cast<int>(generated.size()) < count &&
+         !config.is_end_token(generated.back())) {
     logits = model->forward(generated.back(), position++);
     generated.push_back(draw());
   }
   const auto decode_end = Clock::now();
+
+  if (config.is_end_token(generated.back())) {
+    std::printf("stop     : end token %d after %zu tokens\n", generated.back(),
+                generated.size());
+  }
   const double decode_seconds =
       std::chrono::duration<double>(decode_end - decode_start).count();
 
@@ -839,6 +848,8 @@ int run_generate(int argc, char** argv) {
       ok = parse_float(value, sampling.min_p);
     } else if (std::strcmp(flag, "--repeat-penalty") == 0) {
       ok = parse_float(value, sampling.repeat_penalty);
+    } else if (std::strcmp(flag, "--penalty-window") == 0) {
+      ok = parse_int(value, sampling.penalty_window);
     } else {
       std::fprintf(stderr, "generate: unknown option '%s'\n", flag);
       return 2;

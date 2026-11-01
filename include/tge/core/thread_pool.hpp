@@ -46,9 +46,15 @@ class ThreadPool {
   const std::function<void(int)>* body_ = nullptr;
   int count_ = 0;
   int grain_ = 1;
-  std::size_t completed_ = 0;
-  std::uint64_t generation_ = 0;
-  bool stop_ = false;
+  std::atomic<std::size_t> completed_{0};
+  std::atomic<std::uint64_t> generation_{0};
+  std::atomic<bool> stop_{false};
+
+  /// Workers parked on `wake_`, and whether the caller is parked on
+  /// `finished_`. The publisher only pays for a condition-variable notify when
+  /// one of them is actually asleep; the common case is a spin handoff.
+  std::atomic<int> sleepers_{0};
+  std::atomic<int> main_waiting_{0};
 
   std::atomic<int> next_{0};
 };

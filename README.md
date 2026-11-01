@@ -111,13 +111,14 @@ aegean-tge/
 | Best ISA detected | `avx-vnni` |
 | RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
-| **Decode, Qwen2.5-0.5B Q8_0** | **30-33 t/s (llama.cpp: 15.2 t/s, same file, same threads)** |
-| **Prompt, 510 tokens** | **191.6 t/s (llama.cpp: 285.3 t/s)** |
+| **Decode, Qwen2.5-0.5B Q8_0** | **40-47 t/s short context; 23 t/s at 2048 (llama.cpp: 15.2 t/s, same file, same threads)** |
+| **Prompt, 510 tokens** | **152-199 t/s (llama.cpp: 285.3 t/s)** |
+| **Prompt, 2048 tokens** | **144-204 t/s after parallel attention** |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 45 cases, all passing |
+| Tests | 54 cases, all passing |
 
 Decode and prompt output were both validated token for token against llama.cpp,
 on Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). Prompts
@@ -125,7 +126,11 @@ can be given as text (`--prompt`) or token ids (`--tokens`), and output prints a
 text with `--text`; the tokenizer was validated against `llama-tokenize` on
 punctuation, decimals, contractions and whitespace. Sampling supports
 temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
-greedy so they are reproducible. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
+greedy so they are reproducible. Control tokens such as `<|im_start|>` are
+matched from prompt text, omitted from text output, and generation stops at the
+model's end-of-sequence/end-of-turn id instead of continuing past it. Decode
+hands work to a spin-then-sleep pool, and attention spreads over the pool once
+the context is long enough to pay for the handoff. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
 method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)

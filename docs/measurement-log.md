@@ -45,6 +45,18 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | AVX-VNNI `dpbusd` prefill inner loop | prefill, 510 tokens | 186.0 t/s | 150.9 t/s | reverted |
 | 2026-11-01 | Skip metadata arrays while loading the model | load, id prompt | 65 ms | 24 ms | **kept** |
 | 2026-11-01 | Same, text prompt | load + tokenizer | 207-219 ms | 183-205 ms | **kept** |
+| 2026-11-01 | Stop at end-of-sequence/end-of-turn | ChatML, `--n 128` | 127 tokens, 75 after the end token, invented turn | 52 tokens, stops at 151645 | **kept** |
+| 2026-11-01 | Match GGUF control tokens in text | `<\|im_start\|>user` ids | 8 | 2 (151644 872) | **kept** |
+| 2026-11-01 | Skip control tokens when detokenizing | ChatML `--text` | `2+2 equals 4.<\|im_end\|>` | `2+2 equals 4.` | **kept** |
+| 2026-11-01 | Nucleus draw over the kept mass | 1M draws, p=(.50,.30,.15,.05), top-p 0.9 | .500/.299/.200/0 | .527/.315/.158/0 | **kept** |
+| 2026-11-01 | Penalty once per distinct token, window 64 | logit 2.0, 10 occurrences | 0.77 | 1.82 | **kept** |
+| 2026-11-01 | No full sort when no cut is requested | 151,936 logits, T=0.8 | 16.75 ms/draw | 0.61 ms/draw | **kept** |
+| 2026-11-01 | Precompute RoPE sin/cos per position | trig pairs per token | 12,288 | 0 | **kept** |
+| 2026-11-01 | Spin-then-sleep fork-join pool | empty `parallel_for`, 4T/6T | 39.4/64.3 us | 0.51/0.80 us | **kept** |
+| 2026-11-01 | Same, end-to-end decode | short-context decode | 31.2/28.1 t/s | 36.9/43.1 t/s | **kept** |
+| 2026-11-01 | Parallel attention, heads and chunk tokens | 2048-token prefill | 63.3/78.1 t/s | 144.0/203.6 t/s | **kept** |
+| 2026-11-01 | Same, decode at 2048 context | decode | 20.3/19.9 t/s | 22.9/23.8 t/s | **kept** |
+| 2026-11-01 | Same, short-context decode | decode | 36.9/43.1 t/s | 41.9/47.3 t/s | **kept** |
 
 ## 1. f32 GEMM
 
@@ -307,9 +319,9 @@ discovering afterwards.
   group and its tail.
 - Tokenizer encoding matches `llama-tokenize` on punctuation, decimals, percent
   signs, contractions and double spaces.
-- 45 unit cases, all passing.
+- 53 unit cases, all passing.
 
-## 11. Rejected, with margins
+## 12. Rejected, with margins
 
 Recorded so the same idea is not rebuilt on intuition. Four of these six looked
 correct on paper.
@@ -327,7 +339,7 @@ VNNI is the instructive one: it separates the kernel from the integration
 cleanly. The kernel is genuinely faster on the two large shapes; the model calls
 it ~150 times per chunk and the fixed cost per call eats the gain.
 
-## 12. What to measure next
+## 13. What to measure next
 
 1. A profiler. Four performance hypotheses here were wrong because
    instruction counting was used instead of port or memory analysis. WPA and
@@ -335,3 +347,134 @@ it ~150 times per chunk and the fixed cost per call eats the gain.
 2. Fused K-quant dot, to lift Q4_K_M decode from 10.8 toward the Q8_0 figure.
 3. A cached vocabulary sidecar, worth ~100 ms per repeated CLI invocation.
 4. Large pages, once `SeLockMemoryPrivilege` is available.
+
+## 14. Quality handoffs (2026-11-01)
+
+The engine matches its arithmetic reference; these defects were at the other
+handoffs. Each was reproduced before the change, on the 0.5B Q8_0 file.
+
+### Termination: stop where the model stops
+
+A ChatML question was answered in 52 tokens ending in `151645` (`<|im_end|>`).
+The old loop fed that id back and generated 75 more tokens, inventing a
+`Human:` turn. `generate` now stops on the model's `eos_token_id`/`eot_token_id`,
+which `read_config` takes from `tokenizer.ggml.eos_token_id` and
+`tokenizer.ggml.eot_token_id`.
+
+| ChatML prompt, `--n 128` | before | after |
+|---|---|---|
+| generated tokens | 127 | 52 |
+| tokens after the first end id | 75 | 0 |
+| invented next turn | yes | no |
+
+### Input: control tokens are one id
+
+`<|im_start|>user` tokenised to `27 91 318 62 2468 91 29 872` (8 ids) because
+the tokenizer never consulted `tokenizer.ggml.token_type`. Encoding now matches
+CONTROL entries literally before BPE.
+
+| prompt | before | after |
+|---|---|---|
+| `<\|im_start\|>user` | 8 ids | 2 ids (151644 872) |
+| `<\|im_start\|>user<\|im_end\|><\|im_start\|>assistant` | 14 ids | 5 ids (151644 872 151645 151644 77091) |
+
+### Output: control tokens are not text
+
+`--text` printed the literal control token because decoding treated every
+vocabulary entry as text. Entries marked CONTROL are now skipped, matching the
+reference tokenizer's default; `--print-ids` still shows them.
+
+| ChatML answer | before | after |
+|---|---|---|
+| `--text` | `2+2 equals 4.<\|im_end\|>` | `2+2 equals 4.` |
+
+### Selection: nucleus mass and one penalty per token
+
+A/B of the old and new sampler on 1M draws from p=(.50,.30,.15,.05), top-p 0.9:
+
+| | token 0 | token 1 | token 2 | excluded tail |
+|---|---|---|---|---|
+| before | .500 | .299 | **.200** | .000 |
+| after | .527 | .315 | **.158** | .000 |
+| renormalised target | .526 | .316 | .158 | 0 |
+
+The old draw used the total mass, so the 0.05 tail fell through to the weakest
+kept token. The draw now uses the kept mass.
+
+The repetition penalty applied once per occurrence over the whole history, so a
+logit of 2.0 became 0.77 after ten occurrences. It now penalises each distinct
+token once within a 64-token window: 2.0 -> 1.82. `--penalty-window N` exposes
+the window; 0 means the whole history.
+
+With a temperature and no top-k/top-p/min-p the sampler sorted all 151,936
+entries. That path now exponentiates and scans in index order, no ordering.
+
+| 151,936 logits, T=0.8 | before | after |
+|---|---|---|
+| time per draw | 16.75 ms | 0.61 ms |
+
+### RoPE: one table instead of per-head trigonometry
+
+`apply_rope` computed `cos`/`sin` for every head in every layer: 12,288 pairs
+per token for this model. The table is built once at load (context x head_dim/2)
+and indexed by position. The values are the same `std::cos`/`std::sin` results
+on the same angles, so greedy output is unchanged; decode was 32.3 t/s after
+against 29.9-31.5 before, which is inside this machine's noise and is not
+claimed as a gain.
+
+### Tests
+
+48 -> 53 cases. New cases cover the nucleus mass, the once-per-token penalty,
+the penalty window, control-token encoding and the end-token ids.
+
+## 15. Thread pool and attention parallelism (2026-11-01)
+
+### Spin-then-sleep fork-join
+
+The pool parked every worker on a condition variable for each of the 169
+parallel calls in a decode step. It now publishes an atomic generation, spins
+for a bounded number of pauses, and parks only when a call is long enough to
+make spinning wasteful. `parallel_for` with an empty body, 50,000 calls:
+
+| threads | before | after |
+|---|---|---|
+| 4 | 39.4 us | 0.51 us |
+| 6 | 64.3 us | 0.80 us |
+
+End-to-end, same 11-token prompt and 128 generated tokens:
+
+| | before | after |
+|---|---|---|
+| decode | 31.2 / 28.1 t/s | 36.9 / 43.1 t/s |
+| ids | identical | identical |
+
+The first version of the handshake used release/acquire on the sleeper count
+and the generation. That is a store-buffer pattern: on x86 both sides can read
+stale values, so a parked worker missed a generation and the caller waited
+forever. It reproduced reliably at 15 workers and not at 3; the handshake is now
+sequentially consistent, and `thread_pool_many_threads_survives_many_rounds`
+covers it with 16 workers and 200 rounds.
+
+### Parallel attention
+
+Attention ran all query heads on the calling thread. It now writes one score
+slice per task (per head for decode, per chunk token for prefill) and spreads
+the tasks over the pool. Below 64 positions of history the decode path keeps the
+heads inline, because the pool round trip costs more than the work.
+
+| 2048-token prompt | before | after |
+|---|---|---|
+| prefill | 63.3 / 78.1 t/s | 144.0 / 203.6 t/s |
+| decode at 2048 | 20.3 / 19.9 t/s | 22.9 / 23.8 t/s |
+
+| short context (11-token prompt) | before | after |
+|---|---|---|
+| decode | 36.9 / 43.1 t/s | 41.9 / 47.3 t/s |
+
+The 510-token prompt measured 152.3 / 198.7 t/s prefill and 22.0 / 20.7 t/s
+decode after both changes. Greedy ids are unchanged on the 127-token run and on
+the ChatML end-to-end check. The machine was heavily loaded during some later
+runs (11-token prefill of 1 s against 0.14 s idle), so short-context numbers are
+stated as measured pairs rather than as a single figure.
+
+Tests: 53 -> 54 cases, adding the 16-worker pool stress case.

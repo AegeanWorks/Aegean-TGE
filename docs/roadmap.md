@@ -37,6 +37,11 @@ Remaining for 0.1:
 - [x] End-to-end decode benchmark: ~2x llama.cpp on identical Q8_0 weights
 - [x] Batched prompt processing (170.9 t/s against llama.cpp's 285.3)
 - [x] Sampling: temperature, top-k, top-p, min-p, repetition penalty, seed
+- [x] Nucleus draw over the kept mass; penalty once per distinct token
+- [x] Control tokens matched in prompt text; stop at the model's end ids
+- [x] RoPE sin/cos precomputed per position
+- [x] Spin-then-sleep fork-join pool (handoff 39 us -> 0.5 us)
+- [x] Parallel attention across query heads and prefill chunk tokens
 - [x] Quantized formats: Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K
 - [x] Detokenizer: token ids to text
 - [x] Tokenizer encoding: text to ids via BPE merges, validated against llama.cpp

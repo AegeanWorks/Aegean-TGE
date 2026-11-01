@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -100,4 +101,51 @@ TGE_TEST(sampling_handles_a_single_token_vocabulary) {
   params.temperature = 0.7F;
   Scratch scratch;
   TGE_CHECK(draw(scratch, logits, 1, params) == 0);
+}
+
+TGE_TEST(sampling_top_p_does_not_reward_the_excluded_tail) {
+  // p = (0.50, 0.30, 0.15, 0.05); top-p 0.9 keeps the first three, whose
+  // renormalised masses are (0.5263, 0.3158, 0.1579, 0). The excluded tail must
+  // get zero, not be handed to the weakest kept token.
+  const float logits[4] = {std::log(0.50F), std::log(0.30F),
+                           std::log(0.15F), std::log(0.05F)};
+  tge::models::SamplingParams params;
+  params.temperature = 1.0F;
+  params.top_p = 0.9F;
+
+  Scratch scratch;
+  const int draws = 50000;
+  int counts[4] = {0, 0, 0, 0};
+  for (int attempt = 0; attempt < draws; ++attempt) {
+    counts[draw(scratch, logits, 4, params)] += 1;
+  }
+
+  TGE_CHECK(counts[3] == 0);
+  TGE_CHECK_NEAR(static_cast<double>(counts[0]) / draws, 0.5263, 0.02);
+  TGE_CHECK_NEAR(static_cast<double>(counts[2]) / draws, 0.1579, 0.02);
+}
+
+TGE_TEST(repetition_penalty_applies_once_per_distinct_token) {
+  const float logits[2] = {2.0F, 0.0F};
+  tge::models::SamplingParams params;
+  params.repeat_penalty = 1.1F;
+
+  const std::vector<int> history(10, 0);
+  Scratch scratch;
+  // One penalty leaves 2.0 / 1.1 = 1.82, still above zero. Compounding per
+  // occurrence would leave 0.77 and pick the other token.
+  TGE_CHECK(draw(scratch, logits, 2, params, history) == 0);
+}
+
+TGE_TEST(repetition_penalty_uses_one_recent_occurrence) {
+  const float logits[2] = {2.0F, 1.9F};
+  tge::models::SamplingParams params;
+  params.repeat_penalty = 1.05F;
+  params.penalty_window = 1;
+
+  const std::vector<int> history(10, 0);
+  Scratch scratch;
+  // Only the newest occurrence is in the window and it is penalised once:
+  // 2.0 / 1.05 = 1.905 > 1.9. Compounding over the history would pick token 1.
+  TGE_CHECK(draw(scratch, logits, 2, params, history) == 0);
 }
