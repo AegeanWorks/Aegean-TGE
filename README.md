@@ -125,7 +125,8 @@ can be given as text (`--prompt`) or token ids (`--tokens`), and output prints a
 text with `--text`; the tokenizer was validated against `llama-tokenize` on
 punctuation, decimals, contractions and whitespace. Sampling supports
 temperature, top-k, top-p, min-p and repetition penalty; the benchmarks use
-greedy so they are reproducible. Details: [docs/benchmarks.md](docs/benchmarks.md).
+greedy so they are reproducible. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
+method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)
 

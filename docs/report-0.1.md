@@ -192,12 +192,12 @@ Full description: `docs/architecture.md`.
 | Aligned allocator | `src/memory/allocator.cpp` | tested |
 | Memory budget manager | `src/memory/budget.cpp` | tested |
 | CLI (`info`, `bench gemm`, `bench mem`) | `apps/cli/main.cpp` | exercised |
-| Test harness (44 cases) | `tests/` | 44/44 passing |
+| Test harness (45 cases) | `tests/` | 45/45 passing |
 | Build + gate scripts | `scripts/` | `scripts\test.cmd` passes |
 
 Measured, best observed, five runs per configuration (the machine's background
-memory pressure makes single samples unreliable; medians are in
-`docs/benchmarks.md`):
+memory pressure makes single samples unreliable; the full record is in
+`docs/measurement-log.md`):
 
 | Shape | Before (1 thread) | After (1 thread) | After (16 threads) |
 |---|---|---|---|

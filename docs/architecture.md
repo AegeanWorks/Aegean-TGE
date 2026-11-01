@@ -79,7 +79,7 @@ Three deliberate choices:
 2. **Packed panels are 64-byte aligned**, allocated through the engine's own
    `AlignedBuffer`, so B-panel loads never split a cache line.
 3. **A panels are not padded.** Padding the 6-float stride to 8 was measured and
-   was slower; see `docs/benchmarks.md` section 2.
+   was slower; see the rejected changes in `docs/measurement-log.md`.
 
 Threading: the row-block loop is the parallel dimension, because each block
 writes a disjoint set of C rows. Work is claimed dynamically, so a fast P-core
@@ -128,7 +128,8 @@ thread to 35.4 GB/s on sixteen for a 64 MiB matrix.
 
 There is deliberately **no software prefetch**. It was implemented and measured
 with and without; the hardware prefetcher already handles a contiguous band and
-the explicit hint cost more than it saved. See `docs/benchmarks.md` section 3.
+the explicit hint cost more than it saved. See the rejected changes in
+`docs/measurement-log.md`.
 
 ### Streaming kernels and the dispatch rule
 
