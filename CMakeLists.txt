@@ -54,6 +54,7 @@ add_library(tge_core STATIC
   src/models/sampling.cpp
   src/models/tokenizer.cpp
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/q8_batch_avx2.cpp
@@ -71,6 +72,7 @@ target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
 
 tge_set_isa_flags(AVX2
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/q8_batch_avx2.cpp

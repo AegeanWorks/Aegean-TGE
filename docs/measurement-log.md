@@ -68,6 +68,45 @@ Dequantising K-quant weights into a prepared form is the other candidate, and it
 is a trap: Q4_K_M at 638 MiB becomes roughly 2.5 GiB as float, which this machine
 with 2 GB free cannot hold. The 20 ms saved would be paid for in swap.
 
+### Ablation: what actually caused the GEMM speedup
+
+The first entry bundles three changes into one 18.2 -> 246.5 GFLOPS figure, which
+is not one cause. `bench gemm --kernel unpacked|unblocked|packed` separates them.
+GFLOPS, best of 2-3:
+
+| 2048³ | 1 thread | 16 threads |
+|---|---|---|
+| unpacked (no packing, no blocking) | 18.80 | n/a (control is single-threaded) |
+| + packing, no blocking | 43.16 | 33.14 |
+| + blocking (shipped) | 27.23 | **180.37** |
+
+| 512³ | 1 thread | 16 threads |
+|---|---|---|
+| unpacked | 72.75 | n/a |
+| + packing, no blocking | 33.59 | 24.36 |
+| + blocking (shipped) | 51.36 | **122.51** |
+
+What this says:
+
+- **The pool is the largest single factor**: 27.23 -> 180.37 at 2048³, 6.6x.
+- **Blocking is what lets the pool work.** Without blocking, adding threads makes
+  the kernel *slower* (43.16 -> 33.14): the packed panel spans the whole matrix,
+  so every worker re-reads it from DRAM. With blocking it scales 6.6x. Blocking
+  contributes almost nothing single-threaded — 43.16 -> 27.23 is a *regression* —
+  and only pays at 16 threads.
+- **Packing alone is a large-shape win and a small-shape loss**: 18.80 -> 43.16 at
+  2048³, but 72.75 -> 33.59 at 512³. Blocking recovers most of the small-shape
+  loss (33.59 -> 51.36) without giving up the large-shape gain.
+
+So the honest attribution is: the pool multiplies, blocking is the precondition
+for that multiplier, and packing trades small-matrix performance for large. The
+single "246.5 GFLOPS" number was 1 thread to 16 threads *and* three code changes
+at once; it overstates any one of them by a wide margin.
+
+Caveats on this table: the unpacked control ignores its thread count, so it has
+no 16-thread figure; and these were taken while the machine had 3.8 GB free, so
+absolute values sit below earlier runs. Ratios are what matter here.
+
 ### Notes
 
 **Four of the six rejections looked correct on paper.** Padding the A panel

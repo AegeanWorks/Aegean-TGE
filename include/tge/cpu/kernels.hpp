@@ -30,6 +30,13 @@ using GemmFn = void (*)(const GemmArgs& args, const GemmConfig& config);
 
 void gemm_avx2(const GemmArgs& args, const GemmConfig& config);
 
+// Benchmark controls for attributing the GEMM rewrite. Dispatch selects
+// neither; `gemm_avx2` is the shipped kernel.
+/// Packing without cache blocking.
+void gemm_avx2_unblocked(const GemmArgs& args, const GemmConfig& config);
+/// Neither packing nor blocking: the pre-rewrite kernel.
+void gemm_avx2_unpacked(const GemmArgs& args, const GemmConfig& config);
+
 /// Matrix-vector product: out[rows] = matrix[rows,cols] * vector[cols].
 ///
 /// This, not GEMM, is the shape of autoregressive decoding: one token advances

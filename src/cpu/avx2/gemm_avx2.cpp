@@ -23,11 +23,10 @@ constexpr int kCols = 16;
 // but costs 33 percent more panel traffic, and the traffic wins.
 constexpr int kAStride = kRows;
 
-// Blocking chosen so one packed A panel plus one packed B panel stay inside a
-// 2 MiB L2: 144*256*4 = 144 KiB and 256*256*4 = 256 KiB.
-constexpr int kMc = 144;
-constexpr int kKc = 256;
-constexpr int kNc = 256;
+// Blocking dimensions are template parameters on the kernel below, so the same
+// code can be instantiated with and without cache blocking for measurement.
+// The production instance is 144/256/256: one packed A panel (144 KiB) plus one
+// packed B panel (256 KiB) stay inside a 2 MiB L2.
 
 /// C[i,j] += sum_k A[i,k] * B[k,j] for one register tile. Both panels are
 /// packed, so every operand load is contiguous. When `accumulate` is false the
@@ -115,9 +114,10 @@ void pack_b(int kc, int nc, const float* b, int ldb, float* packed) {
   }
 }
 
-}  // namespace
-
-void gemm_avx2(const GemmArgs& args, const GemmConfig& config) {
+/// Packed GEMM with cache blocking. The block sizes are template parameters so
+/// an unblocked instance can be measured against the production one.
+template <int kMc, int kKc, int kNc>
+void gemm_packed(const GemmArgs& args, const GemmConfig& config) {
   if (args.m <= 0 || args.n <= 0 || args.k <= 0) {
     return;
   }
@@ -190,6 +190,19 @@ void gemm_avx2(const GemmArgs& args, const GemmConfig& config) {
       });
     }
   }
+}
+
+}  // namespace
+
+void gemm_avx2(const GemmArgs& args, const GemmConfig& config) {
+  gemm_packed<144, 256, 256>(args, config);
+}
+
+/// Same packing, no cache blocking: one panel spans the whole matrix. Exists
+/// only so the benchmark can separate packing from blocking; dispatch never
+/// selects it.
+void gemm_avx2_unblocked(const GemmArgs& args, const GemmConfig& config) {
+  gemm_packed<1 << 20, 1 << 20, 1 << 20>(args, config);
 }
 
 }  // namespace tge::cpu

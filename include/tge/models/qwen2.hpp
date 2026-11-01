@@ -33,9 +33,14 @@ class Qwen2 {
  public:
   /// `context_limit` caps the KV cache allocation. 0 selects the default; the
   /// result is always the smaller of that and the model's own context length.
+  ///
+  /// `eager_vocabulary` materialises the metadata arrays during the load. The
+  /// model body never needs them, but a caller that will build a tokenizer can
+  /// have it reuse them instead of parsing the file a second time.
   static std::unique_ptr<Qwen2> load(const std::string& path,
                                      std::string& error,
-                                     int context_limit = 0);
+                                     int context_limit = 0,
+                                     bool eager_vocabulary = false);
 
   const Qwen2Config& config() const { return config_; }
   int max_context() const { return context_; }

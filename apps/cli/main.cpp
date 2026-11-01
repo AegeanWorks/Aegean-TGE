@@ -59,6 +59,7 @@ void print_usage() {
       "        --n N            tokens to generate (default 32)\n"
       "        --threads N      worker threads (default: all logical)\n"
       "        --context N      KV cache length (default 4096, capped by model)\n"
+      "        --vocabulary M   auto|eager|lazy tokenizer parsing (default auto)\n"
       "        --temp T         sampling temperature; 0 is greedy (default 0)\n"
       "        --top-k N        keep the N best tokens (default off)\n"
       "        --top-p P        nucleus probability mass (default 1.0)\n"
@@ -119,7 +120,8 @@ void report_row(const char* kernel, int threads, double seconds, double flops) {
               seconds * 1e3, flops / seconds / 1e9);
 }
 
-int command_gemm_bench(int m, int n, int k, int repeat, int threads) {
+int command_gemm_bench(int m, int n, int k, int repeat, int threads,
+                       const char* kernel) {
   if (m <= 0 || n <= 0 || k <= 0 || repeat <= 0) {
     std::fprintf(stderr, "bench gemm: dimensions and repeat must be positive\n");
     return 2;
@@ -127,6 +129,18 @@ int command_gemm_bench(int m, int n, int k, int repeat, int threads) {
 
   const int workers = tge::cpu::resolve_thread_count(threads);
   const tge::KernelSet& set = tge::kernels();
+
+  // Ablation controls: "packed" is the shipped kernel; the other two exist only
+  // to attribute its speed.
+  tge::cpu::GemmFn chosen = set.gemm_f32;
+  const char* chosen_name = set.gemm_name.c_str();
+  if (std::strcmp(kernel, "unpacked") == 0) {
+    chosen = &tge::cpu::gemm_avx2_unpacked;
+    chosen_name = "unpacked";
+  } else if (std::strcmp(kernel, "unblocked") == 0) {
+    chosen = &tge::cpu::gemm_avx2_unblocked;
+    chosen_name = "packed-noblock";
+  }
 
   const std::size_t a_count = static_cast<std::size_t>(m) * k;
   const std::size_t b_count = static_cast<std::size_t>(k) * n;
@@ -156,13 +170,11 @@ int command_gemm_bench(int m, int n, int k, int repeat, int threads) {
   report_row("reference", 1, reference_seconds, flops);
 
   if (optimized) {
-    report_row(set.gemm_name.c_str(), 1,
-               best_gemm_seconds(set.gemm_f32, optimized_args, 1, repeat),
-               flops);
+    report_row(chosen_name, 1,
+               best_gemm_seconds(chosen, optimized_args, 1, repeat), flops);
     if (workers > 1) {
-      report_row(set.gemm_name.c_str(), workers,
-                 best_gemm_seconds(set.gemm_f32, optimized_args, workers,
-                                   repeat),
+      report_row(chosen_name, workers,
+                 best_gemm_seconds(chosen, optimized_args, workers, repeat),
                  flops);
     }
 
@@ -390,37 +402,59 @@ int command_gguf(const char* path) {
   return 0;
 }
 
+/// Whether the vocabulary is parsed during the model load.
+///
+/// Auto picks per invocation: eager is cheaper when a tokenizer will be built
+/// (the arrays are parsed once instead of twice), skipped is cheaper when it
+/// will not.
+enum class VocabularyMode { Auto, Eager, Lazy };
+
 int command_generate(const std::string& path, const std::vector<int>& prompt_ids,
                      const std::string& prompt_text, int count, int threads,
                      bool print_ids,
                      const tge::models::SamplingParams& sampling,
-                     int context_limit, bool print_text) {
+                     int context_limit, bool print_text,
+                     VocabularyMode vocabulary) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
   }
 
   std::string error;
+  // Whether a tokenizer will be built decides the cheaper load strategy: eager
+  // costs ~65 ms up front but the tokenizer then reuses the parsed arrays
+  // instead of parsing the file a second time.
+  const bool needs_tokenizer = !prompt_text.empty() || print_text;
+  const bool eager = vocabulary == VocabularyMode::Eager ||
+                     (vocabulary == VocabularyMode::Auto && needs_tokenizer);
   const auto load_start = Clock::now();
   std::unique_ptr<tge::models::Qwen2> model =
-      tge::models::Qwen2::load(path, error, context_limit);
+      tge::models::Qwen2::load(path, error, context_limit, eager);
   const auto load_end = Clock::now();
   if (!model) {
     std::fprintf(stderr, "generate: %s\n", error.c_str());
     return 1;
   }
-  std::printf("load     : %.1f ms\n",
-              std::chrono::duration<double>(load_end - load_start).count() * 1e3);
+  std::printf("load     : %.1f ms (%s vocabulary)\n",
+              std::chrono::duration<double>(load_end - load_start).count() * 1e3,
+              eager ? "eager" : "skipped");
   model->set_threads(threads);
 
   const tge::models::Qwen2Config& config = model->config();
+
+  // Reuse the model's arrays when they were loaded, otherwise parse them from a
+  // second mapping of the same file.
+  const auto build_tokenizer = [&](std::string& tokenizer_error) {
+    return eager ? tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error)
+                 : tge::models::Tokenizer::from_path(path, tokenizer_error);
+  };
 
   std::vector<int> tokens = prompt_ids;
   if (tokens.empty() && !prompt_text.empty()) {
     std::string tokenizer_error;
     const auto tokenizer_start = Clock::now();
     const std::unique_ptr<tge::models::Tokenizer> tokenizer =
-        tge::models::Tokenizer::from_path(path, tokenizer_error);
+        build_tokenizer(tokenizer_error);
     const auto tokenizer_end = Clock::now();
     if (!tokenizer) {
       std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
@@ -482,10 +516,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   std::vector<int> order;
   std::uint32_t random_state = sampling.seed != 0 ? sampling.seed : 0x9E3779B9u;
 
-  const int vocabulary = model->vocab_size();
+  const int vocab_size = model->vocab_size();
   const auto draw = [&]() {
     const int token = tge::models::sample_token(
-        logits, vocabulary, sampling, history.data(),
+        logits, vocab_size, sampling, history.data(),
         static_cast<int>(history.size()), scores, order, random_state);
     history.push_back(token);
     return token;
@@ -520,7 +554,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   if (print_text) {
     std::string tokenizer_error;
     std::unique_ptr<tge::models::Tokenizer> tokenizer =
-        tge::models::Tokenizer::from_path(path, tokenizer_error);
+        build_tokenizer(tokenizer_error);
     if (!tokenizer) {
       std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
     } else {
@@ -673,6 +707,7 @@ int run_generate(int argc, char** argv) {
   int context_limit = 0;
   bool print_ids = false;
   bool print_text = false;
+  VocabularyMode vocabulary = VocabularyMode::Auto;
   tge::models::SamplingParams sampling;
   int seed = 0;
 
@@ -704,6 +739,17 @@ int run_generate(int argc, char** argv) {
       ok = parse_int(value, threads);
     } else if (std::strcmp(flag, "--context") == 0) {
       ok = parse_int(value, context_limit);
+    } else if (std::strcmp(flag, "--vocabulary") == 0) {
+      if (std::strcmp(value, "eager") == 0) {
+        vocabulary = VocabularyMode::Eager;
+      } else if (std::strcmp(value, "lazy") == 0) {
+        vocabulary = VocabularyMode::Lazy;
+      } else if (std::strcmp(value, "auto") == 0) {
+        vocabulary = VocabularyMode::Auto;
+      } else {
+        std::fprintf(stderr, "generate: --vocabulary takes auto|eager|lazy\n");
+        return 2;
+      }
     } else if (std::strcmp(flag, "--seed") == 0) {
       ok = parse_int(value, seed);
     } else if (std::strcmp(flag, "--top-k") == 0) {
@@ -732,7 +778,8 @@ int run_generate(int argc, char** argv) {
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
   return command_generate(model_path, prompt, prompt_text, count, threads,
-                          print_ids, sampling, context_limit, print_text);
+                          print_ids, sampling, context_limit, print_text,
+                          vocabulary);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -741,6 +788,7 @@ int run_gemm_bench(int argc, char** argv, int first) {
   int k = 1024;
   int repeat = 5;
   int threads = 0;
+  const char* kernel = "packed";
 
   for (int index = first; index < argc; index += 2) {
     if (index + 1 >= argc) {
@@ -760,6 +808,9 @@ int run_gemm_bench(int argc, char** argv, int first) {
       ok = parse_int(value, repeat);
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
+    } else if (std::strcmp(flag, "--kernel") == 0) {
+      kernel = value;
+      ok = true;
     } else {
       std::fprintf(stderr, "bench gemm: unknown option '%s'\n", flag);
       return 2;
@@ -769,7 +820,7 @@ int run_gemm_bench(int argc, char** argv, int first) {
       return 2;
     }
   }
-  return command_gemm_bench(m, n, k, repeat, threads);
+  return command_gemm_bench(m, n, k, repeat, threads, kernel);
 }
 
 int run_gemv_bench(int argc, char** argv, int first) {

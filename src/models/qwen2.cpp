@@ -54,12 +54,12 @@ bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {
 }  // namespace
 
 std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
-                                   int context_limit) {
+                                   int context_limit, bool eager_vocabulary) {
   std::unique_ptr<Qwen2> model(new Qwen2());
   try {
     // The body needs no metadata arrays; building the vocabulary here would cost
-    // more than mapping the weights.
-    model->file_ = gguf::File::open(path, /*load_large_arrays=*/false);
+    // more than mapping the weights. Unless the caller says it will want them.
+    model->file_ = gguf::File::open(path, eager_vocabulary);
 
     const std::string architecture =
         model->file_.get_string("general.architecture", "");
