@@ -7,7 +7,15 @@
     "aikit-integrated",
     "source-available",
     "aegean-license",
-    "commercial-license"
+    "commercial-license",
+    "llm",
+    "inference-engine",
+    "cpp",
+    "machine-learning",
+    "avx2",
+    "gguf",
+    "token-generation",
+    "systems-programming"
   ],
   "gates": {},
   "ui_required": false,
@@ -17,5 +25,7 @@
   "ui_kind": "library",
   "ui_evidence": [],
   "ui_checked_at": "2026-11-01",
-  "ui_source": "detected"
+  "ui_source": "detected",
+  "topics_source": "manual",
+  "topics_reviewed_at": "2026-11-01"
 }

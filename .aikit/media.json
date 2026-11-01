@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "name": "aegean-tge",
+  "repo": "Aegean-Tge",
+  "has_ui": false,
+  "ui_kind": "library",
+  "palette": [
+    "#07120d",
+    "#123030",
+    "#66f5bc",
+    "#8eaaf5"
+  ],
+  "motif": "grid",
+  "layout": "split",
+  "assets": {
+    "logo": {
+      "path": "assets/logo.svg",
+      "status": "approved",
+      "commit": "",
+      "generated_at": "2026-11-01T10:44:42",
+      "review": {
+        "status": "approved",
+        "reviewer": "agent:gemini",
+        "method": "structural",
+        "notes": "Aegean TGE logo matches C++20 inference engine brand",
+        "score": null,
+        "reviewed_at": "2026-11-01T10:44:53"
+      }
+    },
+    "social_preview": {
+      "path": "assets/social-preview.svg",
+      "status": "approved",
+      "commit": "",
+      "generated_at": "2026-11-01T10:44:42",
+      "review": {
+        "status": "approved",
+        "reviewer": "agent:gemini",
+        "method": "structural",
+        "notes": "Aegean TGE social preview with terminal and tensor layout",
+        "score": null,
+        "reviewed_at": "2026-11-01T10:44:54"
+      }
+    }
+  },
+  "screenshots": []
+}
