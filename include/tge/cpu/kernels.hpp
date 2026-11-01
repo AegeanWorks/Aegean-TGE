@@ -180,11 +180,10 @@ void attention_head_avx2(const AttentionArgs& args);
 
 /// One KV group's attention over one position chunk, with an online softmax.
 ///
-/// Grouped-query attention has several query heads sharing each KV head. This
-/// kernel reads every K and V row once for the group and keeps an online
-/// (running maximum, running sum, running value sum) state per query head.
-/// The caller merges the chunks, which is what lets decode split positions
-/// across the pool as well as heads.
+/// Grouped-query attention has several query heads sharing each KV head. Each
+/// query head keeps an online (running maximum, running sum, running value sum)
+/// state over the chunk. The caller merges the chunks, which is what lets
+/// decode split positions across the pool as well as heads.
 struct AttentionGroupArgs {
   const float* queries = nullptr;   // group_heads * head_dim
   const float* keys = nullptr;      // count rows, stride kv_stride

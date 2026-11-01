@@ -84,6 +84,8 @@ Continuous batching, concurrent sessions, speculative decoding, adaptive
 planning.
 
 - [x] Concurrent sessions benchmark; per-session thread pools
+- [x] Prompt-lookup speculative decoding (greedy)
+- [ ] Prefill-side GQA grouping — rejected: 2048 prefill -5%, decode -13% with the token-outer kernel; 510 prefill +33%; the verifier pins per-head instead
 
 ## 0.8 — Windows inference platform
 

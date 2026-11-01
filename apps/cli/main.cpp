@@ -78,6 +78,7 @@ void print_usage() {
       "        --penalty-window N  recent tokens the penalty sees; 0 is all (default 64)\n"
       "        --seed N         random seed for sampling\n"
       "        --attention A    auto|scalar|head|gqa attention (default auto)\n"
+      "        --speculative    greedy prompt-lookup speculation\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
       "  fidelity [opts]      scalar vs selected attention, teacher-forced\n"
@@ -426,13 +427,16 @@ int command_gguf(const char* path) {
 /// will not.
 enum class VocabularyMode { Auto, Eager, Lazy };
 
+bool prompt_lookup_draft(const std::vector<int>& history, int* draft);
+
 int command_generate(const std::string& path, const std::vector<int>& prompt_ids,
                      const std::string& prompt_text, int count, int threads,
                      bool print_ids,
                      const tge::models::SamplingParams& sampling,
                      int context_limit, bool print_text,
                      VocabularyMode vocabulary,
-                     tge::models::AttentionMode attention_mode) {
+                     tge::models::AttentionMode attention_mode,
+                     bool speculative) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -462,6 +466,17 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   }
   model->set_threads(threads);
   model->set_attention_mode(attention_mode);
+  // The verifier and a sequential decode must take the same attention path, or a
+  // near tie can flip an accepted draft. Speculative runs pin the per-head
+  // schedule; normal generation keeps auto's grouped schedule at long context.
+  if (speculative && attention_mode != tge::models::AttentionMode::Scalar) {
+    if (attention_mode == tge::models::AttentionMode::Gqa) {
+      std::fprintf(
+          stderr,
+          "generate: --speculative uses the per-head attention schedule\n");
+    }
+    model->set_attention_mode(tge::models::AttentionMode::Head);
+  }
 
   const tge::models::Qwen2Config& config = model->config();
 
@@ -548,16 +563,77 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     return token;
   };
 
-  generated.push_back(draw());
-
+  const bool speculate =
+      speculative && sampling.temperature <= 0.0F &&
+      (sampling.repeat_penalty <= 0.0F || sampling.repeat_penalty == 1.0F);
   int position = static_cast<int>(prompt.size());
+  long long spec_steps = 0;
+  long long spec_accepted = 0;
+  long long spec_output = 0;
+
   const auto decode_start = Clock::now();
   // Stop where the model stops: an end-of-sequence or end-of-turn id ends the
   // turn instead of being fed back and answered as if it were a new prompt.
   while (static_cast<int>(generated.size()) < count &&
-         !config.is_end_token(generated.back())) {
-    logits = model->forward(generated.back(), position++);
-    generated.push_back(draw());
+         (generated.empty() || !config.is_end_token(generated.back()))) {
+    if (speculate && position + tge::models::Qwen2::kSpeculativeBatch <=
+                         model->max_context()) {
+      int draft[5];
+      if (prompt_lookup_draft(history, draft) &&
+          tge::models::Qwen2::argmax(logits, vocab_size) == draft[0]) {
+        int feed[tge::models::Qwen2::kSpeculativeBatch];
+        for (int index = 0; index < 5; ++index) {
+          feed[index] = draft[index];
+        }
+        feed[5] = 0;
+        int predicted[tge::models::Qwen2::kSpeculativeBatch];
+        model->verify_draft(feed, tge::models::Qwen2::kSpeculativeBatch,
+                            position, predicted);
+
+        int accepted = 1;
+        while (accepted < 5 && predicted[accepted - 1] == draft[accepted]) {
+          ++accepted;
+        }
+        const int corrected = predicted[accepted - 1];
+
+        bool stopped = false;
+        for (int index = 0; index < accepted; ++index) {
+          if (static_cast<int>(generated.size()) >= count) {
+            stopped = true;
+            break;
+          }
+          generated.push_back(draft[index]);
+          history.push_back(draft[index]);
+          if (config.is_end_token(draft[index])) {
+            stopped = true;
+            break;
+          }
+        }
+        if (!stopped && static_cast<int>(generated.size()) < count) {
+          generated.push_back(corrected);
+          history.push_back(corrected);
+          stopped = config.is_end_token(corrected);
+        }
+
+        ++spec_steps;
+        spec_accepted += accepted;
+        spec_output += accepted + (stopped ? 0 : 1);
+        if (!stopped && static_cast<int>(generated.size()) < count) {
+          logits = model->forward(corrected, position + accepted);
+          position += accepted + 1;
+          continue;
+        }
+        break;
+      }
+    }
+
+    const int token = draw();
+    generated.push_back(token);
+    if (config.is_end_token(token) ||
+        static_cast<int>(generated.size()) >= count) {
+      break;
+    }
+    logits = model->forward(token, position++);
   }
   const auto decode_end = Clock::now();
 
@@ -572,6 +648,13 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   if (timed_tokens > 0 && decode_seconds > 0.0) {
     std::printf("decode   : %d tokens in %.2f ms (%.2f tok/s)\n", timed_tokens,
                 decode_seconds * 1e3, timed_tokens / decode_seconds);
+  }
+  if (spec_steps > 0) {
+    std::printf(
+        "spec     : %lld steps, %lld draft tokens accepted (%.2f/step), %lld "
+        "tokens emitted\n",
+        spec_steps, spec_accepted,
+        static_cast<double>(spec_accepted) / spec_steps, spec_output);
   }
 
   if (print_ids) {
@@ -780,7 +863,9 @@ int command_sessions_bench(const std::string& path, int sessions, int tokens,
             const int next =
                 tge::models::Qwen2::argmax(logits, model.vocab_size());
             out.push_back(next);
-            logits = model.forward(next, step + 1);
+            if (step + 1 < tokens) {
+              logits = model.forward(next, step + 1);
+            }
           }
           done.fetch_add(1, std::memory_order_acq_rel);
         });
@@ -811,7 +896,9 @@ int command_sessions_bench(const std::string& path, int sessions, int tokens,
     }
   }
 
-  const double per_session = static_cast<double>(tokens) / seconds;
+  const int timed_tokens = tokens - 1;
+  const double per_session =
+      timed_tokens > 0 ? static_cast<double>(timed_tokens) / seconds : 0.0;
   const int shown_threads =
       threads_per_session > 0 ? threads_per_session
                               : tge::cpu::resolve_decode_threads();
@@ -900,6 +987,33 @@ bool parse_float(const char* text, float& value) {
   return true;
 }
 
+/// Drafts the continuation of the latest earlier match of the last one to
+/// three tokens. Returns five tokens or nothing.
+bool prompt_lookup_draft(const std::vector<int>& history, int* draft) {
+  const int length = static_cast<int>(history.size());
+  for (int span = 3; span >= 1; --span) {
+    if (length < span + 5) {
+      continue;
+    }
+    const auto suffix_begin = history.begin() + (length - span);
+    const auto suffix_end = history.end();
+    for (int end = length - 2; end >= span - 1; --end) {
+      if (length - 1 - end < 5) {
+        continue;
+      }
+      if (!std::equal(suffix_begin, suffix_end,
+                      history.begin() + (end - span + 1))) {
+        continue;
+      }
+      for (int index = 0; index < 5; ++index) {
+        draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 int run_generate(int argc, char** argv) {
   std::string model_path;
   std::vector<int> prompt;
@@ -911,6 +1025,7 @@ int run_generate(int argc, char** argv) {
   bool print_text = false;
   VocabularyMode vocabulary = VocabularyMode::Auto;
   tge::models::AttentionMode attention_mode = tge::models::AttentionMode::Auto;
+  bool speculative = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
 
@@ -921,6 +1036,10 @@ int run_generate(int argc, char** argv) {
     }
     if (std::strcmp(argv[index], "--text") == 0) {
       print_text = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--speculative") == 0) {
+      speculative = true;
       continue;
     }
     if (index + 1 >= argc) {
@@ -998,7 +1117,7 @@ int run_generate(int argc, char** argv) {
   sampling.seed = static_cast<std::uint32_t>(seed);
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
-                          vocabulary, attention_mode);
+                          vocabulary, attention_mode, speculative);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {

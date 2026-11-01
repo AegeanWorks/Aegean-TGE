@@ -37,6 +37,7 @@ cmake --build --preset release
 .\build\release\bin\tge.exe info
 .\build\release\bin\tge.exe gguf <model.gguf>
 .\build\release\bin\tge.exe generate --model <model.gguf> --prompt "The capital of France is" --n 32 --text
+.\build\release\bin\tge.exe generate --model <model.gguf> --prompt "Once upon a time" --n 128 --speculative --text
 .\build\release\bin\tge.exe fidelity --model <model.gguf> --corpus docs\architecture.md
 .\build\release\bin\tge.exe bench sessions --model <model.gguf> --sessions 4 --tokens 32 --threads 1
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
@@ -114,10 +115,11 @@ aegean-tge/
 | Best ISA detected | `avx-vnni` |
 | RAM | 16 GiB, single DIMM, 25-29 GB/s threaded read |
 | GPU | AMD Radeon RX 9060 XT, 15.67 GiB VRAM (Vulkan only; no HIP SDK) |
-| **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
-| **Prompt, 510 tokens** | **261-266 t/s (llama.cpp: 352.2 t/s, 6 threads)** |
-| **Prompt, 2048 tokens** | **225-246 t/s (llama.cpp: 287.9 t/s, 6 threads)** |
-| Concurrent sessions, 0.5B Q8_0 | 2 × 6 threads: 47.4 t/s aggregate; 4 × 6: 46.2; >1 thread/session now safe |
+| **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38-39 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
+| **Prompt, 510 tokens** | **166-254 t/s (machine-dependent; llama.cpp: 352.2 t/s, 6 threads)** |
+| **Prompt, 2048 tokens** | **170-200 t/s (this run; llama.cpp: 287.9 t/s, 6 threads)** |
+| Concurrent sessions, 0.5B Q8_0 | 2 × 6: 47.4 t/s aggregate; 4 × 6: 53.2 this run, tail forward removed; >1 thread/session safe |
+| Speculative decode, story prompt | 49.9-56.4 t/s vs 28.1-30.1 normal (1.66-2.00x); ids identical; pins per-head |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
@@ -142,9 +144,13 @@ reproducible. CONTROL and USER_DEFINED tokens such as `<|im_start|>` and
 are structural, and `encode(..., false)` opts out for user content. Generation
 stops on the model's end-of-generation set (eos, eot, `eos_token_ids`, and
 Qwen's end-of-text id) instead of continuing past it. Decode hands work to a
-spin-then-sleep pool, and at long context attention runs in grouped-query
-chunks over positions as well as heads; `--attention head|gqa|scalar` selects
-the schedule and `tge fidelity` prices a change against the scalar oracle. Numbers: [docs/measurement-log.md](docs/measurement-log.md);
+spin-then-sleep pool; at long context decode attention runs in grouped-query
+chunks over positions as well as heads, and the prefill stays per-head.
+`--attention head|gqa|scalar` selects the schedule and `tge fidelity` prices a
+change against the scalar oracle. `--speculative` runs prompt-lookup speculation
+for greedy decoding; it pins the per-head schedule so the verifier and a
+sequential decode agree, and its ids match the per-head run (and auto on the
+test prompts). Numbers: [docs/measurement-log.md](docs/measurement-log.md);
 method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## 🛠️ AIKit Commands (run from the AIKit folder)

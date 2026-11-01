@@ -68,6 +68,11 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | Same, fidelity against scalar | 511 positions | â€” | mean KL 5.0e-12, top-1 511/511 | **kept** |
 | 2026-11-01 | Re-measured against llama.cpp build 11624 | 6 threads, Q8_0 | old log: llama tg128 15.2 t/s | TGE tg128 45.5 vs llama 45.1 t/s; prefill 261-266 vs 352; parity ~95 tokens | reference |
 | 2026-11-01 | Per-session thread pools for concurrent sessions | 4 sessions × 6 threads | refused / 0xC0000005 | 46.2 t/s aggregate, transcripts identical | **kept** |
+| 2026-11-01 | Prompt-lookup speculative decoding (greedy) | 128-token story prompt | 30.10 t/s | 49.92 t/s (1.66x), ids identical | **kept** |
+| 2026-11-01 | Token-outer group kernel + prefill GQA | 2048 prefill / decode | 157.3 / 28.61 t/s | 140.2 / 24.88 t/s | **reverted** (2k prefill -5%, decode -13%) |
+| 2026-11-01 | Speculation pins the per-head schedule | 2048, 64 tokens | normal head 31.47 t/s | spec 32.71 t/s, ids equal to head and auto | **kept** |
+| 2026-11-01 | Session benchmark tail forward | 4x32 tokens, 6 threads | wall 3.746 s, 34.17 t/s | wall 2.329 s, 53.24 t/s | **kept** |
+| 2026-11-01 | Story speculative decode (recheck) | 128 tokens | 28.13 t/s | 56.38 t/s (2.00x), ids identical | **kept** |
 
 ## 1. f32 GEMM
 
@@ -692,3 +697,97 @@ benchmarks keep using the fallback registry.
 
 Tests: 57 -> 58 cases; the explicit pool path is covered by the q8 kernel tests
 and the sessions benchmark.
+
+## 21. Prompt-lookup speculative decoding (2026-11-01)
+
+The verifier is the batched prefill path. `verify_draft` feeds five drafted
+tokens plus one padding token at the six-token kernel group, computes logits for
+all six rows with the batched output projection, and returns the greedy argmax
+after each position. The key/value rows are committed to the cache; a rejected
+suffix is overwritten by later tokens, so no rollback pass is needed.
+
+The drafter needs no second model: it finds the latest earlier match of the last
+one to three tokens in prompt+output and proposes the five tokens that followed
+it. Speculation runs only for pure greedy (temperature 0, repetition penalty 1);
+a sampled run takes the normal path. It also pins the per-head attention
+schedule (section 22) so the verifier and a sequential decode agree.
+
+Story prompt, 128 tokens, 6 threads, greedy:
+
+| | decode | speculation |
+|---|---|---|
+| normal | 30.10 t/s | — |
+| speculative | 49.92 t/s | 20 steps, 79 draft tokens accepted (3.95/step) |
+| recheck after the pin | 28.13 t/s | 56.38 t/s (2.00x), 99 tokens emitted |
+
+Ids are identical over all 127 decode steps. The short ChatML answer (8 tokens)
+also matches, but speculation costs slightly there: 2 steps, 3 accepted, 24.56
+vs 27.15 t/s. It is an explicit `--speculative` flag, not the default.
+
+On a 2048-token prompt the pinned run measures 32.71 t/s against 31.47 for the
+per-head run and 37.24 for auto; all three id traces agree over 63 tokens. The
+pin costs the grouped schedule's advantage at long context, which is why the
+flag is opt-in.
+
+Tests: 58/58; parity is checked end to end on the story and ChatML prompts.
+
+## 22. Prefill-side GQA attempt, verifier pin, session tail (2026-11-01)
+
+Reviewing the uncommitted speculation work and the last three pushes surfaced
+three defects:
+
+1. The verifier ran the per-head prefill attention while decode switches to GQA
+   at 256 positions. Below 256 the schedules coincide; above it they do not, so
+   a near tie could accept a draft the sequential decode would not.
+2. `attention_group` looped heads outside positions, so its comment ("each K/V
+   row once") was false: every head re-read the same rows.
+3. The sessions benchmark forwarded once after its last token, wasting one
+   forward per session and mixing the numerator with the timed work.
+
+The first was implemented as prefill-side GQA: tokens at `position >= 256`
+dispatch to the same chunked GQA kernel as decode, and the group kernel was
+transposed so a position reads its K/V row once for the group. That was
+measured and rejected.
+
+| run (6 threads) | before | token-outer + prefill GQA | final |
+|---|---|---|---|
+| 510 prefill | 244.4 t/s | 170.7 auto / 128.6 head | 166.0 / 254.6 |
+| 510 decode (auto / head) | 33.98 / 34.76 | 31.26 / 34.16 | 38.52 / 42.56 |
+| 2048 prefill | 157.3 t/s | 140.2 auto / 148.2 head | 200.4 / 170.1 |
+| 2048 decode (auto / head) | 28.61 / 18.24 | 24.88 / 28.38 | 39.37 / 29.95 |
+
+The 510 prefill gained 33 percent over the per-head run, but the 2048 prefill
+lost 5 percent and the decode lost 8-13 percent against the per-head run. At
+these lengths the K/V rows already live in L2; the token-outer state reads and
+merges cost more than the traffic they saved. The kernel stays head-outer, and
+its comment now says what it does. The absolute columns move with machine load
+(the final runs were the fastest run of the session), so the within-run
+auto/head pairs are the evidence, not the columns.
+
+The verifier gap is closed in the CLI instead: `--speculative` pins the model to
+the per-head schedule (scalar keeps its scalar path), so the verifier and a
+sequential decode take identical arithmetic. Normal auto keeps the grouped
+schedule.
+
+| 2048 prompt, 64 tokens | t/s | ids |
+|---|---|---|
+| normal auto (GQA) | 37.24 | reference |
+| normal head | 31.47 | reference |
+| speculative (pinned head) | 32.71 | equal to both |
+
+Speculation is 4 percent ahead of the per-head run and 12 percent behind auto at
+2048. The story prompt remains the win: 28.13 -> 56.38 t/s (2.00x this run;
+1.66x earlier), 20 steps, 79 accepted, 99 emitted, ids identical.
+
+The session tail is gone: the loop forwards only when another token is due.
+
+| 4 x 6 threads, 32 tokens | before | after |
+|---|---|---|
+| wall | 3.746 s | 2.329 s |
+| per session / aggregate | 8.54 / 34.17 t/s | 13.31 / 53.24 t/s |
+
+Part of that is machine load, but the tail forward is gone and the rate uses the
+same `tokens - 1` the normal decoder reports. All transcripts remain identical.
+
+Fidelity is unchanged by the reverted kernel: 497 positions, mean KL 5.104e-12,
+worst 1.426e-10, top-1 497/497. Tests: 58/58; gates: 4/4.

@@ -77,6 +77,10 @@ class Qwen2 {
   int max_context() const { return context_; }
   int vocab_size() const { return config_.vocab_size; }
 
+  /// Tokens one speculative verification pass can check. Five are proposed by
+  /// the drafter and one pads the batched kernel's six-token group.
+  static constexpr int kSpeculativeBatch = 6;
+
   /// The mapped model file, so a caller can build a tokenizer from the same
   /// vocabulary without reopening it.
   const gguf::File& file() const { return file_; }
@@ -100,6 +104,13 @@ class Qwen2 {
   /// difference between prompt processing at tens and at hundreds of tokens per
   /// second. Attention itself stays per-token.
   const float* prefill(const int* tokens, int count, int start_position);
+
+  /// Runs up to `kSpeculativeBatch` draft tokens at `start_position` in one
+  /// batched pass and writes the greedy argmax after each position to
+  /// `predicted`. The draft tokens' key/value rows are committed to the cache;
+  /// a rejected suffix is simply overwritten by later tokens.
+  int verify_draft(const int* tokens, int count, int start_position,
+                   int* predicted);
 
   void reset_cache();
 
@@ -137,6 +148,11 @@ class Qwen2 {
                     int tokens) const;
   void dequant_row(const Matrix& weight, int row, float* output) const;
 
+  /// Shared prefill body. `all_logits`, when non-null, receives one row of
+  /// logits per token in the final chunk; the public prefill passes null.
+  const float* prefill_run(const int* tokens, int count, int start_position,
+                           float* all_logits);
+
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
   /// Lazy per-session pools; the decode and prefill sizes differ.
@@ -153,6 +169,14 @@ class Qwen2 {
   /// values and must not overlap another task's slice.
   void attention_head(int layer, int position, int head, const float* query,
                       float* out, float* scores) const;
+  /// True when this position takes the grouped-query schedule in decode and
+  /// prefill alike; `threads <= 1` keeps the per-head path.
+  bool uses_gqa(int position) const;
+  /// Merges one query head's per-chunk online-softmax states.
+  static void merge_gqa_chunks(const float* maxima, const float* sums,
+                               const float* accumulators, std::size_t base,
+                               int chunks, int group, int group_head,
+                               int head_dim, float* reduction, float* out);
 
   gguf::File file_;
   Qwen2Config config_;
@@ -179,6 +203,7 @@ class Qwen2 {
   std::vector<float> gate_;
   std::vector<float> up_;
   std::vector<float> logits_;
+  std::vector<float> verify_logits_;
   std::vector<float> scores_;
   // Grouped-query attention scratch: per-chunk online-softmax state for every
   // query head in every KV group.

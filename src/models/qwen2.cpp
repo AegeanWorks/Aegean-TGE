@@ -228,6 +228,10 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->up_.assign(static_cast<std::size_t>(config.feed_forward_length),
                       0.0F);
     model->logits_.assign(static_cast<std::size_t>(config.vocab_size), 0.0F);
+    model->verify_logits_.assign(
+        static_cast<std::size_t>(kSpeculativeBatch) *
+            static_cast<std::size_t>(config.vocab_size),
+        0.0F);
     const std::size_t prefill_rows = static_cast<std::size_t>(
         std::min(kPrefillChunk, model->context_));
     // Attention writes one score slice per parallel task: one per query head
@@ -552,16 +556,20 @@ void Qwen2::attention_head(int layer, int position, int head,
   }
 }
 
+bool Qwen2::uses_gqa(int position) const {
+  const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+  return threads > 1 &&
+         (attention_mode_ == AttentionMode::Gqa ||
+          (attention_mode_ == AttentionMode::Auto && position >= 256));
+}
+
 void Qwen2::attention(int layer, int position, const float* queries,
                       float* out_buffer) {
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
 
-  const bool use_gqa =
-      attention_mode_ == AttentionMode::Gqa ||
-      (attention_mode_ == AttentionMode::Auto && position >= 256);
-  if (use_gqa && threads > 1) {
+  if (uses_gqa(position)) {
     attention_gqa(layer, position, queries, out_buffer);
     return;
   }
@@ -637,56 +645,68 @@ void Qwen2::attention_gqa(int layer, int position, const float* queries,
   for (int head = 0; head < heads; ++head) {
     const int kv_head = head / group;
     const int group_head = head % group;
-    bool initialized = false;
-    float maximum = -INFINITY;
-    float sum = 0.0F;
+    const std::size_t base =
+        static_cast<std::size_t>(kv_head) *
+        static_cast<std::size_t>(actual_chunks) *
+        static_cast<std::size_t>(group);
+    merge_gqa_chunks(group_maxima_.data(), group_sums_.data(),
+                     group_acc_.data(), base, actual_chunks, group, group_head,
+                     head_dim, reduction_acc_.data(),
+                     out + static_cast<std::size_t>(head) * head_dim);
+  }
+}
+
+void Qwen2::merge_gqa_chunks(const float* maxima, const float* sums,
+                             const float* accumulators, std::size_t base,
+                             int chunks, int group, int group_head,
+                             int head_dim, float* reduction, float* out) {
+  bool initialized = false;
+  float maximum = -INFINITY;
+  float sum = 0.0F;
+  for (int index = 0; index < head_dim; ++index) {
+    reduction[index] = 0.0F;
+  }
+
+  for (int chunk = 0; chunk < chunks; ++chunk) {
+    const std::size_t state =
+        base +
+        static_cast<std::size_t>(chunk) * static_cast<std::size_t>(group) +
+        static_cast<std::size_t>(group_head);
+    const float chunk_max = maxima[state];
+    const float chunk_sum = sums[state];
+    if (!(chunk_sum > 0.0F)) {
+      continue;
+    }
+    const float* chunk_acc =
+        accumulators + state * static_cast<std::size_t>(head_dim);
+    if (!initialized) {
+      maximum = chunk_max;
+      sum = chunk_sum;
+      for (int index = 0; index < head_dim; ++index) {
+        reduction[index] = chunk_acc[index];
+      }
+      initialized = true;
+      continue;
+    }
+
+    const float merged_max = std::max(maximum, chunk_max);
+    const float alpha = std::exp(maximum - merged_max);
+    const float beta = std::exp(chunk_max - merged_max);
+    sum = sum * alpha + chunk_sum * beta;
     for (int index = 0; index < head_dim; ++index) {
-      reduction_acc_[static_cast<std::size_t>(index)] = 0.0F;
+      reduction[index] = reduction[index] * alpha + chunk_acc[index] * beta;
     }
+    maximum = merged_max;
+  }
 
-    for (int chunk = 0; chunk < actual_chunks; ++chunk) {
-      const std::size_t state =
-          (static_cast<std::size_t>(kv_head) * actual_chunks + chunk) * group +
-          static_cast<std::size_t>(group_head);
-      const float chunk_max = group_maxima_[state];
-      const float chunk_sum = group_sums_[state];
-      if (!(chunk_sum > 0.0F)) {
-        continue;
-      }
-      const float* chunk_acc = group_acc_.data() + state * head_dim;
-      if (!initialized) {
-        maximum = chunk_max;
-        sum = chunk_sum;
-        for (int index = 0; index < head_dim; ++index) {
-          reduction_acc_[static_cast<std::size_t>(index)] = chunk_acc[index];
-        }
-        initialized = true;
-        continue;
-      }
-
-      const float merged_max = std::max(maximum, chunk_max);
-      const float alpha = std::exp(maximum - merged_max);
-      const float beta = std::exp(chunk_max - merged_max);
-      sum = sum * alpha + chunk_sum * beta;
-      for (int index = 0; index < head_dim; ++index) {
-        reduction_acc_[static_cast<std::size_t>(index)] =
-            reduction_acc_[static_cast<std::size_t>(index)] * alpha +
-            chunk_acc[index] * beta;
-      }
-      maximum = merged_max;
+  if (initialized && sum > 0.0F) {
+    const float inverse = 1.0F / sum;
+    for (int index = 0; index < head_dim; ++index) {
+      out[index] = reduction[index] * inverse;
     }
-
-    float* head_out = out + static_cast<std::size_t>(head) * head_dim;
-    if (initialized && sum > 0.0F) {
-      const float inverse = 1.0F / sum;
-      for (int index = 0; index < head_dim; ++index) {
-        head_out[index] =
-            reduction_acc_[static_cast<std::size_t>(index)] * inverse;
-      }
-    } else {
-      for (int index = 0; index < head_dim; ++index) {
-        head_out[index] = 0.0F;
-      }
+  } else {
+    for (int index = 0; index < head_dim; ++index) {
+      out[index] = 0.0F;
     }
   }
 }
@@ -780,6 +800,11 @@ const float* Qwen2::forward(int token, int position) {
 }
 
 const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
+  return prefill_run(tokens, count, start_position, nullptr);
+}
+
+const float* Qwen2::prefill_run(const int* tokens, int count, int start_position,
+                                float* all_logits) {
   if (tokens == nullptr || count <= 0) {
     throw std::runtime_error("prefill: empty prompt");
   }
@@ -796,6 +821,9 @@ const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
   const int kv_dim = config_.kv_dim();
   const int ffn = config_.feed_forward_length;
   const int capacity = static_cast<int>(batch_x_.size() / static_cast<std::size_t>(dim));
+  if (all_logits != nullptr && count > capacity) {
+    throw std::runtime_error("prefill_run: batched logits need one chunk");
+  }
 
   int consumed = 0;
   int last_rows = 0;
@@ -891,6 +919,20 @@ const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
     consumed += chunk;
   }
 
+  if (all_logits != nullptr) {
+    for (int token = 0; token < last_rows; ++token) {
+      rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
+               batch_x_.data() + static_cast<std::size_t>(token) * dim,
+               output_norm_);
+    }
+    batch_matvec(output_, batch_h_.data(), all_logits, last_rows);
+    const std::size_t last_row =
+        static_cast<std::size_t>(last_rows - 1) * config_.vocab_size;
+    std::memcpy(logits_.data(), all_logits + last_row,
+                sizeof(float) * static_cast<std::size_t>(config_.vocab_size));
+    return logits_.data();
+  }
+
   // Only the final prompt token needs logits to seed decoding.
   const std::size_t last = static_cast<std::size_t>(last_rows - 1) * dim;
   std::memcpy(x_.data(), batch_x_.data() + last,
@@ -898,6 +940,29 @@ const float* Qwen2::prefill(const int* tokens, int count, int start_position) {
   rms_norm(h_.data(), x_.data(), output_norm_);
   matvec(output_, h_.data(), logits_.data());
   return logits_.data();
+}
+
+int Qwen2::verify_draft(const int* tokens, int count, int start_position,
+                        int* predicted) {
+  if (tokens == nullptr || predicted == nullptr || count <= 0 ||
+      count > kSpeculativeBatch) {
+    throw std::runtime_error("verify_draft: invalid draft");
+  }
+  const std::size_t required =
+      static_cast<std::size_t>(count) *
+      static_cast<std::size_t>(config_.vocab_size);
+  if (verify_logits_.size() < required) {
+    throw std::runtime_error("verify_draft: logits scratch is too small");
+  }
+
+  prefill_run(tokens, count, start_position, verify_logits_.data());
+  for (int token = 0; token < count; ++token) {
+    predicted[token] = argmax(
+        verify_logits_.data() +
+            static_cast<std::size_t>(token) * config_.vocab_size,
+        config_.vocab_size);
+  }
+  return count;
 }
 
 void Qwen2::reset_cache() {

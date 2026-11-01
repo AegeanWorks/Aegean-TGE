@@ -1,59 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-POOLS",
+    "task_id": "TGE-SPEC",
     "last_phase": "verification",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1793565124.9734354,
+    "updated_at": 1793568429.2284431,
     "owner": "commandcode:1",
     "started_by": "commandcode:1",
     "continuations": [],
-    "completed_at": 1793565125.8577943
+    "completed_at": 1793568429.4592519
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-TOKENIZER",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-PREFILL2' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793521029.6746886,
-      "timestamp_str": "2026-11-01 11:17:09",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-PREFILL2",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; 45/45 tests; prefill median 191.6 t/s, parity intact",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793521029.9922464,
-      "timestamp_str": "2026-11-01 11:17:09",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-INT-PREFILL",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "checklists: passed; integer prefill kernel measured 150.0 vs 186.0 t/s; reverted; 45/45 tests, parity intact",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793521196.4295173,
-      "timestamp_str": "2026-11-01 11:19:56",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-PREFILL2",
-      "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-INT-PREFILL' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793521196.4295173,
-      "timestamp_str": "2026-11-01 11:19:56",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-PROFILE",
       "phase": "phase 4",
@@ -241,6 +199,55 @@
       "status": "completed",
       "timestamp": 1793565125.8577955,
       "timestamp_str": "2026-11-01 23:32:05",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-SPEC",
+      "phase": "planning",
+      "phase_num": 2,
+      "description": "[1/1] Greedy prompt-lookup speculative decoding through the batched prefill verifier",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793566658.701543,
+      "timestamp_str": "2026-11-01 23:57:38",
+      "agent": "commandcode:1",
+      "impact_assessment": {
+        "why": "Decode is memory-bound and prompt-lookup speculation needs a per-position verifier; the existing prefill path already has the batched kernels.",
+        "benefits": "1.66x decode on a repetitive story prompt with identical tokens; no second model; pure greedy only.",
+        "risks": "contract: Qwen2 gains verify_draft and kSpeculativeBatch, and generate gains --speculative; dependency: none new; concurrency: verify uses the model's existing prefill pool and no shared state across sessions; state: 3.6 MB verify-logits scratch per model, no persistent format change",
+        "mitigation": "Parity checked end to end on the story (127 ids) and ChatML (8 ids) prompts; sampling and repeat-penalty runs keep the normal path; 58/58 tests and 4/4 gates"
+      }
+    },
+    {
+      "task_id": "TGE-SPEC",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 58/58 tests; speculative story 30.10->49.92 t/s (1.66x), 20 steps/79 accepted, ids identical; ChatML 8 ids identical (24.56 vs 27.15 t/s); prefill refactor leaves normal output unchanged; uncommitted pending push authorization",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793566659.0494363,
+      "timestamp_str": "2026-11-01 23:57:39",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-SPEC",
+      "phase": "verification",
+      "phase_num": 4,
+      "description": "checklists: passed; gates 4/4; 58/58 tests; spec pin 2048 32.71 vs head 31.47/auto 37.24, ids equal; story 28.13->56.38 (2.00x); sessions 3.746->2.329 s, 34.17->53.24 t/s; prefill GQA token-outer reverted (2k prefill -5%, decode -13%); fidelity 5.104e-12, 497/497",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793568429.2284431,
+      "timestamp_str": "2026-11-02 00:27:09",
+      "agent": "commandcode:1"
+    },
+    {
+      "task_id": "TGE-SPEC",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-SPEC' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793568429.4592535,
+      "timestamp_str": "2026-11-02 00:27:09",
       "agent": "commandcode:1"
     }
   ]
