@@ -93,6 +93,10 @@ using Q8BatchFn = void (*)(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& config);
 
+/// AVX-VNNI variant, reachable from the benchmark harness. Dispatch keeps the
+/// float kernel: this one wins in isolation but loses end to end.
+void gemv_q8_batch_vnni(const Q8BatchArgs& args, const GemvConfig& config);
+
 /// Quantized formats with a super-block layout. Q8_0 has its own fused kernels;
 /// these three share one dequantize-then-dot path because their per-row decode
 /// is cheap enough to run once and reuse across a token group.

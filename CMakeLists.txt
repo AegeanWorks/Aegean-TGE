@@ -57,6 +57,7 @@ add_library(tge_core STATIC
   src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/q8_batch_avx2.cpp
+  src/cpu/avx2/q8_batch_vnni.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
   src/cpu/scalar/mem_bandwidth_scalar.cpp
@@ -75,6 +76,16 @@ tge_set_isa_flags(AVX2
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)
+
+# AVX-VNNI is a separate tier. Reachable from the benchmark harness only;
+# dispatch still selects the float kernel.
+if(MSVC)
+  set_source_files_properties(src/cpu/avx2/q8_batch_vnni.cpp
+    PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+else()
+  set_source_files_properties(src/cpu/avx2/q8_batch_vnni.cpp
+    PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mavxvnni")
+endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(tge_core PUBLIC Threads::Threads)

@@ -262,12 +262,28 @@ same idea is not tried twice on intuition alone.
 The VNNI attempt is the most useful negative result so far, because it separates
 the two layers cleanly.
 
-The kernel itself was genuinely faster. `dpbusd` moves the integer dot onto the
-FMA ports, which is exactly what the `maddubs` attempt lacked: that version was
-fighting `psignb` for the single port that issues it. Weights are biased into
-unsigned bytes with `xor 0x80`, and because the activation is the biased operand
-the correction term is per-lane and depends only on the weights, so it is
-computed once per block and shared by every token in the group.
+The kernel itself was genuinely faster on the two shapes the first benchmark
+covered. Measuring *every* shape the model uses explains why that was
+misleading — `tge bench batch ... --kernel vnni`:
+
+| Shape, 64 tokens | Float | VNNI |
+|---|---|---|
+| 128 x 896 (k/v) | 85.9 | 28.9 |
+| 896 x 896 (q/o) | 337.7 | 141.6 |
+| 4864 x 896 (gate/up) | 379.0 | 353.8 |
+| 896 x 4864 (down) | 347.4 | 182.7 |
+| 151936 x 896 (output) | 396.1 | **448.2** |
+
+VNNI wins on exactly one shape — the output projection — and loses badly on the
+small ones, because activation quantization is a fixed per-call cost that small
+matrices cannot amortize. The first benchmark used only the large shapes, so it
+reported a win that does not generalise.
+
+The output projection is about 89 percent of prefill FLOPs, so using VNNI there
+alone would be worth roughly 11 percent overall. It is not wired into dispatch:
+it changes the logits and breaks token parity with llama.cpp, which is a
+tradeoff to make deliberately rather than as a side effect of a kernel rewrite.
+The kernel is kept behind the benchmark flag so the option is one line away.
 
 Getting there exposed a real bug worth recording: `dpbusd` spreads 32 products
 across eight int32 lanes, so the bias correction must be applied per lane. The
