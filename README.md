@@ -65,6 +65,7 @@ aegean-tge/
 ├── REUSE.toml                <- Machine-readable SPDX metadata
 ├── README.md
 ├── .aikit/                   <- this project's memory: record, ledger, decisions
+├── assets/                   <- generated logo and social preview
 ├── apps/
 │   └── cli/                  <- `tge` executable: info, bench
 ├── include/
