@@ -3,6 +3,13 @@
 Every number here was measured on the development machine. Nothing is
 estimated.
 
+> **Where the numbers live.** [measurement-log.md](measurement-log.md) is the
+> canonical record: every change with its before and after figures, the full
+> tables, and the rejected experiments with their margins. This file explains
+> *why* the numbers look the way they do — what each measurement means and what
+> it rules out. If the two ever disagree, the log wins; it is the one that gets
+> updated with each change.
+
 **Method (project guideline G-001).** A baseline snapshot is taken before the
 first edit of a task and again after every change, with
 `scripts\measure.ps1`. Changes that lose are recorded with their numbers rather
