@@ -84,7 +84,11 @@ class File {
   File(File&& other) noexcept;
   File& operator=(File&& other) noexcept;
 
-  static File open(const std::string& path);
+  /// `load_large_arrays = false` parses the metadata but skips arrays above a
+  /// size threshold without materialising them. The model body needs none of
+  /// them; the 300k vocabulary entries cost more to build than the weights cost
+  /// to map. Callers that need them (the tokenizer) open their own File.
+  static File open(const std::string& path, bool load_large_arrays = true);
 
   bool valid() const { return data_ != nullptr; }
   std::uint32_t version() const { return version_; }

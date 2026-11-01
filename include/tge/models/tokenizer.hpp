@@ -22,6 +22,11 @@ class Tokenizer {
   static std::unique_ptr<Tokenizer> from_gguf(const gguf::File& file,
                                               std::string& error);
 
+  /// Opens the file with full metadata. The model loader skips large arrays, so
+  /// a caller that needs the vocabulary cannot reuse that File.
+  static std::unique_ptr<Tokenizer> from_path(const std::string& path,
+                                              std::string& error);
+
   std::string decode(const std::vector<int>& tokens) const;
   std::string decode_span(const int* tokens, int count) const;
 

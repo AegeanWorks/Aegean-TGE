@@ -303,6 +303,19 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
   return tokenizer;
 }
 
+std::unique_ptr<Tokenizer> Tokenizer::from_path(const std::string& path,
+                                                std::string& error) {
+  try {
+    // Open with full metadata: the model loader skips large arrays, so its File
+    // has no vocabulary in it.
+    const gguf::File file = gguf::File::open(path);
+    return from_gguf(file, error);
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return nullptr;
+  }
+}
+
 std::string Tokenizer::decode_span(const int* tokens, int count) const {
   std::string text;
   if (tokens == nullptr || count <= 0) {

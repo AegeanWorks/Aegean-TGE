@@ -48,6 +48,19 @@ class Cursor {
     return text;
   }
 
+  /// Advances past a string without allocating it. Used when a large array is
+  /// skipped, where building the strings is the cost being avoided.
+  void skip_string() {
+    const std::uint64_t length = read<std::uint64_t>();
+    require(length);
+    position_ += length;
+  }
+
+  void skip(std::uint64_t bytes) {
+    require(bytes);
+    position_ += bytes;
+  }
+
   std::uint64_t offset() const {
     return static_cast<std::uint64_t>(position_ - begin_);
   }
@@ -121,6 +134,10 @@ Value read_scalar(Cursor& cursor, ValueType type) {
 
 /// Smallest number of bytes one element of `type` can occupy. A string is at
 /// least an 8-byte length prefix; every scalar is its own width.
+/// Arrays above this size are metadata tables (vocabulary, merges); they are
+/// skipped on request rather than built.
+constexpr std::uint64_t kSkipArrayThreshold = 1024;
+
 std::uint64_t element_min_bytes(ValueType type) {
   switch (type) {
     case ValueType::Uint8:
@@ -145,7 +162,7 @@ std::uint64_t element_min_bytes(ValueType type) {
   return 1;
 }
 
-Value read_value(Cursor& cursor) {
+Value read_value(Cursor& cursor, bool load_large_arrays = true) {
   const auto type = static_cast<ValueType>(cursor.read<std::uint32_t>());
   if (type != ValueType::Array) {
     return read_scalar(cursor, type);
@@ -162,6 +179,17 @@ Value read_value(Cursor& cursor) {
   const std::uint64_t minimum = element_min_bytes(element_type);
   if (count > cursor.remaining() / minimum) {
     throw std::runtime_error("gguf: array length exceeds the remaining file");
+  }
+
+  if (!load_large_arrays && count > kSkipArrayThreshold) {
+    for (std::uint64_t index = 0; index < count; ++index) {
+      if (element_type == ValueType::String) {
+        cursor.skip_string();
+      } else {
+        cursor.skip(minimum);
+      }
+    }
+    return value;
   }
 
   value.elements.reserve(
@@ -368,7 +396,7 @@ void File::reset() noexcept {
   tensor_index_.clear();
 }
 
-File File::open(const std::string& path) {
+File File::open(const std::string& path, bool load_large_arrays) {
   File file;
 
 #if defined(_WIN32)
@@ -445,7 +473,7 @@ File File::open(const std::string& path) {
 
   for (std::uint64_t index = 0; index < metadata_count; ++index) {
     std::string key = cursor.read_string();
-    Value value = read_value(cursor);
+    Value value = read_value(cursor, load_large_arrays);
     file.metadata_.emplace(std::move(key), std::move(value));
   }
 

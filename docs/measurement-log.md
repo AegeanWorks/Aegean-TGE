@@ -42,6 +42,31 @@ functional rather than a performance claim.
 | 2026-11-01 | Integer inner loop for prefill (`maddubs`, quantized activations) | prefill, 510 tokens | 186.0 t/s | 150.0 t/s | reverted |
 | 2026-11-01 | AVX-VNNI `dpbusd` inner loop | prefill kernel, ffn 4864x896 | 267.9 GFLOPS | 284.0 GFLOPS | reverted (see note) |
 | 2026-11-01 | AVX-VNNI `dpbusd` inner loop | prefill, 510 tokens end to end | 186.0 t/s | 150.9 t/s | reverted |
+| 2026-11-01 | Skip large metadata arrays when loading the model body | load, 0.5B Q8_0, id prompt | 65 ms | **24 ms** | **kept** |
+| 2026-11-01 | Same change, text prompt (tokenizer path) | load + tokenizer | 125 ms | 127 ms | neutral |
+
+### What a prepared sidecar would and would not buy
+
+Asked whether model load could be sped up by writing derived files at first load.
+Measuring where the time actually goes answered it:
+
+- GGUF header and tensor-table parsing is **~2 ms**. Caching it in a manifest
+  would save nothing worth counting.
+- The cost is the **vocabulary**: 151,936 token strings plus 151,387 merge
+  rules. Materialising them costs more than mapping 639 MiB of weights, because
+  the weights are mapped lazily and the strings are not.
+- KV-cache allocation adds ~23 ms per 4096 tokens of context, scaling linearly:
+  load was 40.8 / 59.0 / 83.7 ms at context 512 / 4096 / 8192.
+
+So the useful artefact is not a manifest of the weights but a **cached
+vocabulary**: the ~100 ms text path is almost entirely 300k string allocations
+plus two hash maps. A binary sidecar holding the pieces and a merged rank table
+would cut most of it. That is the next thing worth building here, and it is worth
+it only for repeated CLI invocations — a server builds the vocabulary once.
+
+Dequantising K-quant weights into a prepared form is the other candidate, and it
+is a trap: Q4_K_M at 638 MiB becomes roughly 2.5 GiB as float, which this machine
+with 2 GB free cannot hold. The 20 ms saved would be paid for in swap.
 
 ### Notes
 

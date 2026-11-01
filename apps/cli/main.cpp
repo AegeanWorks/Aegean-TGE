@@ -401,12 +401,16 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   }
 
   std::string error;
+  const auto load_start = Clock::now();
   std::unique_ptr<tge::models::Qwen2> model =
       tge::models::Qwen2::load(path, error, context_limit);
+  const auto load_end = Clock::now();
   if (!model) {
     std::fprintf(stderr, "generate: %s\n", error.c_str());
     return 1;
   }
+  std::printf("load     : %.1f ms\n",
+              std::chrono::duration<double>(load_end - load_start).count() * 1e3);
   model->set_threads(threads);
 
   const tge::models::Qwen2Config& config = model->config();
@@ -414,12 +418,18 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   std::vector<int> tokens = prompt_ids;
   if (tokens.empty() && !prompt_text.empty()) {
     std::string tokenizer_error;
+    const auto tokenizer_start = Clock::now();
     const std::unique_ptr<tge::models::Tokenizer> tokenizer =
-        tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error);
+        tge::models::Tokenizer::from_path(path, tokenizer_error);
+    const auto tokenizer_end = Clock::now();
     if (!tokenizer) {
       std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
       return 1;
     }
+    std::printf("tokenizer: %.1f ms\n",
+                std::chrono::duration<double>(tokenizer_end - tokenizer_start)
+                        .count() *
+                    1e3);
     tokens = tokenizer->encode(prompt_text);
     std::printf("prompt   : %zu tokens from text\n", tokens.size());
     if (print_ids) {
@@ -510,7 +520,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   if (print_text) {
     std::string tokenizer_error;
     std::unique_ptr<tge::models::Tokenizer> tokenizer =
-        tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error);
+        tge::models::Tokenizer::from_path(path, tokenizer_error);
     if (!tokenizer) {
       std::fprintf(stderr, "generate: %s\n", tokenizer_error.c_str());
     } else {

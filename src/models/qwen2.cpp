@@ -57,7 +57,9 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                                    int context_limit) {
   std::unique_ptr<Qwen2> model(new Qwen2());
   try {
-    model->file_ = gguf::File::open(path);
+    // The body needs no metadata arrays; building the vocabulary here would cost
+    // more than mapping the weights.
+    model->file_ = gguf::File::open(path, /*load_large_arrays=*/false);
 
     const std::string architecture =
         model->file_.get_string("general.architecture", "");
