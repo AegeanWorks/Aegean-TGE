@@ -53,7 +53,8 @@ Compare-Object (Get-Content before.txt) (Get-Content after.txt)
 `measure.ps1` prints the selected kernels and one line per benchmark, so the
 diff shows exactly what moved. It is a single snapshot; this machine varies by
 up to 20 percent run to run, so take two or three before believing a small
-delta.
+delta. Every change and its before/after numbers are recorded in
+[docs/measurement-log.md](docs/measurement-log.md) (guideline G-002).
 
 `tge info` prints the detected CPU, its instruction sets, the P/E core split, the
 cache hierarchy, system memory, and the resulting memory budget.

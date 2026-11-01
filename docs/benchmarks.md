@@ -264,17 +264,10 @@ is the stable number worth tracking.
 
 ## 7. Rejected experiments
 
-Each of these was implemented, measured, and removed. They are recorded so the
-same idea is not tried twice on intuition alone.
-
-| Experiment | Result | Decision |
-|---|---|---|
-| Pad packed A stride from 6 to 8 floats | 1024: 62.0 -> 52.7 GFLOPS; 2048: 59.8 -> 47.6 | Rejected: 33 percent more panel traffic outweighed fewer line splits |
-| Software prefetch in GEMV, distance 512 | 1T: ~19.6 with vs ~18.4-20.0 without; 16T median 28.4 with vs 32.1 without | Rejected: hardware prefetcher already handles a contiguous per-thread band |
-| `_MM_HINT_NTA` on the GEMV prefetch | 16T median 29.8 vs 28.4 for T0, inside the noise band | Rejected: no measurable difference |
-| Align the 64-token prompt chunk to the six-token group | prefill median 185.4 vs 191.6 | Rejected: measured worse, so the tail stays on the single-token path |
-| **Integer inner loop for prefill** (quantize activations, `maddubs`, no widening) | prefill median **150.0 t/s** (145.9 / 150.0 / 152.1) vs **186.0** float (five samples, 150.3-201.7) | Rejected: **22 percent slower** |
-| **AVX-VNNI `dpbusd` inner loop** | kernel in isolation **faster** (283.96 vs 267.88 GFLOPS on ffn, 342.03 vs 262.20 on the output projection) but end-to-end prefill **150.9 vs 186.0 t/s** | Rejected: the faster kernel does not survive integration |
+**The authoritative record is [measurement-log.md](measurement-log.md)**, which
+holds every change with its before and after numbers and a verdict, as required
+by guideline G-002. This section keeps only the reasoning that belongs with the
+benchmarks themselves; the table is not duplicated here so the two cannot drift.
 
 The VNNI attempt is the most useful negative result so far, because it separates
 the two layers cleanly.

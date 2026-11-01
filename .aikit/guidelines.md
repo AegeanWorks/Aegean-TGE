@@ -10,3 +10,4 @@ without modifying or quarantining that file; older versions migrate when a migra
 
 ## Rules
 - **G-001** (user): Measure before the first edit of a task and again after every change; report the baseline and the result together, and record a rejected change with its numbers rather than its intention.
+- **G-002** (user): Record every change in docs/measurement-log.md with its before and after measurement and whether it was kept or reverted; a change with no log entry is not finished.
