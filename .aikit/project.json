@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "aegean-tge",
+  "test_command": "ctest --test-dir build --output-on-failure",
+  "topics": [
+    "aikit",
+    "aikit-integrated",
+    "source-available",
+    "aegean-license",
+    "commercial-license"
+  ],
+  "gates": {},
+  "ui_required": false,
+  "mechanics_required": false,
+  "created": "2026-11-01"
+}
