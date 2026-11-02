@@ -70,6 +70,7 @@ void print_usage() {
       "        --model PATH --context N --sessions N --bandwidth GB/s\n"
       "  bench sessions [opts] concurrent decoding over shared weights\n"
       "        --model PATH --sessions N --tokens N --threads N --context N\n"
+      "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
       "        --pin-threads 1|0  pin decode workers to P-cores (default 0)\n"
       "  bench continuous [opts] continuous batching over N KV slots\n"
       "        --model PATH --requests N --tokens N --threads N --sequences N\n"
@@ -1263,10 +1264,18 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
 
 int command_sessions_bench(const std::string& path, int sessions, int tokens,
                            int threads_per_session, int context,
-                           bool pin_threads) {
+                           bool pin_threads, bool kv_half, bool kv_q8) {
   if (sessions <= 0 || tokens <= 0) {
     std::fprintf(stderr,
                  "bench sessions: sessions and tokens must be positive\n");
+    return 2;
+  }
+  if (kv_half && kv_q8) {
+    std::fprintf(stderr, "bench sessions: --kv takes one of f32|f16|i8\n");
+    return 2;
+  }
+  if (kv_half && !tge::cpu::detect().features.f16c) {
+    std::fprintf(stderr, "bench sessions: --kv f16 needs F16C on this CPU\n");
     return 2;
   }
 
@@ -1276,7 +1285,8 @@ int command_sessions_bench(const std::string& path, int sessions, int tokens,
   const auto load_start = Clock::now();
   for (int index = 0; index < sessions; ++index) {
     std::string error;
-    auto model = tge::models::Qwen2::load(path, error, context, false);
+    auto model = tge::models::Qwen2::load(path, error, context, false, kv_half,
+                                          kv_q8);
     if (!model) {
       std::fprintf(stderr, "bench sessions: %s\n", error.c_str());
       return 1;
@@ -2176,6 +2186,8 @@ int main(int argc, char** argv) {
     int threads_per_session = 0;
     int context = 0;
     int pin_threads = 0;
+    bool kv_half = false;
+    bool kv_q8 = false;
     for (int index = 3; index < argc; index += 2) {
       const char* flag = argv[index];
       const char* value = index + 1 < argc ? argv[index + 1] : "";
@@ -2185,6 +2197,20 @@ int main(int argc, char** argv) {
       else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
       else if (std::strcmp(flag, "--threads") == 0) ok = parse_int(value, threads_per_session);
       else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
+      else if (std::strcmp(flag, "--kv") == 0) {
+        if (std::strcmp(value, "f16") == 0) {
+          kv_half = true;
+          kv_q8 = false;
+        } else if (std::strcmp(value, "i8") == 0) {
+          kv_q8 = true;
+          kv_half = false;
+        } else if (std::strcmp(value, "f32") == 0) {
+          kv_half = false;
+          kv_q8 = false;
+        } else {
+          ok = false;
+        }
+      }
       else if (std::strcmp(flag, "--pin-threads") == 0) {
         ok = parse_int(value, pin_threads) &&
              (pin_threads == 0 || pin_threads == 1);
@@ -2202,7 +2228,7 @@ int main(int argc, char** argv) {
     }
     return command_sessions_bench(model_path, sessions, tokens,
                                   threads_per_session, context,
-                                  pin_threads != 0);
+                                  pin_threads != 0, kv_half, kv_q8);
   }
 
   if (command == "plan") {

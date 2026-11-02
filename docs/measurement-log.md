@@ -2104,3 +2104,17 @@ the widen+scale is pure overhead, so f32 stays faster there. The plan still
 prints the f32 KV size, so the budget check stays conservative.
 Tests: 84 -> 86 (int8 head and group differentials: AVX2 tracks scalar at
 1e-4, scalar-int8 tracks float at 5e-2).
+
+Follow-up: ench sessions takes --kv f32|f16|i8 now (it was the only
+model-running command without the flag). Llama-3B, 2 sessions x 8 tokens x 6
+threads, context 512, both orders:
+
+| sessions 2x8 | f32 | i8 |
+|---|---|---|
+| aggregate | 4.18 / 7.21 t/s | 10.19 / 10.78 t/s |
+
+Direction is consistent across orders with identical transcripts, but the f32
+spread (73%) far exceeds the box's usual band — that day had heavy background
+load, so read the gap as contention-shaped, not a clean 2x claim. The
+plausible mechanism is the shared single-channel DIMM: two sessions stream
+2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.
