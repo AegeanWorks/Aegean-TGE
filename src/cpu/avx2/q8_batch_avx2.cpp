@@ -21,8 +21,8 @@ inline __m256 widen(const std::int8_t* values) {
 inline float horizontal_sum(__m256 values) {
   __m128 total = _mm_add_ps(_mm256_castps256_ps128(values),
                             _mm256_extractf128_ps(values, 1));
-  total = _mm_hadd_ps(total, total);
-  total = _mm_hadd_ps(total, total);
+  total = _mm_add_ps(total, _mm_movehl_ps(total, total));
+  total = _mm_add_ss(total, _mm_shuffle_ps(total, total, 1));
   return _mm_cvtss_f32(total);
 }
 
@@ -69,10 +69,16 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
     for (int row = begin; row < end; ++row) {
       int token = 0;
 
-      for (; token + kGroup <= tokens; token += kGroup) {
+      // Full and partial groups share one widened weight block across every
+      // token in the group. The old tail re-read the same block once per
+      // token, so 5 tokens cost more than 6 (5 weight reads vs 1). A 64-token
+      // prefill chunk is 10 full groups plus a 4-token tail, so every chunk
+      // paid it; the speculative verifier's 6-token pass never did.
+      while (token < tokens) {
+        const int group = std::min(kGroup, tokens - token);
         __m256 accumulators[kGroup];
         const float* inputs[kGroup];
-        for (int index = 0; index < kGroup; ++index) {
+        for (int index = 0; index < group; ++index) {
           accumulators[index] = _mm256_setzero_ps();
           inputs[index] = args.input +
                           static_cast<std::size_t>(token + index) * cols;
@@ -91,7 +97,7 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
           const __m256 w3 = widen(values + 24);
 
           const int offset = block * kQ8BlockElements;
-          for (int index = 0; index < kGroup; ++index) {
+          for (int index = 0; index < group; ++index) {
             const float* x = inputs[index] + offset;
             __m256 sum = _mm256_mul_ps(w0, _mm256_loadu_ps(x));
             sum = _mm256_fmadd_ps(w1, _mm256_loadu_ps(x + 8), sum);
@@ -102,32 +108,11 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
           }
         }
 
-        for (int index = 0; index < kGroup; ++index) {
+        for (int index = 0; index < group; ++index) {
           args.out[static_cast<std::size_t>(token + index) * rows + row] =
               horizontal_sum(accumulators[index]);
         }
-      }
-
-      // Tail tokens that do not fill a group.
-      for (; token < tokens; ++token) {
-        const float* input = args.input + static_cast<std::size_t>(token) * cols;
-        __m256 total = _mm256_setzero_ps();
-        for (int block = 0; block < blocks; ++block) {
-          const std::uint8_t* entry = weight_row + block * kQ8BlockBytes;
-          std::uint16_t scale_bits = 0;
-          std::memcpy(&scale_bits, entry, sizeof(scale_bits));
-          const __m256 scale = _mm256_set1_ps(half_to_float(scale_bits));
-
-          const auto* values = reinterpret_cast<const std::int8_t*>(entry + 2);
-          const float* x = input + block * kQ8BlockElements;
-          __m256 sum = _mm256_mul_ps(widen(values + 0), _mm256_loadu_ps(x));
-          sum = _mm256_fmadd_ps(widen(values + 8), _mm256_loadu_ps(x + 8), sum);
-          sum = _mm256_fmadd_ps(widen(values + 16), _mm256_loadu_ps(x + 16), sum);
-          sum = _mm256_fmadd_ps(widen(values + 24), _mm256_loadu_ps(x + 24), sum);
-          total = _mm256_fmadd_ps(scale, sum, total);
-        }
-        args.out[static_cast<std::size_t>(token) * rows + row] =
-            horizontal_sum(total);
+        token += group;
       }
 
       weight_row += row_bytes;

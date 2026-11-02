@@ -18,6 +18,7 @@ constexpr std::size_t kQ6_KBlockBytes = 210;
 constexpr int kLegacyBlockElements = 32;
 constexpr std::size_t kQ4_0BlockBytes = 18;
 constexpr std::size_t kQ5_0BlockBytes = 22;
+constexpr std::size_t kQ5_1BlockBytes = 24;
 
 void dequantize_q4_0(const std::uint8_t* source, float* destination, int cols) {
   const int blocks = cols / kLegacyBlockElements;
@@ -55,6 +56,37 @@ void dequantize_q5_0(const std::uint8_t* source, float* destination, int cols) {
       const int high = static_cast<int>((quants[index] >> 4) | bit_high) - 16;
       out[index] = d * static_cast<float>(low);
       out[index + 16] = d * static_cast<float>(high);
+    }
+  }
+}
+
+/// Q5_1 legacy block: fp16 scale, fp16 minimum, 4 high-bit bytes, 16 quant
+/// bytes. Mirrors ggml's dequantize_row_q5_1 exactly: the fifth bit comes
+/// from the high word (low half bit i, high half bit i + 16), and the
+/// minimum is ADDED (separate d/m, no -16 bias unlike Q5_0).
+void dequantize_q5_1(const std::uint8_t* source, float* destination, int cols) {
+  const int blocks = cols / kLegacyBlockElements;
+  for (int block = 0; block < blocks; ++block) {
+    const std::uint8_t* entry = source + block * kQ5_1BlockBytes;
+    std::uint16_t scale_bits = 0;
+    std::uint16_t minimum_bits = 0;
+    std::memcpy(&scale_bits, entry, sizeof(scale_bits));
+    std::memcpy(&minimum_bits, entry + 2, sizeof(minimum_bits));
+    const float d = half_to_float(scale_bits);
+    const float m = half_to_float(minimum_bits);
+
+    std::uint32_t high_bits = 0;
+    std::memcpy(&high_bits, entry + 4, sizeof(high_bits));
+    const std::uint8_t* quants = entry + 8;
+    float* out = destination + block * kLegacyBlockElements;
+
+    for (int index = 0; index < 16; ++index) {
+      const std::uint32_t bit_low = ((high_bits >> index) << 4) & 0x10u;
+      const std::uint32_t bit_high = (high_bits >> (index + 12)) & 0x10u;
+      const int low = static_cast<int>((quants[index] & 0x0F) | bit_low);
+      const int high = static_cast<int>((quants[index] >> 4) | bit_high);
+      out[index] = static_cast<float>(low) * d + m;
+      out[index + 16] = static_cast<float>(high) * d + m;
     }
   }
 }
@@ -217,6 +249,9 @@ std::size_t quant_row_bytes(QuantKind kind, int cols) {
     case QuantKind::Q5_0:
       return static_cast<std::size_t>(cols / kLegacyBlockElements) *
              kQ5_0BlockBytes;
+    case QuantKind::Q5_1:
+      return static_cast<std::size_t>(cols / kLegacyBlockElements) *
+             kQ5_1BlockBytes;
   }
   return 0;
 }
@@ -238,6 +273,9 @@ void dequantize_row(QuantKind kind, const std::uint8_t* source,
       return;
     case QuantKind::Q5_0:
       dequantize_q5_0(source, destination, cols);
+      return;
+    case QuantKind::Q5_1:
+      dequantize_q5_1(source, destination, cols);
       return;
     case QuantKind::Q8_0:
       break;

@@ -109,6 +109,11 @@ class File {
   /// Pointer to the start of the tensor payload. Valid for the life of the File.
   const std::uint8_t* tensor_data(const TensorInfo& info) const;
 
+  /// Touches every mapped page once so a cold first prefill does not pay the
+  /// fault-in (43 s on the VM's storage for 676 MiB). The total bytes read are
+  /// identical; this moves them out of the first token into an explicit step.
+  void prefetch() const;
+
   std::uint64_t file_size() const { return size_; }
 
  private:

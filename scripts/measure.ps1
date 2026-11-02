@@ -43,6 +43,21 @@ foreach ($shape in $shapes) {
     "batch   {0,-7} {1}" -f $shape[2], $value
 }
 
+# Decode-shaped K-quant kernels, 1 token: the orientation each format
+# actually takes in the model (gate/up Q5_0, down-proj Q4_K/Q6_K). Scalar
+# fallbacks would show up here first.
+$kshapes = @(
+    @(4864, 896, 'q50', 'gate'),
+    @(896, 4864, 'q4k', 'down4'),
+    @(896, 4864, 'q6k', 'down6')
+)
+foreach ($shape in $kshapes) {
+    $out = & $exe bench batch --rows $shape[0] --cols $shape[1] --tokens 1 --repeat 3 --format $shape[2]
+    $result = $out | Select-String 'GB/s'
+    $value = $result.Line.Trim()
+    "kbatch  {0,-5} {1}" -f $shape[3], $value
+}
+
 # Decode primitive and the bandwidth ceiling.
 $gemv = & $exe bench gemv --rows 4096 --cols 4096 --repeat 3 | Select-String 'avx2-fma\s+16\s'
 "gemv    {0}" -f $gemv.Line.Trim()

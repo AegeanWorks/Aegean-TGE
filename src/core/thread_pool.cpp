@@ -9,6 +9,16 @@
 #include <intrin.h>
 #endif
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace tge::core {
 namespace {
 
@@ -27,13 +37,118 @@ inline void cpu_relax() {
 #endif
 }
 
+#if defined(_WIN32)
+/// Logical indices (group 0) of the fastest efficiency class. Single-group
+/// assumption holds for the 16-logical dev machine; larger machines keep the
+/// default OS placement rather than a wrong mask. Computed once under the
+/// function-local static guard, so concurrently starting workers cannot race
+/// on the cache.
+std::vector<int> p_core_logicals() {
+  static const std::vector<int> cached = [] {
+    std::vector<int> out;
+    DWORD length = 0;
+    GetLogicalProcessorInformationEx(RelationAll, nullptr, &length);
+    if (length == 0) {
+      return out;
+    }
+    std::vector<unsigned char> buffer(length);
+    if (!GetLogicalProcessorInformationEx(
+            RelationAll,
+            reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(
+                buffer.data()),
+            &length)) {
+      return out;
+    }
+  struct CoreEntry {
+    DWORD efficiency = 0;
+    std::vector<int> processors;
+  };
+  std::vector<CoreEntry> cores;
+  std::size_t offset = 0;
+  int logical = 0;
+  while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= length) {
+    const auto* entry =
+        reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(
+            buffer.data() + offset);
+    if (entry->Size == 0) {
+      break;
+    }
+    if (entry->Relationship == RelationProcessorCore) {
+      CoreEntry core;
+      core.efficiency = entry->Processor.EfficiencyClass;
+      for (WORD group = 0; group < entry->Processor.GroupCount; ++group) {
+        const KAFFINITY mask = entry->Processor.GroupMask[group].Mask;
+        // Only group 0 is pinnable with a plain affinity mask here.
+        if (entry->Processor.GroupMask[group].Group != 0) {
+          continue;
+        }
+        for (int bit = 0; bit < 64; ++bit) {
+          if ((mask >> bit) & 1) {
+            core.processors.push_back(logical + bit);
+          }
+        }
+      }
+      // Fallback when masks are unavailable: count the core once.
+      if (core.processors.empty()) {
+        core.processors.push_back(logical);
+      }
+      logical += static_cast<int>(core.processors.size());
+      cores.push_back(std::move(core));
+    }
+    offset += entry->Size;
+  }
+  DWORD fastest = 0;
+  for (const auto& core : cores) {
+    fastest = std::max(fastest, core.efficiency);
+  }
+  for (const auto& core : cores) {
+    if (core.efficiency == fastest) {
+      out.insert(out.end(), core.processors.begin(),
+                 core.processors.end());
+    }
+  }
+    return out;
+  }();
+  return cached;
+}
+
+inline void pin_worker_to_p_core(const std::vector<int>& p_cores,
+                                 int worker_index) {
+  if (p_cores.empty()) {
+    return;
+  }
+  // Reserve logical 0 for the calling thread / OS; workers take the rest
+  // round-robin so 5 decode workers land on 5 distinct P-core threads.
+  const int pick = p_cores[static_cast<std::size_t>(
+      (worker_index + 1) % static_cast<int>(p_cores.size()))];
+  if (pick < 0 || pick >= 64) {
+    return;
+  }
+  const DWORD_PTR mask = static_cast<DWORD_PTR>(1ULL << pick);
+  SetThreadAffinityMask(GetCurrentThread(), mask);
+}
+#else
+inline void pin_worker_to_p_core(int /*worker_index*/) {}
+#endif
+
 }  // namespace
 
-ThreadPool::ThreadPool(int threads) {
+ThreadPool::ThreadPool(int threads, bool pin) {
   size_ = std::max(1, threads);
   workers_.reserve(static_cast<std::size_t>(size_ - 1));
+  // Resolve the P-core list once, here on the constructing thread, and hand
+  // each worker its own copy. Fifteen workers start within microseconds of
+  // each other; letting all of them be the first to touch a lazily-initialized
+  // detection cache is a thundering herd on a static-init guard. Eager init
+  // keeps workers off that path entirely.
+  const std::vector<int> p_cores = pin ? p_core_logicals() : std::vector<int>{};
   for (int index = 0; index < size_ - 1; ++index) {
-    workers_.emplace_back([this] { worker(); });
+    workers_.emplace_back([this, index, pin, p_cores] {
+      if (pin) {
+        pin_worker_to_p_core(p_cores, index);
+      }
+      worker();
+    });
   }
 }
 

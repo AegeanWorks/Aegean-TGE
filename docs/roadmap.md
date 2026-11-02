@@ -53,7 +53,9 @@ Remaining for 0.1:
 - [x] Context selectable up to 32768, default 4096
 - [x] Integer-domain Q8 x Q8 inner loop — measured, no gain, reverted (ADR-0006)
 - [ ] Weight packing and register blocking across output rows for prefill
-- [ ] Fuse QKV and gate/up into single parallel regions to cut per-token barriers
+- [ ] ~~Fuse QKV and gate/up into single parallel regions~~ — DROPPED, not
+  deferred: a fork-join costs ~1–4 µs, so 72 fewer calls save under 0.3 ms
+  per token against ~19 ms of weight streaming. Not worth the code.
 
 ## 0.3 — System RAM and memory manager
 
@@ -84,8 +86,10 @@ Continuous batching, concurrent sessions, speculative decoding, adaptive
 planning.
 
 - [x] Concurrent sessions benchmark; per-session thread pools
-- [x] Prompt-lookup speculative decoding (greedy)
+- [x] Prompt-lookup speculative decoding (greedy, temperature-only sampling,
+  repeat penalty; greedy ids bit-identical, sampled distribution preserved)
 - [x] f16 KV cache (`--kv f16`): KV halved; mean KL 1.658e-6, top-1 497/497, ids identical; speed mixed; opt-in
+- [x] int8 KV cache (`--kv i8`): KV quartered vs f32; mean KL 3.2e-4, top-1 31/31, text identical; +32% 2048 decode on Llama-3B (5.80 -> 7.63 t/s); opt-in
 - [x] Continuous batching: 4 per-sequence KV slots, `forward_batch`, admission; 58.3 vs 42.2 t/s; paged/mixed prefill-decode remains
 - [ ] Prefill-side GQA grouping — rejected: 2048 prefill -5%, decode -13% with the token-outer kernel; 510 prefill +33%; the verifier pins per-head instead
 

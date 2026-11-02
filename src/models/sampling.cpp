@@ -6,6 +6,9 @@
 #include <numeric>
 #include <unordered_set>
 
+#include "tge/core/dispatch.hpp"
+#include "tge/cpu/kernels.hpp"
+
 namespace tge::models {
 namespace {
 
@@ -16,6 +19,8 @@ float next_random(std::uint32_t& state) {
   state ^= state << 5;
   return static_cast<float>(state >> 8) / 16777216.0F;
 }
+
+}  // namespace
 
 void apply_repeat_penalty(std::vector<float>& scores, int count,
                           const SamplingParams& params, const int* history,
@@ -37,11 +42,102 @@ void apply_repeat_penalty(std::vector<float>& scores, int count,
     }
     float& value = scores[static_cast<std::size_t>(token)];
     value = value > 0.0F ? value / params.repeat_penalty
-                         : value * params.repeat_penalty;
+                          : value * params.repeat_penalty;
   }
 }
 
-}  // namespace
+float softmax_probabilities(const float* logits, int count, float temperature,
+                            float* out) {
+  if (logits == nullptr || out == nullptr || count <= 0 ||
+      !(temperature > 0.0F)) {
+    return 0.0F;
+  }
+  // Fidelity note: the AVX2 path changes sampled draws at the ~1e-6 level
+  // (chi-square gated, never bit-identical). Greedy decoding never reaches
+  // here — temperature <= 0 returns upstream — so greedy ids cannot move.
+  const auto features = cpu::detect().features;
+  if (features.avx2 && features.fma) {
+    return cpu::softmax_exp_avx2(logits, count, temperature, out);
+  }
+  return cpu::softmax_exp_scalar(logits, count, temperature, out);
+}
+
+int categorical_sample(const float* probabilities, int count,
+                       std::uint32_t& random_state) {
+  if (probabilities == nullptr || count <= 0) {
+    return 0;
+  }
+  float total = 0.0F;
+  for (int index = 0; index < count; ++index) {
+    total += probabilities[index];
+  }
+  if (!(total > 0.0F)) {
+    return 0;
+  }
+  // Same scan as the no-cut path: walk down from a uniform draw.
+  float target = next_random(random_state) * total;
+  for (int index = 0; index < count; ++index) {
+    target -= probabilities[index];
+    if (target <= 0.0F) {
+      return index;
+    }
+  }
+  return count - 1;
+}
+
+SpeculativeVerdict speculative_accept(const float* probabilities, int count,
+                                      int draft, std::uint32_t& random_state) {
+  SpeculativeVerdict verdict;
+  if (probabilities == nullptr || count <= 0 || draft < 0 ||
+      draft >= count) {
+    return verdict;
+  }
+  float total = 0.0F;
+  for (int index = 0; index < count; ++index) {
+    total += probabilities[index];
+  }
+  if (!(total > 0.0F)) {
+    return verdict;
+  }
+  const float accept = probabilities[draft] / total;
+  if (next_random(random_state) < accept) {
+    verdict.accepted = true;
+    verdict.token = draft;
+    return verdict;
+  }
+  // Rejection: draw from norm(max(0, q - onehot(draft))). With a one-hot
+  // draft distribution every other token keeps its weight; the drafted
+  // token keeps max(0, q[draft] - total) = 0 for normalized inputs, so the
+  // general form below (which also tolerates unnormalized ones) never
+  // returns the draft token after a genuine rejection.
+  float remainder = total - probabilities[draft];
+  if (remainder < 0.0F) {
+    remainder = 0.0F;
+  }
+  if (!(remainder > 0.0F)) {
+    // Degenerate: all mass was on the draft token, yet the draw rejected
+    // (only possible for unnormalized inputs). Fall back to the draft.
+    verdict.accepted = true;
+    verdict.token = draft;
+    return verdict;
+  }
+  float target = next_random(random_state) * remainder;
+  for (int index = 0; index < count; ++index) {
+    float weight = probabilities[index];
+    if (index == draft && weight > total) {
+      weight -= total;
+    } else if (index == draft) {
+      weight = 0.0F;
+    }
+    target -= weight;
+    if (target <= 0.0F) {
+      verdict.token = index;
+      return verdict;
+    }
+  }
+  verdict.token = count - 1 == draft ? 0 : count - 1;
+  return verdict;
+}
 
 int sample_token(const float* logits, int count, const SamplingParams& params,
                  const int* history, int history_size,
@@ -75,27 +171,15 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
 
   // With no cut at all the draw is a plain categorical sample over the whole
   // vocabulary: exponentiate, sum, scan. No ordering is needed, so the
-  // full-vocabulary sort that used to run here disappears.
+  // full-vocabulary sort that used to run here disappears. Shared with the
+  // speculative sampler: same ops in the same order, bit-identical results.
   if (params.top_k <= 0 && params.top_p >= 1.0F && params.min_p <= 0.0F) {
-    float total = 0.0F;
-    for (int index = 0; index < count; ++index) {
-      const float probability = std::exp(
-          (scores[static_cast<std::size_t>(index)] - maximum) *
-          inverse_temperature);
-      scores[static_cast<std::size_t>(index)] = probability;
-      total += probability;
-    }
+    const float total = softmax_probabilities(
+        scores.data(), count, params.temperature, scores.data());
     if (!(total > 0.0F)) {
       return 0;
     }
-    float target = next_random(random_state) * total;
-    for (int index = 0; index < count; ++index) {
-      target -= scores[static_cast<std::size_t>(index)];
-      if (target <= 0.0F) {
-        return index;
-      }
-    }
-    return count - 1;
+    return categorical_sample(scores.data(), count, random_state);
   }
 
   const auto better = [&scores](int left, int right) {

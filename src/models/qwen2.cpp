@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -32,12 +33,46 @@ constexpr int kPrefillChunk = 64;
 // chunks; the scratch is sized for the maximum.
 constexpr int kMaxGqaChunks = 16;
 
-float silu(float value) { return value / (1.0F + std::exp(-value)); }
+/// Quantizes one 32-value KV row slice to int8 with a single float scale.
+/// Same recipe as the Q8 batch path (max / 127, clamped to [-127, 127]) so
+/// the attention kernels share one dequantization idiom.
+inline float quantize_kv_block(const float* source, std::int8_t* destination) {
+  float maximum = 0.0F;
+  for (int index = 0; index < 32; ++index) {
+    const float value = source[index] >= 0.0F ? source[index] : -source[index];
+    maximum = maximum > value ? maximum : value;
+  }
+  const float scale = maximum / 127.0F;
+  const float inverse = scale != 0.0F ? 1.0F / scale : 0.0F;
+  for (int index = 0; index < 32; ++index) {
+    const float scaled = source[index] * inverse;
+    const float rounded = scaled >= 0.0F ? scaled + 0.5F : scaled - 0.5F;
+    const int value = static_cast<int>(rounded);
+    destination[index] = static_cast<std::int8_t>(
+        value > 127 ? 127 : (value < -127 ? -127 : value));
+  }
+  return scale;
+}
+
+/// Writes one position's K and V vectors to the int8 cache with per-32
+/// scales. `slot` is the element offset of the position; the scale slot is
+/// the same offset divided by 32 (kv_dim is always a multiple of 32).
+inline void store_kv_q8(const float* k, const float* v, int kv_dim,
+                        std::size_t slot, std::int8_t* k_out,
+                        std::int8_t* v_out, float* k_scales, float* v_scales) {
+  const int blocks = kv_dim / 32;
+  const std::size_t scale_slot = slot / 32;
+  for (int block = 0; block < blocks; ++block) {
+    k_scales[scale_slot + block] = quantize_kv_block(
+        k + block * 32, k_out + slot + block * 32);
+    v_scales[scale_slot + block] = quantize_kv_block(
+        v + block * 32, v_out + slot + block * 32);
+  }
+}
 
 /// Maps a supported weight type onto the kernel's quant kind. Q8_0 has fused
 /// kernels of its own, so it is not routed through this path.
-bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {
-  switch (type) {
+bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {  switch (type) {
     case gguf::TensorType::Q4_K:
       kind = cpu::QuantKind::Q4_K;
       return true;
@@ -52,6 +87,9 @@ bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {
       return true;
     case gguf::TensorType::Q5_0:
       kind = cpu::QuantKind::Q5_0;
+      return true;
+    case gguf::TensorType::Q5_1:
+      kind = cpu::QuantKind::Q5_1;
       return true;
     default:
       return false;
@@ -80,9 +118,44 @@ Qwen2Config read_config(const gguf::File& file) {
   config.context_length =
       static_cast<int>(file.get_u64(prefix + "context_length", 0));
   config.rms_epsilon = static_cast<float>(
-      file.get_f64(prefix + "layer_norm_rms_epsilon", 1e-6));
+      file.get_f64(prefix + "attention.layer_norm_rms_epsilon", -1.0));
+  if (config.rms_epsilon < 0.0F) {
+    // Older files (and the first Qwen2 exports) name the key without the
+    // `attention.` infix; the value is the same contract either way.
+    config.rms_epsilon = static_cast<float>(
+        file.get_f64(prefix + "layer_norm_rms_epsilon", 1e-6));
+  }
   config.rope_theta =
       static_cast<float>(file.get_f64(prefix + "rope.freq_base", 10000.0));
+  // Interleaved RoPE pairs consecutive elements (ggml NORM); NeoX pairs the
+  // halves. Only families verified against the reference enable it here.
+  std::string arch_lower = architecture;
+  for (char& letter : arch_lower) {
+    letter =
+        static_cast<char>(std::tolower(static_cast<unsigned char>(letter)));
+  }
+  config.rope_interleaved = arch_lower.find("llama") != std::string::npos;
+
+  // YaRN magnitude scale (`rope.scaling.attn_factor`, Phi-3's 1.19024):
+  // the reference multiplies every cos/sin entry by it. Absent key means
+  // 1.0, which leaves every existing model bit-identical.
+  config.rope_attn_factor = static_cast<float>(
+      file.get_f64(prefix + "rope.scaling.attn_factor", 1.0));
+  // Long/short factor selection pivots on the original context length;
+  // 0 falls back to the file context at load, mirroring n_ctx_train.
+  config.rope_orig_context = static_cast<int>(
+      file.get_u64(prefix + "rope.scaling.original_context_length", 0));
+
+  // Only the no-blend scalings run here: linear, su/longrope (explicit
+  // per-dim factors, possibly absent), or no key at all. Classic YaRN
+  // interpolation blending (ext_factor) has no path yet and stops loudly
+  // instead of running unblended.
+  const std::string scaling_type =
+      file.get_string(prefix + "rope.scaling.type", "");
+  if (!scaling_type.empty() && scaling_type != "linear" &&
+      scaling_type != "su" && scaling_type != "longrope") {
+    throw std::runtime_error("unsupported rope scaling type: " + scaling_type);
+  }
 
   // The tokenizer metadata names the ids that end a sequence. A file without
   // them keeps -1, which never matches a real token.
@@ -140,17 +213,39 @@ Qwen2Config read_config(const gguf::File& file) {
         "attention head count is not a multiple of the KV head count");
   }
 
-  // The vocabulary size is the output projection's row count.
+  // A file that rotates only part of each head (a `rope.dimension_count`
+  // below the head width) would silently mis-rotate under the full-head
+  // tables built at load. Every file seen so far rotates the whole head;
+  // anything else stops here until a partial-RoPE path exists.
+  const int rope_dim = static_cast<int>(
+      file.get_u64(prefix + "rope.dimension_count", 0));
+  if (rope_dim > 0 && rope_dim != config.head_dim) {
+    throw std::runtime_error("partial RoPE is not supported");
+  }
+
+  // YaRN factor tables ride along in phi3 files. The tables are recorded so
+  // a later long-context path can price them; short runs ignore them the
+  // same way the harness prices every other unapplied trade.
+  config.has_yarn_factors =
+      file.tensor("rope_factors_short.weight") != nullptr ||
+      file.tensor("rope_factors_long.weight") != nullptr;
+
+  // The vocabulary size is the output projection's row count. With tied
+  // word embeddings there is no output tensor, so fall back to the
+  // embedding table's row count (same layout, verified row-per-token).
   if (const gguf::TensorInfo* output = file.tensor("output.weight");
       output != nullptr && output->shape.size() == 2) {
     config.vocab_size = static_cast<int>(output->shape[1]);
+  } else if (const gguf::TensorInfo* embd = file.tensor("token_embd.weight");
+             embd != nullptr && embd->shape.size() == 2) {
+    config.vocab_size = static_cast<int>(embd->shape[1]);
   }
   return config;
 }
 
 std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                                    int context_limit, bool eager_vocabulary,
-                                   bool kv_half, int sequences) {
+                                   bool kv_half, bool kv_q8, int sequences) {
   std::unique_ptr<Qwen2> model(new Qwen2());
   try {
     // The body needs no metadata arrays; building the vocabulary here would cost
@@ -160,7 +255,15 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     Qwen2Config& config = model->config_;
 
     model->token_embd_ = model->matrix("token_embd.weight");
-    model->output_ = model->matrix("output.weight");
+    if (model->file_.tensor("output.weight") != nullptr) {
+      model->output_ = model->matrix("output.weight");
+    } else {
+      // Tied word embeddings (e.g. Llama-3.2): the file ships no separate
+      // output projection and the token embedding rows double as output
+      // rows. GGUF stores embeddings row-per-token, exactly the layout the
+      // output matvec expects, so the matrix aliases the same bytes.
+      model->output_ = model->token_embd_;
+    }
     model->output_norm_ = model->vector("output_norm.weight",
                                         config.embedding_length);
 
@@ -195,20 +298,80 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                                       config.embedding_length);
       layer.ffn_norm = model->vector(make("ffn_norm.weight").c_str(),
                                      config.embedding_length);
-      layer.wq = model->matrix(make("attn_q.weight").c_str());
-      layer.wk = model->matrix(make("attn_k.weight").c_str());
-      layer.wv = model->matrix(make("attn_v.weight").c_str());
+      if (model->file_.tensor(make("attn_q.weight").c_str()) != nullptr) {
+        layer.wq = model->matrix(make("attn_q.weight").c_str());
+        layer.wk = model->matrix(make("attn_k.weight").c_str());
+        layer.wv = model->matrix(make("attn_v.weight").c_str());
+      } else {
+        // Phi-3 fuses the triple: one `attn_qkv` tensor holds the query rows,
+        // then the key rows, then the value rows. The query block is a full
+        // embedding wide; each key/value block is one KV group wide. The
+        // split is by construction, so a fused tensor of any other geometry
+        // stops the load instead of running mis-sliced.
+        const std::string fused = make("attn_qkv.weight");
+        const gguf::TensorInfo* fused_info = model->file_.tensor(fused);
+        if (fused_info == nullptr || fused_info->shape.size() != 2 ||
+            static_cast<int>(fused_info->shape[0]) != config.embedding_length ||
+            static_cast<int>(fused_info->shape[1]) !=
+                config.embedding_length + 2 * config.kv_dim()) {
+          throw std::runtime_error(
+              "block " + std::to_string(index) +
+              " has neither attn_q.weight nor a fused attn_qkv.weight");
+        }
+        layer.wq =
+            model->matrix_slice(fused.c_str(), 0, config.embedding_length);
+        layer.wk = model->matrix_slice(fused.c_str(), config.embedding_length,
+                                       config.kv_dim());
+        layer.wv = model->matrix_slice(
+            fused.c_str(), config.embedding_length + config.kv_dim(),
+            config.kv_dim());
+      }
       layer.wo = model->matrix(make("attn_output.weight").c_str());
-      layer.w_gate = model->matrix(make("ffn_gate.weight").c_str());
-      layer.w_up = model->matrix(make("ffn_up.weight").c_str());
+      if (model->file_.tensor(make("ffn_gate.weight").c_str()) != nullptr) {
+        layer.w_gate = model->matrix(make("ffn_gate.weight").c_str());
+        layer.w_up = model->matrix(make("ffn_up.weight").c_str());
+      } else {
+        // Phi-3 fuses the pair: one `ffn_up` tensor holds the gate rows
+        // followed by the up rows (the HuggingFace `gate_up_proj` order the
+        // GGUF converter preserves). Anything that is not exactly two
+        // feed-forward blocks stops here instead of guessing.
+        const std::string fused = make("ffn_up.weight");
+        const gguf::TensorInfo* fused_info = model->file_.tensor(fused);
+        if (fused_info == nullptr || fused_info->shape.size() != 2 ||
+            static_cast<int>(fused_info->shape[1]) !=
+                2 * config.feed_forward_length) {
+          throw std::runtime_error(
+              "block " + std::to_string(index) +
+              " has neither ffn_gate.weight nor a fused ffn_up.weight");
+        }
+        layer.w_gate = model->matrix_slice(fused.c_str(), 0,
+                                          config.feed_forward_length);
+        layer.w_up = model->matrix_slice(fused.c_str(),
+                                        config.feed_forward_length,
+                                        config.feed_forward_length);
+      }
       layer.w_down = model->matrix(make("ffn_down.weight").c_str());
 
-      layer.q_bias = model->vector(make("attn_q.bias").c_str(),
-                                   config.embedding_length);
-      layer.k_bias = model->vector(make("attn_k.bias").c_str(),
-                                   config.kv_dim());
-      layer.v_bias = model->vector(make("attn_v.bias").c_str(),
-                                   config.kv_dim());
+      // QKV bias is optional: older files (e.g. Llama-3.2) omit it, in which
+      // case every layer shares one zero vector instead of faulting.
+      // Reading through the same pointers keeps the hot loops branch-free.
+      if (model->file_.tensor(make("attn_q.bias").c_str()) != nullptr) {
+        layer.q_bias = model->vector(make("attn_q.bias").c_str(),
+                                     config.embedding_length);
+        layer.k_bias = model->vector(make("attn_k.bias").c_str(),
+                                     config.kv_dim());
+        layer.v_bias = model->vector(make("attn_v.bias").c_str(),
+                                     config.kv_dim());
+      } else {
+        if (model->zero_bias_.size() !=
+            static_cast<std::size_t>(config.embedding_length)) {
+          model->zero_bias_.assign(
+              static_cast<std::size_t>(config.embedding_length), 0.0F);
+        }
+        layer.q_bias = model->zero_bias_.data();
+        layer.k_bias = model->zero_bias_.data();
+        layer.v_bias = model->zero_bias_.data();
+      }
     }
 
     const int dim = config.embedding_length;
@@ -218,9 +381,15 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
         static_cast<std::size_t>(model->sequence_count_) *
         static_cast<std::size_t>(config.block_count) * model->context_ * kv_dim;
     model->kv_half_ = kv_half;
+    model->kv_q8_ = kv_q8 && !kv_half;
     if (kv_half) {
       model->k_cache_half_.assign(cache_elements, 0);
       model->v_cache_half_.assign(cache_elements, 0);
+    } else if (model->kv_q8_) {
+      model->k_cache_q8_.assign(cache_elements, 0);
+      model->v_cache_q8_.assign(cache_elements, 0);
+      model->k_cache_q8_scales_.assign(cache_elements / 32, 0.0F);
+      model->v_cache_q8_scales_.assign(cache_elements / 32, 0.0F);
     } else {
       model->k_cache_.assign(cache_elements, 0.0F);
       model->v_cache_.assign(cache_elements, 0.0F);
@@ -247,10 +416,11 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
         0.0F);
     const std::size_t prefill_rows = static_cast<std::size_t>(
         std::min(kPrefillChunk, model->context_));
-    // Attention writes one score slice per parallel task: one per query head
-    // for decode, one per chunk token for prefill.
+    // Attention writes one score slice per parallel task. Decode uses one
+    // per query head; prefill uses one per (chunk token, head) so short
+    // prompts still fill the pool (4 tokens x 14 heads = 56 tasks).
     const std::size_t score_rows =
-        std::max(static_cast<std::size_t>(config.head_count), prefill_rows);
+        prefill_rows * static_cast<std::size_t>(config.head_count);
     model->scores_.assign(score_rows * static_cast<std::size_t>(model->context_),
                           0.0F);
     const int kv_heads = config.head_count_kv;
@@ -285,19 +455,68 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                    -2.0F * static_cast<float>(index) /
                        static_cast<float>(config.head_dim));
     }
+
+    // YaRN per-dim factors, mirroring get_rope_factors: the long set serves
+    // runs past the original context length, the short set everything below
+    // it — and a missing selected set means all-ones, even when the other
+    // exists. The Phi export carries neither per-block tensor, so both
+    // paths are standard angles; only the magnitude scale below applies.
+    {
+      const int orig_ctx = config.rope_orig_context > 0
+                               ? config.rope_orig_context
+                               : config.context_length;
+      char probe[96];
+      std::snprintf(probe, sizeof(probe), "blk.0.rope_factors_%s.weight",
+                    model->context_ > orig_ctx ? "long" : "short");
+      const gguf::TensorInfo* factors = model->file_.tensor(probe);
+      if (factors != nullptr) {
+        if (factors->type != gguf::TensorType::F32 ||
+            static_cast<int>(factors->elements) != half) {
+          throw std::runtime_error(
+              std::string("wrong shape for YaRN factors: ") + probe);
+        }
+        const float* values = reinterpret_cast<const float*>(
+            model->file_.tensor_data(*factors));
+        for (int index = 0; index < half; ++index) {
+          if (values[index] <= 0.0F) {
+            throw std::runtime_error(
+                std::string("non-positive YaRN factor: ") + probe);
+          }
+          frequencies[static_cast<std::size_t>(index)] /= values[index];
+        }
+      }
+    }
+
     model->rope_cos_.resize(static_cast<std::size_t>(model->context_) *
                             static_cast<std::size_t>(half));
     model->rope_sin_.resize(model->rope_cos_.size());
+    // Duplicated copies for the interleaved AVX2 kernel: each coefficient
+    // twice in a row so one vector load covers 4 consecutive pairs.
+    model->rope_cos_dup_.resize(model->rope_cos_.size() * 2);
+    model->rope_sin_dup_.resize(model->rope_cos_.size() * 2);
     for (int position = 0; position < model->context_; ++position) {
       const std::size_t base =
           static_cast<std::size_t>(position) * static_cast<std::size_t>(half);
       for (int index = 0; index < half; ++index) {
+        // YaRN magnitude scale: the reference multiplies every table entry
+        // by attn_factor (Phi-3's 1.19024), which sharpens attention by its
+        // square. 1.0 on every other file, so the multiply is free there.
         const float angle = static_cast<float>(position) *
                             frequencies[static_cast<std::size_t>(index)];
-        model->rope_cos_[base + static_cast<std::size_t>(index)] =
-            std::cos(angle);
-        model->rope_sin_[base + static_cast<std::size_t>(index)] =
-            std::sin(angle);
+        const float cosine =
+            std::cos(angle) * config.rope_attn_factor;
+        const float sine =
+            std::sin(angle) * config.rope_attn_factor;
+        model->rope_cos_[base + static_cast<std::size_t>(index)] = cosine;
+        model->rope_sin_[base + static_cast<std::size_t>(index)] = sine;
+        model->rope_cos_dup_[(base + static_cast<std::size_t>(index)) * 2] =
+            cosine;
+        model->rope_cos_dup_[(base + static_cast<std::size_t>(index)) * 2 + 1] =
+            cosine;
+        model->rope_sin_dup_[(base + static_cast<std::size_t>(index)) * 2] =
+            sine;
+        model->rope_sin_dup_[(base + static_cast<std::size_t>(index)) * 2 + 1] =
+            sine;
       }
     }
 
@@ -320,17 +539,48 @@ void Qwen2::set_threads(int threads) {
 core::ThreadPool& Qwen2::decode_pool() const {
   if (!decode_pool_) {
     const int size = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
-    decode_pool_ = std::make_unique<core::ThreadPool>(size);
+    decode_pool_ = std::make_unique<core::ThreadPool>(size, pin_threads_);
   }
   return *decode_pool_;
 }
 
 core::ThreadPool& Qwen2::prefill_pool() const {
   if (!prefill_pool_) {
-    const int size = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
-    prefill_pool_ = std::make_unique<core::ThreadPool>(size);
+    prefill_pool_ =
+        std::make_unique<core::ThreadPool>(prefill_threads(), false);
   }
   return *prefill_pool_;
+}
+
+int Qwen2::prefill_threads() const {
+  if (prefill_threads_override_ > 0) {
+    return prefill_threads_override_;
+  }
+  const int hw = cpu::resolve_thread_count(0);
+  // Phase-specific plan: prefill is compute-bound, so it takes every logical
+  // core even when the user asked decode down to a few threads for the
+  // bandwidth wall. Unpinned: E-cores contribute throughput here and the
+  // dynamic work-stealing absorbs their slower pace.
+  if (threads_ > 0) {
+    return std::max(threads_, hw);
+  }
+  return hw;
+}
+
+void Qwen2::set_prefill_threads(int threads) {
+  if (threads == prefill_threads_override_ && prefill_pool_) {
+    return;
+  }
+  prefill_threads_override_ = threads;
+  prefill_pool_.reset();
+}
+
+void Qwen2::set_pin_threads(bool pin) {
+  if (pin == pin_threads_ && decode_pool_) {
+    return;
+  }
+  pin_threads_ = pin;
+  decode_pool_.reset();
 }
 
 Qwen2::Matrix Qwen2::matrix(const char* name) const {
@@ -355,6 +605,55 @@ Qwen2::Matrix Qwen2::matrix(const char* name) const {
   // The Q8 kernel works in whole 32-element blocks and the K-quants in whole
   // 256-element super-blocks; a row that is not a multiple would silently lose
   // its tail.
+  const int block = gguf::type_block_size(result.type);
+  if (block == 0 || result.cols % block != 0) {
+    throw std::runtime_error(std::string("row width is not a whole ") +
+                             gguf::type_name(result.type) + " block: " + name);
+  }
+  return result;
+}
+
+Qwen2::Matrix Qwen2::matrix_slice(const char* name, int row_begin,
+                                  int rows) const {
+  const gguf::TensorInfo* info = file_.tensor(name);
+  if (info == nullptr) {
+    throw std::runtime_error(std::string("missing tensor ") + name);
+  }
+  if (!gguf::type_supported(info->type)) {
+    throw std::runtime_error(std::string("unsupported type for ") + name + ": " +
+                             gguf::type_name(info->type));
+  }
+  if (info->shape.size() != 2) {
+    throw std::runtime_error(std::string("tensor is not a matrix: ") + name);
+  }
+  const int total_rows = static_cast<int>(info->shape[1]);
+  if (row_begin < 0 || rows <= 0 || row_begin + rows > total_rows) {
+    throw std::runtime_error(std::string("row slice is out of range: ") + name);
+  }
+
+  Matrix result;
+  result.cols = static_cast<int>(info->shape[0]);
+  result.rows = rows;
+  result.type = info->type;
+  // Row stride mirrors the kernels: Q8_0 has no QuantKind mapping (its fused
+  // kernels stand alone), F32 is dense, and the K-quants share one helper.
+  std::size_t row_bytes = 0;
+  if (result.type == gguf::TensorType::F32) {
+    row_bytes = static_cast<std::size_t>(result.cols) * sizeof(float);
+  } else if (result.type == gguf::TensorType::Q8_0) {
+    row_bytes = static_cast<std::size_t>(result.cols / cpu::kQ8BlockElements) *
+                cpu::kQ8BlockBytes;
+  } else {
+    cpu::QuantKind kind;
+    if (!to_quant_kind(result.type, kind)) {
+      throw std::runtime_error(std::string("unsupported type for ") + name +
+                               ": " + gguf::type_name(result.type));
+    }
+    row_bytes = cpu::quant_row_bytes(kind, result.cols);
+  }
+  result.data = file_.tensor_data(*info) +
+                static_cast<std::size_t>(row_begin) * row_bytes;
+
   const int block = gguf::type_block_size(result.type);
   if (block == 0 || result.cols % block != 0) {
     throw std::runtime_error(std::string("row width is not a whole ") +
@@ -444,8 +743,8 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     return;
   }
   // Prompt processing is compute-bound, so it takes every logical processor
-  // rather than the smaller decode pool.
-  const int workers = threads_ > 0 ? threads_ : cpu::resolve_thread_count(0);
+  // rather than the smaller decode pool (see prefill_threads()).
+  const int workers = prefill_threads();
   const cpu::GemvConfig config{workers, &prefill_pool()};
 
   if (weight.type == gguf::TensorType::Q8_0) {
@@ -561,36 +860,43 @@ void Qwen2::dequant_row(const Matrix& weight, int row, float* output) const {
 
 void Qwen2::rms_norm(float* out, const float* in, const float* weight) const {
   const int dim = config_.embedding_length;
-  float sum = 0.0F;
-  for (int index = 0; index < dim; ++index) {
-    sum += in[index] * in[index];
+  const auto features = cpu::detect().features;
+  if (!scalar_kernels_ && features.avx2 && features.fma) {
+    cpu::rms_norm_avx2(out, in, weight, dim, config_.rms_epsilon);
+    return;
   }
-  const float scale = 1.0F / std::sqrt(sum / static_cast<float>(dim) +
-                                       config_.rms_epsilon);
-  for (int index = 0; index < dim; ++index) {
-    out[index] = in[index] * scale * weight[index];
-  }
+  cpu::rms_norm_scalar(out, in, weight, dim, config_.rms_epsilon);
 }
 
 void Qwen2::apply_rope(float* values, int heads, int position) const {
   const int half = config_.head_dim / 2;
   const std::size_t base =
       static_cast<std::size_t>(position) * static_cast<std::size_t>(half);
+  const auto features = cpu::detect().features;
+  const bool vectorise = !scalar_kernels_ && features.avx2 && features.fma;
+  if (config_.rope_interleaved) {
+    // Llama-style consecutive pairs; the duplicated tables hold each
+    // coefficient twice so one vector load covers four pairs.
+    const float* cosines = rope_cos_dup_.data() + base * 2;
+    const float* sines = rope_sin_dup_.data() + base * 2;
+    if (vectorise) {
+      cpu::apply_rope_interleaved_avx2(values, heads, config_.head_dim,
+                                       position, cosines, sines);
+      return;
+    }
+    cpu::apply_rope_interleaved_scalar(values, heads, config_.head_dim,
+                                       position, cosines, sines);
+    return;
+  }
   const float* cosines = rope_cos_.data() + base;
   const float* sines = rope_sin_.data() + base;
-  for (int head = 0; head < heads; ++head) {
-    float* vector = values + static_cast<std::size_t>(head) * config_.head_dim;
-    for (int index = 0; index < half; ++index) {
-      const float cosine = cosines[index];
-      const float sine = sines[index];
-      // Qwen2 rotates the first half of the head against the second half
-      // (NeoX layout), not adjacent pairs.
-      const float low = vector[index];
-      const float high = vector[index + half];
-      vector[index] = low * cosine - high * sine;
-      vector[index + half] = low * sine + high * cosine;
-    }
+  if (vectorise) {
+    cpu::apply_rope_avx2(values, heads, config_.head_dim, position, cosines,
+                         sines);
+    return;
   }
+  cpu::apply_rope_scalar(values, heads, config_.head_dim, position, cosines,
+                         sines);
 }
 
 void Qwen2::attention_head(int sequence, int layer, int position, int head,
@@ -613,6 +919,14 @@ void Qwen2::attention_head(int sequence, int layer, int position, int head,
     args.half = true;
     args.keys_half = k_cache_half_.data() + layer_base + kv_head_offset;
     args.values_half = v_cache_half_.data() + layer_base + kv_head_offset;
+  } else if (kv_q8_) {
+    args.q8 = true;
+    args.keys_q8 = k_cache_q8_.data() + layer_base + kv_head_offset;
+    args.values_q8 = v_cache_q8_.data() + layer_base + kv_head_offset;
+    args.keys_q8_scales = k_cache_q8_scales_.data() +
+                          (layer_base + kv_head_offset) / 32;
+    args.values_q8_scales = v_cache_q8_scales_.data() +
+                            (layer_base + kv_head_offset) / 32;
   } else {
     args.keys = k_cache_.data() + layer_base + kv_head_offset;
     args.values = v_cache_.data() + layer_base + kv_head_offset;
@@ -711,6 +1025,16 @@ void Qwen2::attention_gqa(int sequence, int layer, int position,
           k_cache_half_.data() + layer_base + head_offset + row_offset;
       args.values_half =
           v_cache_half_.data() + layer_base + head_offset + row_offset;
+    } else if (kv_q8_) {
+      args.q8 = true;
+      args.keys_q8 =
+          k_cache_q8_.data() + layer_base + head_offset + row_offset;
+      args.values_q8 =
+          v_cache_q8_.data() + layer_base + head_offset + row_offset;
+      args.keys_q8_scales = k_cache_q8_scales_.data() +
+                            (layer_base + head_offset + row_offset) / 32;
+      args.values_q8_scales = v_cache_q8_scales_.data() +
+                              (layer_base + head_offset + row_offset) / 32;
     } else {
       args.keys = k_cache_.data() + layer_base + head_offset + row_offset;
       args.values = v_cache_.data() + layer_base + head_offset + row_offset;
@@ -797,24 +1121,47 @@ void Qwen2::merge_gqa_chunks(const float* maxima, const float* sums,
 }
 
 void Qwen2::attention_batch(int sequence, int layer, int start_position,
-                            int tokens) {
+                             int tokens) {
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int dim = config_.embedding_length;
 
   core::ThreadPool& pool = prefill_pool();
-  pool.parallel_for(tokens, 1, [&](int token) {
+  const int workers = prefill_threads();
+  // Short prompts leave workers idle when parallelising over tokens alone
+  // (4 tokens on 6 workers). Split to token x head so every worker has work;
+  // each task gets its own score slice. Long prompts keep the token path so
+  // the task count stays small.
+  if (tokens >= workers) {
+    pool.parallel_for(tokens, 1, [&](int token) {
+      const int position = start_position + token;
+      const float* queries =
+          batch_q_.data() + static_cast<std::size_t>(token) * dim;
+      float* out = batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+      for (int head = 0; head < heads; ++head) {
+        float* scores = scores_.data() +
+                        (static_cast<std::size_t>(token) * heads + head) *
+                            context_;
+        attention_head(sequence, layer, position, head,
+                       queries + static_cast<std::size_t>(head) * head_dim,
+                       out + static_cast<std::size_t>(head) * head_dim, scores);
+      }
+    });
+    return;
+  }
+  pool.parallel_for(tokens * heads, 1, [&](int task) {
+    const int token = task / heads;
+    const int head = task % heads;
     const int position = start_position + token;
     const float* queries =
         batch_q_.data() + static_cast<std::size_t>(token) * dim;
     float* out = batch_attn_.data() + static_cast<std::size_t>(token) * dim;
-    float* scores =
-        scores_.data() + static_cast<std::size_t>(token) * context_;
-    for (int head = 0; head < heads; ++head) {
-      attention_head(sequence, layer, position, head,
-                     queries + static_cast<std::size_t>(head) * head_dim,
-                     out + static_cast<std::size_t>(head) * head_dim, scores);
-    }
+    float* scores = scores_.data() +
+                    (static_cast<std::size_t>(token) * heads + head) *
+                        context_;
+    attention_head(sequence, layer, position, head,
+                   queries + static_cast<std::size_t>(head) * head_dim,
+                   out + static_cast<std::size_t>(head) * head_dim, scores);
   });
 }
 
@@ -898,6 +1245,10 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
           k_out[axis] = cpu::float_to_half(k[axis]);
           v_out[axis] = cpu::float_to_half(v[axis]);
         }
+      } else if (kv_q8_) {
+        store_kv_q8(k, v, kv_dim, slot, k_cache_q8_.data(),
+                    v_cache_q8_.data(), k_cache_q8_scales_.data(),
+                    v_cache_q8_scales_.data());
       } else {
         std::memcpy(k_cache_.data() + slot, k,
                     sizeof(float) * static_cast<std::size_t>(kv_dim));
@@ -906,21 +1257,43 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
       }
     }
 
-    for (int token = 0; token < count; ++token) {
-      const int position = positions[token];
-      const int sequence = sequences[token];
-      const float* q =
-          batch_q_.data() + static_cast<std::size_t>(token) * dim;
-      float* out =
-          batch_attn_.data() + static_cast<std::size_t>(token) * dim;
-      float* scores =
-          scores_.data() + static_cast<std::size_t>(token) * context_;
-      for (int head = 0; head < heads; ++head) {
+    core::ThreadPool& attn_pool = prefill_pool();
+    const int attn_workers = prefill_threads();
+    if (count >= attn_workers) {
+      attn_pool.parallel_for(count, 1, [&](int token) {
+        const int position = positions[token];
+        const int sequence = sequences[token];
+        const float* q =
+            batch_q_.data() + static_cast<std::size_t>(token) * dim;
+        float* out =
+            batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+        for (int head = 0; head < heads; ++head) {
+          float* scores = scores_.data() +
+                          (static_cast<std::size_t>(token) * heads + head) *
+                              context_;
+          attention_head(sequence, index, position, head,
+                         q + static_cast<std::size_t>(head) * head_dim,
+                         out + static_cast<std::size_t>(head) * head_dim,
+                         scores);
+        }
+      });
+    } else {
+      attn_pool.parallel_for(count * heads, 1, [&](int task) {
+        const int token = task / heads;
+        const int head = task % heads;
+        const int position = positions[token];
+        const int sequence = sequences[token];
+        const float* q =
+            batch_q_.data() + static_cast<std::size_t>(token) * dim;
+        float* out =
+            batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+        float* scores = scores_.data() +
+                        (static_cast<std::size_t>(token) * heads + head) *
+                            context_;
         attention_head(sequence, index, position, head,
                        q + static_cast<std::size_t>(head) * head_dim,
-                       out + static_cast<std::size_t>(head) * head_dim,
-                       scores);
-      }
+                       out + static_cast<std::size_t>(head) * head_dim, scores);
+      });
     }
 
     const cpu::Q8Quantized q_attn_out =
@@ -951,8 +1324,15 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
                  vnni_ ? &q_ffn : nullptr);
     const std::size_t activation_elements =
         static_cast<std::size_t>(count) * static_cast<std::size_t>(ffn);
-    for (std::size_t position = 0; position < activation_elements; ++position) {
-      batch_gate_[position] = silu(batch_gate_[position]) * batch_up_[position];
+    {
+      const auto features = cpu::detect().features;
+      if (!scalar_kernels_ && features.avx2 && features.fma) {
+        cpu::silu_gated_avx2(batch_gate_.data(), batch_up_.data(),
+                             static_cast<int>(activation_elements));
+      } else {
+        cpu::silu_gated_scalar(batch_gate_.data(), batch_up_.data(),
+                               static_cast<int>(activation_elements));
+      }
     }
 
     const cpu::Q8Quantized q_down =
@@ -1031,6 +1411,10 @@ const float* Qwen2::forward(int token, int position) {
         k_out[axis] = cpu::float_to_half(k_[static_cast<std::size_t>(axis)]);
         v_out[axis] = cpu::float_to_half(v_[static_cast<std::size_t>(axis)]);
       }
+    } else if (kv_q8_) {
+      store_kv_q8(k_.data(), v_.data(), kv_dim, slot, k_cache_q8_.data(),
+                  v_cache_q8_.data(), k_cache_q8_scales_.data(),
+                  v_cache_q8_scales_.data());
     } else {
       std::memcpy(k_cache_.data() + slot, k_.data(),
                   sizeof(float) * static_cast<std::size_t>(kv_dim));
@@ -1054,9 +1438,13 @@ const float* Qwen2::forward(int token, int position) {
     const cpu::Q8Quantized* q_ffn_ptr = vnni_ ? &q_ffn : nullptr;
     matvec(layer.w_gate, h_.data(), gate_.data(), q_ffn_ptr);
     matvec(layer.w_up, h_.data(), up_.data(), q_ffn_ptr);
-    for (int axis = 0; axis < ffn; ++axis) {
-      gate_[static_cast<std::size_t>(axis)] =
-          silu(gate_[static_cast<std::size_t>(axis)]) * up_[axis];
+    {
+      const auto features = cpu::detect().features;
+      if (!scalar_kernels_ && features.avx2 && features.fma) {
+        cpu::silu_gated_avx2(gate_.data(), up_.data(), ffn);
+      } else {
+        cpu::silu_gated_scalar(gate_.data(), up_.data(), ffn);
+      }
     }
     const cpu::Q8Quantized q_down =
         vnni_ ? quantize_activations(gate_.data(), 1, ffn) : cpu::Q8Quantized{};
@@ -1162,6 +1550,10 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
             k_out[axis] = cpu::float_to_half(k[axis]);
             v_out[axis] = cpu::float_to_half(v[axis]);
           }
+        } else if (kv_q8_) {
+          store_kv_q8(k, v, kv_dim, slot, k_cache_q8_.data(),
+                      v_cache_q8_.data(), k_cache_q8_scales_.data(),
+                      v_cache_q8_scales_.data());
         } else {
           std::memcpy(k_cache_.data() + slot, k,
                       sizeof(float) * static_cast<std::size_t>(kv_dim));
@@ -1205,8 +1597,15 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                    q_ffn_ptr);
       const std::size_t activation_elements =
           static_cast<std::size_t>(chunk) * static_cast<std::size_t>(ffn);
-      for (std::size_t position = 0; position < activation_elements; ++position) {
-        batch_gate_[position] = silu(batch_gate_[position]) * batch_up_[position];
+      {
+        const auto features = cpu::detect().features;
+        if (!scalar_kernels_ && features.avx2 && features.fma) {
+          cpu::silu_gated_avx2(batch_gate_.data(), batch_up_.data(),
+                               static_cast<int>(activation_elements));
+        } else {
+          cpu::silu_gated_scalar(batch_gate_.data(), batch_up_.data(),
+                                 static_cast<int>(activation_elements));
+        }
       }
 
       const cpu::Q8Quantized q_down =
@@ -1257,32 +1656,46 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
 }
 
 int Qwen2::verify_draft(const int* tokens, int count, int start_position,
-                        int* predicted) {
-  if (tokens == nullptr || predicted == nullptr || count <= 0 ||
-      count > kSpeculativeBatch) {
+                         int* predicted) {
+  if (tokens == nullptr || predicted == nullptr) {
     throw std::runtime_error("verify_draft: invalid draft");
+  }
+  // Single verification path: the logits form computes the same batched pass,
+  // and argmax over its rows is exactly what this entry point always did.
+  const float* rows = verify_draft_logits(tokens, count, start_position);
+  for (int token = 0; token < count; ++token) {
+    predicted[token] = argmax(
+        rows + static_cast<std::size_t>(token) * config_.vocab_size,
+        config_.vocab_size);
+  }
+  return count;
+}
+
+const float* Qwen2::verify_draft_logits(const int* tokens, int count,
+                                        int start_position) {
+  if (tokens == nullptr || count <= 0 || count > kSpeculativeBatch) {
+    throw std::runtime_error("verify_draft_logits: invalid draft");
   }
   const std::size_t required =
       static_cast<std::size_t>(count) *
       static_cast<std::size_t>(config_.vocab_size);
   if (verify_logits_.size() < required) {
-    throw std::runtime_error("verify_draft: logits scratch is too small");
+    throw std::runtime_error("verify_draft_logits: logits scratch is too small");
   }
 
   prefill_run(tokens, count, start_position, verify_logits_.data(), 0);
-  for (int token = 0; token < count; ++token) {
-    predicted[token] = argmax(
-        verify_logits_.data() +
-            static_cast<std::size_t>(token) * config_.vocab_size,
-        config_.vocab_size);
-  }
-  return count;
+  return verify_logits_.data();
 }
 
 void Qwen2::reset_cache() {
   if (kv_half_) {
     std::fill(k_cache_half_.begin(), k_cache_half_.end(), 0);
     std::fill(v_cache_half_.begin(), v_cache_half_.end(), 0);
+  } else if (kv_q8_) {
+    std::fill(k_cache_q8_.begin(), k_cache_q8_.end(), 0);
+    std::fill(v_cache_q8_.begin(), v_cache_q8_.end(), 0);
+    std::fill(k_cache_q8_scales_.begin(), k_cache_q8_scales_.end(), 0.0F);
+    std::fill(v_cache_q8_scales_.begin(), v_cache_q8_scales_.end(), 0.0F);
   } else {
     std::fill(k_cache_.begin(), k_cache_.end(), 0.0F);
     std::fill(v_cache_.begin(), v_cache_.end(), 0.0F);

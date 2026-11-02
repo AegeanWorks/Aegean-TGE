@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "harness.hpp"
+#include "tge/cpu/kernels.hpp"
 #include "tge/models/sampling.hpp"
 
 namespace {
@@ -177,4 +178,143 @@ TGE_TEST(sampling_top_p_lowers_the_floor_for_its_nucleus) {
   TGE_CHECK(counts[8] == 0);
   TGE_CHECK_NEAR(static_cast<double>(counts[0]) / draws, 0.20 / 0.94, 0.01);
   TGE_CHECK_NEAR(static_cast<double>(counts[6]) / draws, 0.06 / 0.94, 0.01);
+}
+
+TGE_TEST(softmax_helper_matches_hand_computation) {
+  // Engine convention (shared with the no-cut path): out holds the raw
+  // exp((v - max) / T) values and the return is their sum; callers
+  // normalize by the sum instead of paying a second pass.
+  const float logits[3] = {1.0F, 2.0F, 3.0F};
+  float probs[3] = {0.0F, 0.0F, 0.0F};
+  const float total = tge::models::softmax_probabilities(logits, 3, 1.0F, probs);
+  const double e0 = std::exp(-2.0);
+  const double e1 = std::exp(-1.0);
+  const double e2 = 1.0;
+  const double sum = e0 + e1 + e2;
+  TGE_CHECK_NEAR(probs[0], e0, 1e-6);
+  TGE_CHECK_NEAR(probs[1], e1, 1e-6);
+  TGE_CHECK_NEAR(probs[2], e2, 1e-6);
+  TGE_CHECK_NEAR(total, sum, 1e-5);
+}
+
+TGE_TEST(categorical_sample_matches_no_cut_scan) {
+  // Same probabilities through both doors, same seed: identical draws, so
+  // the extraction did not disturb the no-cut path it shares code with.
+  const float logits[4] = {0.5F, 3.25F, -1.0F, 2.0F};
+  tge::models::SamplingParams params;
+  params.temperature = 1.0F;
+
+  Scratch via_sampler;
+  via_sampler.state = 424242u;
+  float probs[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+  tge::models::softmax_probabilities(logits, 4, 1.0F, probs);
+  std::uint32_t direct_state = 424242u;
+  for (int step = 0; step < 32; ++step) {
+    const int expected = draw(via_sampler, logits, 4, params);
+    const int direct =
+        tge::models::categorical_sample(probs, 4, direct_state);
+    TGE_CHECK(direct == expected);
+  }
+}
+
+TGE_TEST(speculative_accept_rate_matches_draft_probability) {
+  // q[draft] = 0.35: about 35% of trials accept, within statistical noise.
+  const float probs[4] = {0.35F, 0.30F, 0.25F, 0.10F};
+  std::uint32_t state = 0x12345678u;
+  const int trials = 20000;
+  int accepted = 0;
+  for (int trial = 0; trial < trials; ++trial) {
+    if (tge::models::speculative_accept(probs, 4, 0, state).accepted) {
+      ++accepted;
+    }
+  }
+  TGE_CHECK_NEAR(static_cast<double>(accepted) / trials, 0.35, 0.02);
+}
+
+TGE_TEST(speculative_rejection_resamples_the_renormalised_tail) {
+  // Draft token 0 holds q = 0.2; conditional on rejection the resample must
+  // follow (0.3, 0.5) over tokens 1..2 renormalised to (0.375, 0.625) and
+  // never return the draft token itself.
+  const float probs[3] = {0.2F, 0.3F, 0.5F};
+  std::uint32_t state = 0x87654321u;
+  const int trials = 40000;
+  int resamples[3] = {0, 0, 0};
+  int rejections = 0;
+  for (int trial = 0; trial < trials; ++trial) {
+    const tge::models::SpeculativeVerdict verdict =
+        tge::models::speculative_accept(probs, 3, 0, state);
+    if (!verdict.accepted) {
+      ++rejections;
+      resamples[verdict.token] += 1;
+    }
+  }
+  TGE_CHECK(rejections > 0);
+  TGE_CHECK(resamples[0] == 0);
+  TGE_CHECK_NEAR(static_cast<double>(resamples[1]) / rejections, 0.375, 0.02);
+  TGE_CHECK_NEAR(static_cast<double>(resamples[2]) / rejections, 0.625, 0.02);
+}
+
+TGE_TEST(speculative_accept_rejects_bad_arguments_safely) {
+  const float probs[2] = {0.5F, 0.5F};
+  std::uint32_t state = 1u;
+  TGE_CHECK(!tge::models::speculative_accept(nullptr, 2, 0, state).accepted);
+  TGE_CHECK(!tge::models::speculative_accept(probs, 0, 0, state).accepted);
+  TGE_CHECK(!tge::models::speculative_accept(probs, 2, -1, state).accepted);
+  TGE_CHECK(!tge::models::speculative_accept(probs, 2, 2, state).accepted);
+}
+
+TGE_TEST(sampler_exp_avx2_matches_scalar) {
+  // Random logits in [-3, 3]; the shared Cephes exp holds ~1e-6 relative,
+  // so 1e-4 absolute on probabilities is generous but guards regressions.
+  std::uint32_t state = 0x5EED5EEDu;
+  const auto next = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return state;
+  };
+  for (const int count : {1, 7, 32, 1519}) {
+    std::vector<float> logits(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+      logits[static_cast<std::size_t>(index)] =
+          static_cast<float>(static_cast<int>((next() >> 9) & 0xFFFFu) - 32768) /
+          10922.0F;
+    }
+    std::vector<float> scalar(static_cast<std::size_t>(count));
+    std::vector<float> vectorised(static_cast<std::size_t>(count));
+    const float total_scalar = tge::cpu::softmax_exp_scalar(
+        logits.data(), count, 0.8F, scalar.data());
+    const float total_vector = tge::cpu::softmax_exp_avx2(
+        logits.data(), count, 0.8F, vectorised.data());
+    TGE_CHECK_NEAR(total_vector, total_scalar,
+                   1e-4 * (1.0 + (total_scalar >= 0 ? total_scalar : -total_scalar)));
+    for (int index = 0; index < count; ++index) {
+      TGE_CHECK_NEAR(vectorised[static_cast<std::size_t>(index)],
+                     scalar[static_cast<std::size_t>(index)], 1e-4F);
+    }
+  }
+}
+
+TGE_TEST(sampled_no_cut_matches_expected_histogram) {
+  // Chi-square-style gate for the vectorised sampler exp: 8-way distribution
+  // over 100k draws must land in every bin up to the usual counting noise.
+  // If the exp approximation ever biased a bin, this is where it shows.
+  const float probabilities[8] = {0.30F, 0.22F, 0.16F, 0.12F,
+                                  0.08F, 0.06F, 0.04F, 0.02F};
+  float logits[8];
+  for (int index = 0; index < 8; ++index) {
+    logits[index] = std::log(probabilities[index]);
+  }
+  tge::models::SamplingParams params;
+  params.temperature = 1.0F;
+
+  Scratch scratch;
+  scratch.state = 0xC10C1ABu;
+  const int draws = 100000;
+  int counts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  for (int attempt = 0; attempt < draws; ++attempt) {
+    counts[draw(scratch, logits, 8, params)] += 1;
+  }
+  for (int index = 0; index < 8; ++index) {
+    TGE_CHECK_NEAR(static_cast<double>(counts[index]) / draws,
+                   probabilities[index], 0.01);
+  }
 }

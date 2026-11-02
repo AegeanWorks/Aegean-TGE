@@ -8,6 +8,13 @@
 
 namespace tge::cpu {
 
+/// Addressing contract for every AVX2 kernel below: model and activation
+/// buffers are only 16-byte aligned (`operator new`), never 32. Every lane
+/// loads and stores explicitly unaligned (`_mm256_loadu_*`); forming a
+/// `__m256*` over a float buffer and indexing it emits aligned VMOVAPS and
+/// faults (see measurement-log §28i). The sole exception is a function-local
+/// `alignas(32)` spill, which is 32-byte aligned by construction.
+
 /// Row-major single-precision GEMM: C[M,N] = A[M,K] * B[K,N].
 struct GemmArgs {
   int m = 0;
@@ -138,6 +145,7 @@ enum class QuantKind : int {
   Q6_K = 3,
   Q4_0 = 4,
   Q5_0 = 5,
+  Q5_1 = 6,
 };
 
 std::size_t quant_row_bytes(QuantKind kind, int cols);
@@ -173,9 +181,9 @@ void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
 
 /// One query head's attention against its key/value cache.
 ///
-/// The kernel owns the two inner loops (query-key dot products and the
-/// weighted value sum); the softmax exponential stays scalar in both paths so
-/// the rounding of `std::exp` cannot differ between them.
+/// The kernel vectorises the query-key dot products, the softmax exponential
+/// (shared Cephes-style exp, see exp_avx2.hpp) and the weighted value sum.
+/// The scalar path is the oracle; the harness prices the approximation.
 struct AttentionArgs {
   const float* query = nullptr;   // head_dim values
   const float* keys = nullptr;    // span rows, stride kv_stride
@@ -184,6 +192,14 @@ struct AttentionArgs {
   const std::uint16_t* keys_half = nullptr;
   const std::uint16_t* values_half = nullptr;
   bool half = false;
+  // When `q8`, read int8 `keys_q8`/`values_q8` with one float scale per 32
+  // values instead. Scales parallel the values with stride kv_stride / 32,
+  // so a head slice starting at element offset O uses scale offset O / 32.
+  const std::int8_t* keys_q8 = nullptr;
+  const std::int8_t* values_q8 = nullptr;
+  const float* keys_q8_scales = nullptr;
+  const float* values_q8_scales = nullptr;
+  bool q8 = false;
   int kv_stride = 0;
   int span = 0;
   int head_dim = 0;
@@ -212,6 +228,12 @@ struct AttentionGroupArgs {
   const std::uint16_t* keys_half = nullptr;
   const std::uint16_t* values_half = nullptr;
   bool half = false;
+  // Int8 KV form; same scale layout contract as AttentionArgs above.
+  const std::int8_t* keys_q8 = nullptr;
+  const std::int8_t* values_q8 = nullptr;
+  const float* keys_q8_scales = nullptr;
+  const float* values_q8_scales = nullptr;
+  bool q8 = false;
   int kv_stride = 0;
   int count = 0;
   int head_dim = 0;
@@ -307,6 +329,50 @@ float sum_stream_avx2(const float* src, std::size_t count);
 /// never require an instruction the CPU does not have.
 void copy_stream_scalar(float* dst, const float* src, std::size_t count);
 float sum_stream_scalar(const float* src, std::size_t count);
+
+/// RMS normalisation over one row: out[i] = in[i] / sqrt(mean(in^2) + eps) * weight[i].
+/// The scalar path is the oracle; the AVX2 path changes summation order and
+/// uses vectorised sqrt/divide, so it is priced by the fidelity harness, not
+/// assumed bit-identical.
+void rms_norm_scalar(float* out, const float* in, const float* weight, int dim,
+                     float eps);
+void rms_norm_avx2(float* out, const float* in, const float* weight, int dim,
+                   float eps);
+
+/// Rotary position embedding (Qwen NeoX layout: first half vs second half).
+/// Tables hold one cos/sin pair per position per half-dim element.
+void apply_rope_scalar(float* values, int heads, int head_dim, int position,
+                       const float* cos_table, const float* sin_table);
+void apply_rope_avx2(float* values, int heads, int head_dim, int position,
+                     const float* cos_table, const float* sin_table);
+
+/// Rotary position embedding (Llama interleaved layout: consecutive pairs).
+/// Mirrors ggml's GGML_ROPE_TYPE_NORM exactly: pair k rotates by the k-th
+/// table entry. `cos_table`/`sin_table` must be the DUPLICATED tables
+/// ([c0,c0,c1,c1,...]), one contiguous vector per 8 values.
+void apply_rope_interleaved_scalar(float* values, int heads, int head_dim,
+                                   int position, const float* cos_table,
+                                   const float* sin_table);
+void apply_rope_interleaved_avx2(float* values, int heads, int head_dim,
+                                 int position, const float* cos_table,
+                                 const float* sin_table);
+
+/// Gated SiLU: gate[i] = silu(gate[i]) * up[i], silu(x) = x / (1 + exp(-x)).
+/// The AVX2 path uses a vectorised exp approximation (Cephes-style, ~1e-6
+/// relative); the scalar path is the oracle and the fidelity harness prices
+/// the difference.
+void silu_gated_scalar(float* gate, const float* up, int count);
+void silu_gated_avx2(float* gate, const float* up, int count);
+
+/// Softmax numerator pass over `logits`: out[i] = exp((logits[i] - max) * invT)
+/// with max found in index order, sum accumulated in order; returns the sum.
+/// The AVX2 path uses the shared Cephes exp (exp_avx2.hpp, ~1e-6 relative);
+/// the scalar path is the oracle. Sampled draws shift slightly, so the gate
+/// is a chi-square test, not bit-identity (greedy never touches exp).
+float softmax_exp_scalar(const float* logits, int count, float temperature,
+                         float* out);
+float softmax_exp_avx2(const float* logits, int count, float temperature,
+                       float* out);
 
 /// Turns a requested thread count into a usable one.
 int resolve_thread_count(int requested);

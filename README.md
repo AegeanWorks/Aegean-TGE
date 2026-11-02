@@ -118,22 +118,24 @@ aegean-tge/
 | **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38-39 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
 | **Prompt, 510 tokens** | **166-254 t/s (machine-dependent; llama.cpp: 352.2 t/s, 6 threads)** |
 | **Prompt, 2048 tokens** | **170-200 t/s (this run; llama.cpp: 287.9 t/s, 6 threads)** |
+| Q4_K_M recipe, same window | prefill 88% and decode 80% of Q8_0; first 15 ids identical across models |
 | Concurrent sessions, 0.5B Q8_0 | 2 × 6: 47.4 t/s aggregate; 4 × 6: 53.2 this run, tail forward removed; >1 thread/session safe |
 | Speculative decode, story prompt | 49.9-56.4 t/s vs 28.1-30.1 normal (1.66-2.00x); ids identical; pins per-head |
 | VNNI prefill, `--vnni` | 510: 194.5 vs 163.1 t/s (+19%); 2048: +14% on the best run; KL 1.6e-3, top-1 485/497; opt-in |
 | f16 KV, `--kv f16` | 2048: 165.9 vs 145.7 t/s prefill, 35.4 vs 21.7 decode on the best run; KL 1.658e-6, top-1 497/497, ids identical; opt-in |
-| Continuous batching, `bench continuous` | 8 × 32: 58.3 t/s vs 42.2 sessions (1.38x), ids identical; 4 slots, 1 model; `--vnni`/`--kv f16` accepted |
+| Continuous batching, `bench continuous` | 8 × 32: 69.0 t/s at an 8-token prompt vs 62.3 at 1 and 42.2 sessions; ids identical; 4 slots, mixed prompt+decode |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| Quantized formats | Q8_0, Q5_0, Q4_0, Q4_K, Q5_K, Q6_K |
+| Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 58 cases, all passing |
+| Tests | 75 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
 current vectorised/GQA schedules a 128-token raw-prompt run matches for ~95
 tokens, then a near-tie flips; `tge fidelity` prices the arithmetic at mean KL
-5e-12 against the scalar reference. The older "2x decode" result was against
+~1e-11 against the full-scalar oracle (scalar attention, norms, RoPE and
+SiLU). The older "2x decode" result was against
 llama.cpp build a91eab6 (15.2 t/s at 6 threads); the installed build 11624 runs
 at 45.1 t/s, so short-context decode is now at parity, and prefill is behind.
 Prompts can be given as text (`--prompt`) or token ids (`--tokens`), and output prints as
@@ -149,11 +151,26 @@ stops on the model's end-of-generation set (eos, eot, `eos_token_ids`, and
 Qwen's end-of-text id) instead of continuing past it. Decode hands work to a
 spin-then-sleep pool; at long context decode attention runs in grouped-query
 chunks over positions as well as heads, and the prefill stays per-head.
+Prefill is compute-bound so it takes every logical core on an unpinned pool.
+Decode workers are likewise unpinned by default (thread placement left to
+the OS beat pinned P-cores on mean and variance here); `--pin-threads 1`
+restores P-core pinning, and `--threads N` sizes the decode pool —
+10 (one per physical core) measured best on a 6P+4E box, 16 oversubscribes
+its hyperthreads. `--prefill-threads N` overrides the prefill count
+(match `--threads N` for a same-thread comparison against another engine).
 `--attention head|gqa|scalar` selects the schedule and `tge fidelity` prices a
-change against the scalar oracle. `--speculative` runs prompt-lookup speculation
-for greedy decoding; it pins the per-head schedule so the verifier and a
-sequential decode agree, and its ids match the per-head run (and auto on the
-test prompts). `--vnni` selects the AVX-VNNI batch kernels with one activation
+change against the scalar oracle. `--speculative` runs prompt-lookup
+speculative decoding; it pins the per-head schedule so the verifier and a
+sequential decode agree. It engages for greedy decoding (with or without
+repeat penalty — penalized positions verify against the penalized argmax
+with the same history a sequential decode would see, so ids stay
+byte-identical) and for temperature-only sampling (no top-k/p, no min-p;
+repeat penalty allowed — each position is accepted against the penalized
+distribution, preserving it exactly); other sampling cuts fall back to
+single-token decoding. Measured: 1.66-2.00x greedy on a story prompt with
+identical ids, 2.03x sampled at temp 0.1 on repetitive text, 1.88x greedy
+with penalty; sampling-heavy settings are bounded by the softmax cost
+(see the log). `--vnni` selects the AVX-VNNI batch kernels with one activation
 quantization per distinct vector; it lifts prefill 14-19 percent on the best
 run at the cost of a measured 1.6e-3 KL and 12/497 top-1 flips, so the default
 stays f32 (`--vnni` needs AVX-VNNI). `--kv f16` stores the KV cache as IEEE

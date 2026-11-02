@@ -19,8 +19,11 @@ namespace tge::core {
 class ThreadPool {
  public:
   /// `threads` counts the calling thread. ThreadPool(1) spawns no workers and
-  /// runs every parallel_for body inline.
-  explicit ThreadPool(int threads);
+  /// runs every parallel_for body inline. When `pin` is true, workers pin
+  /// to distinct P-core threads (decode: latency-sensitive, bandwidth-bound,
+  /// wants no E-core stragglers or migration). When false, placement stays
+  /// with the OS (prefill: compute-bound throughput, wants every core).
+  explicit ThreadPool(int threads, bool pin = true);
   ~ThreadPool();
 
   ThreadPool(const ThreadPool&) = delete;

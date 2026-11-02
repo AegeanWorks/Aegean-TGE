@@ -35,4 +35,41 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
                  std::vector<float>& scores, std::vector<int>& order,
                  std::uint32_t& random_state);
 
+/// Writes the raw exp((v - max) / temperature) values into `out` (which must
+/// hold `count` floats) and returns their sum — the engine convention shared
+/// with the no-cut path, which normalizes by the sum during the scan.
+/// Dispatches to the AVX2 shared-exp kernel when available, else the scalar
+/// oracle; sampled draws shift at the ~1e-6 level (chi-square gated, never
+/// bit-identical across ISAs). Greedy decoding never calls it.
+float softmax_probabilities(const float* logits, int count, float temperature,
+                            float* out);
+
+/// Categorical draw from `probabilities` (need not sum to exactly 1).
+/// Bit-identical to the no-cut scan of `sample_token`.
+int categorical_sample(const float* probabilities, int count,
+                       std::uint32_t& random_state);
+
+/// Applies the repetition penalty in place: each distinct token in the
+/// recent `history` window has its score divided (positive) or multiplied
+/// (negative) by `params.repeat_penalty`. Shared verbatim by single-token
+/// sampling and the speculative accept loop, so both see the same target.
+void apply_repeat_penalty(std::vector<float>& scores, int count,
+                          const SamplingParams& params, const int* history,
+                          int history_size);
+
+/// One step of the standard distribution-preserving speculation rule for a
+/// one-hot draft distribution (prompt lookup proposes a single token).
+/// Accepts `draft` with probability q[draft]; on rejection returns a token
+/// drawn from norm(max(0, q - onehot(draft))), which is never `draft` itself
+/// (unless q[draft] == 1, in which case acceptance is certain). Either way
+/// the emitted token follows q exactly, so a verifier using this rule keeps
+/// the sampled output distribution unchanged.
+struct SpeculativeVerdict {
+  bool accepted = false;
+  int token = 0;
+};
+
+SpeculativeVerdict speculative_accept(const float* probabilities, int count,
+                                      int draft, std::uint32_t& random_state);
+
 }  // namespace tge::models

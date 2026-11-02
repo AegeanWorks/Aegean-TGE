@@ -285,6 +285,7 @@ bool type_supported(TensorType type) {
     case TensorType::Q8_0:
     case TensorType::Q4_0:
     case TensorType::Q5_0:
+    case TensorType::Q5_1:
     case TensorType::Q4_K:
     case TensorType::Q5_K:
     case TensorType::Q6_K:
@@ -566,6 +567,37 @@ std::string File::get_string(const std::string& key,
 
 const std::uint8_t* File::tensor_data(const TensorInfo& info) const {
   return static_cast<const std::uint8_t*>(data_) + data_offset_ + info.offset;
+}
+
+void File::prefetch() const {
+  if (data_ == nullptr || size_ == 0) {
+    return;
+  }
+#if defined(_WIN32)
+  // Async hint first: the OS faults the view in the background while the
+  // tokenizer builds, so a cold load overlaps instead of stalling the first
+  // token. Falls through to a synchronous touch for the guarantee.
+  using PrefetchFn = BOOL(WINAPI*)(HANDLE, PVOID*, ULONG, ULONG);
+  static PrefetchFn prefetch_fn = reinterpret_cast<PrefetchFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+                                             "PrefetchVirtualMemory")));
+  if (prefetch_fn != nullptr) {
+    PVOID address = data_;
+    SIZE_T bytes = static_cast<SIZE_T>(size_);
+    // Best effort: ignore the return; the touch below is the guarantee.
+    prefetch_fn(GetCurrentProcess(), &address, 1, 0);
+    (void)bytes;
+  }
+#endif
+  const auto* bytes = static_cast<const volatile std::uint8_t*>(data_);
+  const std::uint64_t step = 4096;
+  std::uint64_t sink = 0;
+  for (std::uint64_t offset = 0; offset < size_; offset += step) {
+    sink += bytes[offset];
+  }
+  // Touch the final byte when the size is not page-aligned.
+  sink += bytes[size_ - 1];
+  (void)sink;
 }
 
 }  // namespace tge::gguf

@@ -16,8 +16,8 @@ namespace {
 inline float horizontal_sum(__m256 values) {
   __m128 total = _mm_add_ps(_mm256_castps256_ps128(values),
                             _mm256_extractf128_ps(values, 1));
-  total = _mm_hadd_ps(total, total);
-  total = _mm_hadd_ps(total, total);
+  total = _mm_add_ps(total, _mm_movehl_ps(total, total));
+  total = _mm_add_ss(total, _mm_shuffle_ps(total, total, 1));
   return _mm_cvtss_f32(total);
 }
 

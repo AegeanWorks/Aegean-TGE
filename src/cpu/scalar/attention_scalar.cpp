@@ -13,14 +13,27 @@ void attention_head_scalar(const AttentionArgs& args) {
   const bool half = args.half;
   const std::uint16_t* half_keys = args.keys_half;
   const std::uint16_t* half_values = args.values_half;
+  // Int8 KV form: one float scale per 32 values, strided with the rows.
+  const bool q8 = args.q8;
+  const std::int8_t* q8_keys = args.keys_q8;
+  const std::int8_t* q8_values = args.values_q8;
+  const int scale_stride = stride / 32;
 
   float maximum = -INFINITY;
   for (int token = 0; token < span; ++token) {
     const std::size_t row = static_cast<std::size_t>(token) * stride;
     float product = 0.0F;
     for (int index = 0; index < head_dim; ++index) {
-      const float key =
-          half ? half_to_float(half_keys[row + index]) : args.keys[row + index];
+      float key;
+      if (q8) {
+        const std::size_t block =
+            static_cast<std::size_t>(token) * scale_stride + index / 32;
+        key = static_cast<float>(q8_keys[row + index]) *
+              args.keys_q8_scales[block];
+      } else {
+        key =
+            half ? half_to_float(half_keys[row + index]) : args.keys[row + index];
+      }
       product += args.query[index] * key;
     }
     const float scaled = product * args.scale;
@@ -44,10 +57,18 @@ void attention_head_scalar(const AttentionArgs& args) {
     const float weight =
         args.scores[static_cast<std::size_t>(token)] * inverse;
     const std::size_t row = static_cast<std::size_t>(token) * stride;
-    const float* value = half ? nullptr : args.values + row;
+    const float* value = (half || q8) ? nullptr : args.values + row;
     for (int index = 0; index < head_dim; ++index) {
-      const float element =
-          half ? half_to_float(half_values[row + index]) : value[index];
+      float element;
+      if (q8) {
+        const std::size_t block =
+            static_cast<std::size_t>(token) * scale_stride + index / 32;
+        element = static_cast<float>(q8_values[row + index]) *
+                  args.values_q8_scales[block];
+      } else {
+        element =
+            half ? half_to_float(half_values[row + index]) : value[index];
+      }
       args.out[index] += weight * element;
     }
   }
@@ -60,6 +81,10 @@ void attention_group_scalar(const AttentionGroupArgs& args) {
   const bool half = args.half;
   const std::uint16_t* half_keys = args.keys_half;
   const std::uint16_t* half_values = args.values_half;
+  const bool q8 = args.q8;
+  const std::int8_t* q8_keys = args.keys_q8;
+  const std::int8_t* q8_values = args.values_q8;
+  const int scale_stride = stride / 32;
 
   for (int head = 0; head < args.group_heads; ++head) {
     const float* query =
@@ -77,19 +102,35 @@ void attention_group_scalar(const AttentionGroupArgs& args) {
       const std::size_t row = static_cast<std::size_t>(token) * stride;
       float product = 0.0F;
       for (int index = 0; index < head_dim; ++index) {
-        const float key =
-            half ? half_to_float(half_keys[row + index]) : args.keys[row + index];
+        float key;
+        if (q8) {
+          const std::size_t block =
+              static_cast<std::size_t>(token) * scale_stride + index / 32;
+          key = static_cast<float>(q8_keys[row + index]) *
+                args.keys_q8_scales[block];
+        } else {
+          key = half ? half_to_float(half_keys[row + index])
+                     : args.keys[row + index];
+        }
         product += query[index] * key;
       }
       const float score = product * args.scale;
-      const float* value = half ? nullptr : args.values + row;
+      const float* value = (half || q8) ? nullptr : args.values + row;
 
       if (score > maximum) {
         const float alpha = std::exp(maximum - score);
         sum = sum * alpha + 1.0F;
         for (int index = 0; index < head_dim; ++index) {
-          const float element =
-              half ? half_to_float(half_values[row + index]) : value[index];
+          float element;
+          if (q8) {
+            const std::size_t block =
+                static_cast<std::size_t>(token) * scale_stride + index / 32;
+            element = static_cast<float>(q8_values[row + index]) *
+                      args.values_q8_scales[block];
+          } else {
+            element = half ? half_to_float(half_values[row + index])
+                           : value[index];
+          }
           accumulators[index] = accumulators[index] * alpha + element;
         }
         maximum = score;
@@ -97,8 +138,16 @@ void attention_group_scalar(const AttentionGroupArgs& args) {
         const float beta = std::exp(score - maximum);
         sum += beta;
         for (int index = 0; index < head_dim; ++index) {
-          const float element =
-              half ? half_to_float(half_values[row + index]) : value[index];
+          float element;
+          if (q8) {
+            const std::size_t block =
+                static_cast<std::size_t>(token) * scale_stride + index / 32;
+            element = static_cast<float>(q8_values[row + index]) *
+                      args.values_q8_scales[block];
+          } else {
+            element = half ? half_to_float(half_values[row + index])
+                           : value[index];
+          }
           accumulators[index] += beta * element;
         }
       }

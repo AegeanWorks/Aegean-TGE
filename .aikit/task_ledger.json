@@ -1,265 +1,290 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-BATCH",
-    "last_phase": "verification",
-    "active_phase": 5,
-    "status": "completed",
-    "updated_at": 1793570949.9318213,
-    "owner": "commandcode:1",
-    "started_by": "commandcode:1",
-    "continuations": [],
-    "completed_at": 1793571378.7556727
+    "task_id": "TGE-PHI3",
+    "last_phase": "in_progress",
+    "active_phase": 2,
+    "status": "in_progress",
+    "updated_at": 1793641838.3996496,
+    "owner": "kilo:phi3",
+    "started_by": "unidentified",
+    "continuations": [
+      {
+        "agent": "kilo:phi3",
+        "from": "unidentified",
+        "at": 1793634062.7765398
+      }
+    ],
+    "impact_assessment": {
+      "why": "llama multiplies Phi cos/sin tables by attn_factor 1.19024 and ignores absent per-block factors; TGE runs unscaled today so end-to-end parity needs the same table",
+      "benefits": "Phi attention temperature matches the reference; Qwen/Llama untouched (key absent defaults 1.0)",
+      "risks": "contract: table-build scaling only, forward untouched; dependency: none; concurrency: read-only tables; state: none",
+      "mitigation": "Synthetic config test + real-file greedy parity vs llama-cli (built from source)"
+    }
   },
   "checkpoints": [
     {
-      "task_id": "TGE-QUALITY",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-QUALITY' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793550719.5401592,
-      "timestamp_str": "2026-11-01 19:31:59",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-VERIFY",
-      "phase": "planning",
+      "task_id": "TGE-LLAMA-ROPE",
+      "phase": "phase 2",
       "phase_num": 2,
-      "description": "[1/2] Verify the handoff/attention work and align the llama comparison",
+      "description": "[1/3] RoPE interleaved (NORM) mode for Llama-family archs",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1793563964.8263285,
-      "timestamp_str": "2026-11-01 23:12:44",
-      "agent": "commandcode:1",
+      "timestamp": 1793627156.1626022,
+      "timestamp_str": "2026-11-02 16:45:56",
+      "agent": "unidentified",
       "impact_assessment": {
-        "why": "The second audit's input, termination and sampler defects are fixed; the fidelity harness and vectorised/GQA attention need verification before delivery, and the old llama baseline is superseded.",
-        "benefits": "Reference-correct tokenization, end-of-generation stopping, greedy-speed sampling, KL-priced attention changes, and an accurate llama comparison.",
-        "risks": "contract: new AttentionMode, encode(..., false), --attention modes and tge fidelity; dependency: standard library only, llama binaries are external references; concurrency: GQA scratch per model and disjoint pool tasks, single-session; state: no persistent format changes",
-        "mitigation": "Unit and differential tests, the fidelity harness, 58/58 tests, 4/4 gates, and the measurement log updated"
+        "why": "TGE hardcodes NeoX halves layout (correct for Qwen, verified); Llama uses interleaved consecutive pairs per ggml NORM mode; current 3B output is degraded exactly as wrong-RoPE predicts",
+        "benefits": "Unblocks Llama-3.2-3B/1B, SmolLM2, Phi (all NORM per ggml); Qwen path bit-unchanged",
+        "risks": "contract: rope-mode flag in config (arch-selected) + interleaved scalar/AVX2 paths; dependency: none; concurrency: per-call local; state: none; accuracy: hand-computed unit test + memcmp AVX2-vs-scalar + llama greedy parity on templated prompt",
+        "mitigation": "Qwen outputs must be bit-identical before/after (default path untouched); Llama validated against llama.cpp greedy"
       }
     },
     {
-      "task_id": "TGE-VERIFY",
-      "phase": "verification",
+      "task_id": "TGE-LLAMA-ARCH",
+      "phase": "phase 4",
       "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 58/58 tests; tokenizer 7->5/2->1/2->1/5->1; sampler 18.2/19.2->4.1/4.1 ms; fidelity KL 5e-12; GQA 35.11->40.34 t/s at 2k; llama 45.1/352.2/287.9/46.9; parity ~95 tokens",
+      "description": "[2/3]+[3/3] Llama runs end-to-end - checklists: passed; tied output, zero-bias fallback, interleaved RoPE (scalar+AVX2, differential caught one real bug); fluent + factual output; Qwen ids identical; 76/76 tests",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1793563973.6994205,
-      "timestamp_str": "2026-11-01 23:12:53",
-      "agent": "commandcode:1"
+      "timestamp": 1793628544.8794212,
+      "timestamp_str": "2026-11-02 17:09:04",
+      "agent": "unidentified"
     },
     {
-      "task_id": "TGE-VERIFY",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-VERIFY' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793563973.8379402,
-      "timestamp_str": "2026-11-01 23:12:53",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-POOLS",
-      "phase": "planning",
-      "phase_num": 2,
-      "description": "[1/2] Give each session its own thread pools and fix the sessions benchmark",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793565122.7174342,
-      "timestamp_str": "2026-11-01 23:32:02",
-      "agent": "commandcode:1",
-      "impact_assessment": {
-        "why": "Concurrent sessions with more than one thread each crashed (0xC0000005) because acquire_pool was process-wide; the benchmark refused the case and its 1x6 timing included start-up.",
-        "benefits": "Each model owns decode and prefill pools, so >1 thread per session is safe; the benchmark times steady-state decode; 4x6 runs at 46.2 t/s aggregate.",
-        "risks": "contract: GemvConfig/GemmConfig gain a pool pointer and Qwen2 gains per-model pools; dependency: none new; concurrency: pools are per model, neither shared nor TLS, and destroyed after the session joins; state: no persistent format changes",
-        "mitigation": "q8 kernel tests pass an explicit pool; the sessions benchmark covers 1/2/4 sessions at 1 and 6 threads; 58/58 tests and 4/4 gates"
-      }
-    },
-    {
-      "task_id": "TGE-POOLS",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 58/58 tests; 2x6 47.36 t/s, 4x6 46.20, 4x1 43.00, 1x6 37.42 aggregate; transcripts identical; ranlib post-build",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793565124.9734354,
-      "timestamp_str": "2026-11-01 23:32:04",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-POOLS",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-POOLS' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793565125.8577955,
-      "timestamp_str": "2026-11-01 23:32:05",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-SPEC",
-      "phase": "planning",
-      "phase_num": 2,
-      "description": "[1/1] Greedy prompt-lookup speculative decoding through the batched prefill verifier",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793566658.701543,
-      "timestamp_str": "2026-11-01 23:57:38",
-      "agent": "commandcode:1",
-      "impact_assessment": {
-        "why": "Decode is memory-bound and prompt-lookup speculation needs a per-position verifier; the existing prefill path already has the batched kernels.",
-        "benefits": "1.66x decode on a repetitive story prompt with identical tokens; no second model; pure greedy only.",
-        "risks": "contract: Qwen2 gains verify_draft and kSpeculativeBatch, and generate gains --speculative; dependency: none new; concurrency: verify uses the model's existing prefill pool and no shared state across sessions; state: 3.6 MB verify-logits scratch per model, no persistent format change",
-        "mitigation": "Parity checked end to end on the story (127 ids) and ChatML (8 ids) prompts; sampling and repeat-penalty runs keep the normal path; 58/58 tests and 4/4 gates"
-      }
-    },
-    {
-      "task_id": "TGE-SPEC",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 58/58 tests; speculative story 30.10->49.92 t/s (1.66x), 20 steps/79 accepted, ids identical; ChatML 8 ids identical (24.56 vs 27.15 t/s); prefill refactor leaves normal output unchanged; uncommitted pending push authorization",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793566659.0494363,
-      "timestamp_str": "2026-11-01 23:57:39",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-SPEC",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 58/58 tests; spec pin 2048 32.71 vs head 31.47/auto 37.24, ids equal; story 28.13->56.38 (2.00x); sessions 3.746->2.329 s, 34.17->53.24 t/s; prefill GQA token-outer reverted (2k prefill -5%, decode -13%); fidelity 5.104e-12, 497/497",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793568429.2284431,
-      "timestamp_str": "2026-11-02 00:27:09",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-SPEC",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-SPEC' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793568429.4592535,
-      "timestamp_str": "2026-11-02 00:27:09",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-VNNI",
-      "phase": "planning",
-      "phase_num": 2,
-      "description": "[1/2] Pre-quantize VNNI activation rows and price the trade",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793569180.1308877,
-      "timestamp_str": "2026-11-02 00:39:40",
-      "agent": "commandcode:1",
-      "impact_assessment": {
-        "why": "The report's VNNI lost end to end because the kernel re-quantized the activation on every call; the 2048 prefill is the weak spot.",
-        "benefits": "One quantization per distinct activation flips the 510 prefill to +19% and the 2048 to +14% on the best run; the fidelity harness prices the accuracy trade.",
-        "risks": "contract: Q8BatchArgs gains pre-quantized pointers and the model gains set_vnni; dependency: none new; concurrency: the scratch is per model, no TLS; state: 0.3 MB Q8 scratch, no format change; accuracy: mean KL 1.6e-3, top-1 485/497",
-        "mitigation": "The VNNI is opt-in (--vnni); the default stays f32; tge fidelity --vnni reports the price; 58/58 tests and 4/4 gates"
-      }
-    },
-    {
-      "task_id": "TGE-VNNI",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 58/58 tests; VNNI 510 prefill 163.1->194.5 t/s (+19%), 2048 165.6->188.2 (+14% best run; later 155.5 in noise); 510 decode 36.9->26.2, 2048 36.3->36.9; fidelity mean KL 1.568e-3, worst 2.254e-2, top-1 485/497; ids differ at 128/2048/spec; default f32, --vnni opt-in",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793569180.6214197,
-      "timestamp_str": "2026-11-02 00:39:40",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-F16",
-      "phase": "planning",
-      "phase_num": 2,
-      "description": "[1/2] f16 KV cache with F16C reads and fidelity pricing",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793570124.9497864,
-      "timestamp_str": "2026-11-02 00:55:24",
-      "agent": "commandcode:1",
-      "impact_assessment": {
-        "why": "The KV is f32 while llama uses f16; the 2k decode and the 32k memory are the pressure points.",
-        "benefits": "KV halves (192->96 MiB at 8192); 510 prefill +58%; fidelity 1.658e-6 KL, top-1 497/497, ids identical.",
-        "risks": "contract: Qwen2::load gains kv_half and the attention args gain f16 pointers; dependency: F16C; concurrency: per-model caches; state: half caches; accuracy: 1.658e-6",
-        "mitigation": "Opt-in --kv f16; default f32; tge fidelity --kv f16 reports the price; 60/60 tests and 4/4 gates"
-      }
-    },
-    {
-      "task_id": "TGE-VNNI",
+      "task_id": "TGE-LLAMA-ROPE",
       "phase": "superseded",
-      "phase_num": 4,
-      "description": "Superseded by 'TGE-F16' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793570124.9497864,
-      "timestamp_str": "2026-11-02 00:55:24",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-F16",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 60/60 tests; f16 KV 510 prefill 139.7->220.8 (+58%); 2048 prefill/decode 145.7/21.7->165.9/35.4 on the best run (machine \u00b120%); fidelity mean KL 1.658e-6, worst 2.446e-5, top-1 497/497; ids identical at 2048/story/spec; default f32, --kv f16 opt-in",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793570125.250983,
-      "timestamp_str": "2026-11-02 00:55:25",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-BATCH",
-      "phase": "planning",
       "phase_num": 2,
-      "description": "[1/2] Continuous batching with per-sequence KV slots",
+      "description": "Superseded by 'TGE-LLAMA-ARCH' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793628544.8794212,
+      "timestamp_str": "2026-11-02 17:09:04",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-LLAMA-ARCH",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-LLAMA-ARCH' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793628672.4582543,
+      "timestamp_str": "2026-11-02 17:11:12",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-LLAMA-TOK",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/3] Llama tokenizer parity: corpus comparison vs llama.cpp",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1793570949.684187,
-      "timestamp_str": "2026-11-02 01:09:09",
-      "agent": "commandcode:1",
+      "timestamp": 1793628709.5235856,
+      "timestamp_str": "2026-11-02 17:11:49",
+      "agent": "unidentified",
       "impact_assessment": {
-        "why": "The sessions benchmark runs N models, so N weight streams do not share; the model can decode one token per KV slot in one batch pass.",
-        "benefits": "8 requests x 32 tokens: 58.28 t/s aggregate vs 42.21 for four concurrent models (+38%); first transcript identical to single decode.",
-        "risks": "contract: Qwen2::load gains sequences and forward_batch; dependency: none; concurrency: per-slot KV, no shared batch state; state: sequences x the KV cache; scheduler: minimal, no paged/mixed",
-        "mitigation": "Default sequences=1 keeps existing paths; the CLI transcript checks parity; 60/60 tests and 4/4 gates"
+        "why": "TGE tokenizes Llama \\\\n\\\\n as 271, llama.cpp as 881 \u2014 same file, different ids, so templated end-to-end cannot be compared and Llama input fidelity is unproven",
+        "benefits": "Unblocks token-exact Llama validation (templated greedy parity); same \u00a716 method that fixed Qwen",
+        "risks": "contract: read-only comparison first; pre-tokenizer fixes gated per-divergence with Qwen regression tests; dependency: none (llama-tokenize already built); concurrency: none; state: none; accuracy: golden tests per fix",
+        "mitigation": "Corpus of Llama-sensitive cases; fix only with a corpus-wide before/after showing improvement and zero Qwen regressions; existing tokenizer tests must pass unchanged"
       }
     },
     {
-      "task_id": "TGE-F16",
-      "phase": "superseded",
+      "task_id": "TGE-LLAMA-TOK",
+      "phase": "phase 4",
       "phase_num": 4,
-      "description": "Superseded by 'TGE-BATCH' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793570949.684187,
-      "timestamp_str": "2026-11-02 01:09:09",
-      "agent": "commandcode:1"
-    },
-    {
-      "task_id": "TGE-BATCH",
-      "phase": "verification",
-      "phase_num": 4,
-      "description": "checklists: passed; gates 4/4; 60/60 tests; continuous 8x32 58.28 t/s vs sessions 42.21 (+38%), single 26.29; first transcript == generate ids; all 8 identical; minimal scheduler (paged/mixed remains)",
+      "description": "[2/2]+[3/3] Llama tokenizer parity done - checklists: passed; 24/24 corpus identical incl digits; templated end-to-end near-tie-consistent; Qwen suite green; 78/78 tests",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1793570949.9318213,
-      "timestamp_str": "2026-11-02 01:09:09",
-      "agent": "commandcode:1"
+      "timestamp": 1793632839.6866298,
+      "timestamp_str": "2026-11-02 18:20:39",
+      "agent": "unidentified"
     },
     {
-      "task_id": "TGE-BATCH",
+      "task_id": "TGE-LLAMA-TOK",
       "phase": "completed",
       "phase_num": 5,
-      "description": "Task 'TGE-BATCH' completed successfully.",
+      "description": "Task 'TGE-LLAMA-TOK' completed successfully.",
       "status": "completed",
-      "timestamp": 1793571378.7556741,
-      "timestamp_str": "2026-11-02 01:16:18",
-      "agent": "commandcode:1"
+      "timestamp": 1793632887.1174698,
+      "timestamp_str": "2026-11-02 18:21:27",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-LLAMA-BENCH",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Head-to-head throughput on Llama-3.2-3B Q4_K_M",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793632932.5350645,
+      "timestamp_str": "2026-11-02 18:22:12",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "Correctness is established (tokenizer parity 24/24, fluent factual output, ggml-verified kernels); no throughput numbers exist for the 3B model on either engine, and the Qwen pattern (TGE decode lead, llama prefill lead) may not transfer to a bigger interleaved-RoPE model",
+        "benefits": "First same-box, same-model, same-thread comparison on 3B; tests whether the parity story holds at larger scale",
+        "risks": "contract: read-only benchmarks, no code changes unless a crash exposes a bug; dependency: none; concurrency: none; state: none; accuracy: back-to-back runs, same prompt shape, load caveats as \u00a728al",
+        "mitigation": "llama-bench pp128/tg64 vs TGE 128-tok prefill + 64 gen; report both raw numbers and the range caveat; 77/77 tests + 4/4 gates unchanged"
+      }
+    },
+    {
+      "task_id": "TGE-LLAMA-ARCH",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[3/3]+log 3B head-to-head: decode same band, prefill trails (caveats noted); tokenizer parity proven; no regressions",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793633087.4072976,
+      "timestamp_str": "2026-11-02 18:24:47",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-LLAMA-BENCH",
+      "phase": "superseded",
+      "phase_num": 2,
+      "description": "Superseded by 'TGE-LLAMA-ARCH' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793633087.4072976,
+      "timestamp_str": "2026-11-02 18:24:47",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-LLAMA-ARCH",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-LLAMA-ARCH' completed successfully.",
+      "status": "completed",
+      "timestamp": 1793633100.9418607,
+      "timestamp_str": "2026-11-02 18:25:00",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-MORE-MODELS",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Probe SmolLM2-135M (llama arch) and Phi-3.5-mini (phi3/NEOX)",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793633208.1902673,
+      "timestamp_str": "2026-11-02 18:26:48",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "SmolLM2 declares llama arch (interleaved path already built) and Phi-3.5 maps to NEOX per ggml; both may run unmodified, extending validated coverage cheaply",
+        "benefits": "Two more working architectures, or precisely-scoped gaps like the Llama ones",
+        "risks": "contract: read-only probes first, then minimal arch-gated fixes only; dependency: none; concurrency: none; state: none",
+        "mitigation": "Generate + fluency check per model; Qwen/Llama regression via existing suite; log per outcome (works or gap analysis)"
+      }
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/4] Phi-3.5 port: fused QKV + fused gate|up + YaRN-aware rope + phi tokenizer rule",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793633424.0832076,
+      "timestamp_str": "2026-11-02 18:30:24",
+      "agent": "unidentified",
+      "impact_assessment": {
+        "why": "Phi-3.5-mini is local, popular, and currently unloadable (missing attn_q.weight); fused-QKV + fused-gate|up + YaRN + tokenizer are each bounded and independently verifiable",
+        "benefits": "Third architecture family running; fused-weight machinery reusable for any future fused model",
+        "risks": "contract: load-time tensor mapping + forward-path splits, gated per piece; dependency: none; concurrency: same parallel regions; state: none; accuracy: ggml-verified formulas, templated llama comparison at the end",
+        "mitigation": "One piece at a time: config first, then load, then smoke, then fidelity, then tokenizer, then llama cross-check; Qwen/Llama regression via full suite each step"
+      }
+    },
+    {
+      "task_id": "TGE-MORE-MODELS",
+      "phase": "superseded",
+      "phase_num": 2,
+      "description": "Superseded by 'TGE-PHI3' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793633424.0832076,
+      "timestamp_str": "2026-11-02 18:30:24",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/4] started: config + load path",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793633430.2347753,
+      "timestamp_str": "2026-11-02 18:30:30",
+      "agent": "unidentified"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] Phi config+load: epsilon key chain, rope-dim guard, YaRN flag, fused QKV/FFN row views",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793634062.7765398,
+      "timestamp_str": "2026-11-02 18:41:02",
+      "agent": "kilo:phi3",
+      "impact_assessment": {
+        "why": "Phi-3.5-mini is local but unloadable (missing attn_q.weight); fused tensors + attention-prefixed epsilon key + YaRN factors are each bounded and independently verifiable",
+        "benefits": "Phi loads with existing forward path unchanged; Qwen/Llama behavior bit-identical (split only when unfused names are absent)",
+        "risks": "contract: load-time tensor mapping only, forward untouched; dependency: none; concurrency: same parallel regions; state: none",
+        "mitigation": "Synthetic fused-file unit tests + real Phi load smoke; Qwen/Llama suite must pass unchanged; gate/up order and RoPE mode settled by parity in [2/4]"
+      },
+      "continued_from": "unidentified"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] done: Phi loads - checklists: passed; fused QKV/FFN views + epsilon chain + rope guard + YaRN flag; 3 synthetic tests (epsilon, rope reject, fused load); real Phi file loads, generates 12 toks exit 0, decode ~6 t/s; 80/80 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793634291.9138958,
+      "timestamp_str": "2026-11-02 18:44:51",
+      "agent": "kilo:phi3"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[2/4] SPM tokenizer for mergeless llama-model vocabs: Viterbi over scores, dummy prefix, byte fallback",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793634719.170366,
+      "timestamp_str": "2026-11-02 18:51:59",
+      "agent": "kilo:phi3",
+      "impact_assessment": {
+        "why": "Phi GGUF is model=llama with no merges array; TGE only speaks BPE, so Hello world encodes as 11 byte ids vs reference 2",
+        "benefits": "Phi input fidelity becomes provable vs HF reference; Llama/Qwen untouched (SPM only when model==llama and merges absent)",
+        "risks": "contract: additive Tokenizer path + decode branch; dependency: none; concurrency: read-only after load; state: none",
+        "mitigation": "Synthetic hand-computed Viterbi unit tests first; corpus diff vs transformers reference; full suite must stay green"
+      }
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[2/4] done: checklists: passed; SPM merge tokenizer 28/28 vs llama-tokenize (26/28 also HF), CJK argv fix, Phi speaks ('The sum of 2+2 is 4'); 6 synthetic tests; 83/83 suite, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793636587.1262894,
+      "timestamp_str": "2026-11-02 19:23:07",
+      "agent": "kilo:phi3"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[3/4] YaRN-aware rope: attn_factor mscale from rope.scaling.attn_factor (Phi 1.19024); per-block factors mirror llama null path",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793641838.3996496,
+      "timestamp_str": "2026-11-02 20:50:38",
+      "agent": "kilo:phi3",
+      "impact_assessment": {
+        "why": "llama multiplies Phi cos/sin tables by attn_factor 1.19024 and ignores absent per-block factors; TGE runs unscaled today so end-to-end parity needs the same table",
+        "benefits": "Phi attention temperature matches the reference; Qwen/Llama untouched (key absent defaults 1.0)",
+        "risks": "contract: table-build scaling only, forward untouched; dependency: none; concurrency: read-only tables; state: none",
+        "mitigation": "Synthetic config test + real-file greedy parity vs llama-cli (built from source)"
+      }
     }
   ]
 }

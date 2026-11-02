@@ -97,8 +97,14 @@ cmake --build --preset release
 .\build\release\bin\tge.exe bench gemm --m 2048 --n 2048 --k 2048 --kernel unpacked
 .\build\release\bin\tge.exe bench gemv --rows 4096 --cols 4096 --repeat 5
 .\build\release\bin\tge.exe bench batch --rows 4864 --cols 896 --tokens 64 --repeat 3
+.\build\release\bin\tge.exe bench batch --rows 896 --cols 4864 --tokens 1 --repeat 5 --format q6k
 .\build\release\bin\tge.exe bench mem --size-mb 256 --repeat 5
 ```
+
+`bench batch --format` takes `q8|q4k|q5k|q6k|q50|q51` (row bytes follow the
+format's block: 34 for Q8_0, 144 per 256 cols for Q4_K, 176 for Q5_K, 210
+for Q6_K, 22 per 32 cols for Q5_0, 24 per 32 cols for Q5_1). K-quant inputs are random bytes, so the rate measures unpack +
+dot throughput, not any particular model.
 
 The llama.cpp comparison needs its own build; see the log for the exact commit
 and flags used, since a different build is not a comparison.

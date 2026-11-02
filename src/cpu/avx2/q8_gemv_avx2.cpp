@@ -52,8 +52,8 @@ inline float dot_row_q8(const std::uint8_t* row, const float* vector,
   const __m128 low = _mm256_castps256_ps128(total);
   const __m128 high = _mm256_extractf128_ps(total, 1);
   __m128 sum = _mm_add_ps(low, high);
-  sum = _mm_hadd_ps(sum, sum);
-  sum = _mm_hadd_ps(sum, sum);
+  sum = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
+  sum = _mm_add_ss(sum, _mm_shuffle_ps(sum, sum, 1));
   return _mm_cvtss_f32(sum);
 }
 

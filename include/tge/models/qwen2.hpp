@@ -32,6 +32,27 @@ struct Qwen2Config {
   int vocab_size = 0;
   float rms_epsilon = 1e-6F;
   float rope_theta = 10000.0F;
+  /// Rotary embedding layout. NeoX pairs the first half of each head with
+  /// the second half (Qwen and friends); interleaved pairs consecutive
+  /// elements (Llama and friends, ggml NORM). Selected from the model
+  /// architecture at load; the wrong layout reads as fluent-looking garbage,
+  /// so a new architecture must declare its side here, never silently.
+  bool rope_interleaved = false;
+  /// YaRN magnitude scale (`rope.scaling.attn_factor`, Phi-3's 1.19024):
+  /// llama multiplies every cos/sin table entry by it, sharpening attention
+  /// by the square. 1.0 when the file does not name the key, which leaves
+  /// every existing model bit-identical.
+  float rope_attn_factor = 1.0F;
+  /// Original training context for long/short YaRN factor selection (0 =
+  /// fall back to `context_length`, mirroring the reference default).
+  int rope_orig_context = 0;
+  /// YaRN factor tables (`rope_factors_short/long.weight`) are present at
+  /// file level. Like the reference, the loader applies per-block factor
+  /// tensors when a file carries them and treats absent ones as all-ones;
+  /// the file-level tables on the Phi export are vestigial there, so the
+  /// flag stays informational: short/long selection only matters past the
+  /// original context length, and every shipped file agrees below it.
+  bool has_yarn_factors = false;
   /// End-of-sequence and end-of-turn ids from the tokenizer metadata. -1 when
   /// the file does not name one.
   int eos_token_id = -1;
@@ -76,9 +97,10 @@ class Qwen2 {
   static std::unique_ptr<Qwen2> load(const std::string& path,
                                      std::string& error,
                                      int context_limit = 0,
-                                     bool eager_vocabulary = false,
-                                     bool kv_half = false,
-                                     int sequences = 1);
+                                      bool eager_vocabulary = false,
+                                      bool kv_half = false,
+                                      bool kv_q8 = false,
+                                      int sequences = 1);
 
   const Qwen2Config& config() const { return config_; }
   int max_context() const { return context_; }
@@ -97,9 +119,27 @@ class Qwen2 {
   /// never publish into a shared worker set.
   void set_threads(int threads);
 
+  /// Prefill worker override for the phase-specific plan. 0 (default) means
+  /// every logical core: prefill is compute-bound. Pass an explicit count to
+  /// reproduce the same-thread comparison (e.g. match --threads for a fair
+  /// fight against another engine's -t N, or isolate the split in an A/B).
+  void set_prefill_threads(int threads);
+
+  /// Decode-worker CPU pinning. Unpinned (default) lets the OS place workers
+  /// everywhere: on the measured box this decodes faster with lower run
+  /// variance than pinning, singly and under sessions contention (see the
+  /// log). Pass --pin-threads 1 to restore P-core pinning.
+  void set_pin_threads(bool pin);
+
   /// Attention scheduling. See `AttentionMode`.
   void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
   AttentionMode attention_mode() const { return attention_mode_; }
+
+  /// Force the scalar oracle for rms_norm, RoPE and SiLU even where AVX2 is
+  /// available. The fidelity harness sets this on the reference arm so one
+  /// number prices the whole vectorisation program, not just attention.
+  /// Production paths leave it off.
+  void set_scalar_kernels(bool enabled) { scalar_kernels_ = enabled; }
 
   /// Use the AVX-VNNI Q8_0 batch kernel, quantizing each distinct activation
   /// once per layer and reusing it across the matrices that share it.
@@ -108,6 +148,11 @@ class Qwen2 {
 
   /// True when the KV cache is stored as IEEE half.
   bool kv_half() const { return kv_half_; }
+
+  /// True when the KV cache is stored as int8 blocks (one float scale per 32
+  /// values). Halves the half-cache footprint; the fidelity harness prices
+  /// the quantization the same way it prices `--kv f16`.
+  bool kv_q8() const { return kv_q8_; }
 
   /// Independent KV slots the model can decode at once.
   int sequence_count() const { return sequence_count_; }
@@ -135,6 +180,14 @@ class Qwen2 {
   /// a rejected suffix is simply overwritten by later tokens.
   int verify_draft(const int* tokens, int count, int start_position,
                    int* predicted);
+
+  /// Same batched pass as `verify_draft`, but returns all `count` positions'
+  /// logits (`count` x `vocab_size` floats, owned by the model, valid until
+  /// the next call) instead of argmax predictions. Powers
+  /// distribution-preserving speculative sampling, which needs the full
+  /// target distribution at each draft position.
+  const float* verify_draft_logits(const int* tokens, int count,
+                                   int start_position);
 
   void reset_cache();
 
@@ -166,6 +219,12 @@ class Qwen2 {
   Qwen2() = default;
 
   Matrix matrix(const char* name) const;
+  /// Row-range view over one tensor's rows: the same bytes, the same type,
+  /// `rows` rows starting at `row_begin`. Fused tensors (`attn_qkv`,
+  /// fused `ffn_up`) map onto the split matrices through this; every kernel
+  /// consumes the view exactly like a standalone matrix because K-quant
+  /// super-blocks never cross a row. Throws on an out-of-range slice.
+  Matrix matrix_slice(const char* name, int row_begin, int rows) const;
   const float* vector(const char* name, int expected) const;
   void matvec(const Matrix& weight, const float* input, float* output,
               const cpu::Q8Quantized* quantized = nullptr) const;
@@ -185,8 +244,12 @@ class Qwen2 {
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
   /// Lazy per-session pools; the decode and prefill sizes differ.
+  /// Decode is bandwidth-bound and stays on a few pinned P-core threads;
+  /// prefill is compute-bound and takes every logical core, unpinned.
   core::ThreadPool& decode_pool() const;
   core::ThreadPool& prefill_pool() const;
+  /// Worker count for prefill work (batch GEMM, chunk attention).
+  int prefill_threads() const;
   /// All query heads for one decode token, spread over the pool.
   void attention(int sequence, int layer, int position, const float* queries,
                  float* out);
@@ -213,10 +276,14 @@ class Qwen2 {
   Qwen2Config config_;
   int context_ = 0;
   int threads_ = 0;
+  int prefill_threads_override_ = 0;
+  bool pin_threads_ = false;
   int sequence_count_ = 1;
   AttentionMode attention_mode_ = AttentionMode::Auto;
+  bool scalar_kernels_ = false;
   bool vnni_ = false;
   bool kv_half_ = false;
+  bool kv_q8_ = false;
   mutable std::unique_ptr<core::ThreadPool> decode_pool_;
   mutable std::unique_ptr<core::ThreadPool> prefill_pool_;
 
@@ -224,11 +291,20 @@ class Qwen2 {
   Matrix output_;
   const float* output_norm_ = nullptr;
   std::vector<Layer> layers_;
+  // Shared zero QKV bias for files that omit bias tensors (e.g. Llama-3.2):
+  // layers point here instead of faulting at load.
+  std::vector<float> zero_bias_;
 
   std::vector<float> k_cache_;
   std::vector<float> v_cache_;
   std::vector<std::uint16_t> k_cache_half_;
   std::vector<std::uint16_t> v_cache_half_;
+  // Int8 KV form: values parallel the float cache element for element, with
+  // one float scale per 32 values in matching order.
+  std::vector<std::int8_t> k_cache_q8_;
+  std::vector<std::int8_t> v_cache_q8_;
+  std::vector<float> k_cache_q8_scales_;
+  std::vector<float> v_cache_q8_scales_;
 
   std::vector<float> x_;
   std::vector<float> h_;
@@ -254,6 +330,11 @@ class Qwen2 {
   // Cosine and sine for every position and rotary half, built once at load.
   std::vector<float> rope_cos_;
   std::vector<float> rope_sin_;
+  // Interleaved-layout copies with every coefficient doubled
+  // ([c0,c0,c1,c1,...]), so the AVX2 kernel loads one contiguous vector per
+  // 8 values instead of gathering pairs. Built alongside the tables above.
+  std::vector<float> rope_cos_dup_;
+  std::vector<float> rope_sin_dup_;
 
   // Prefill workspace, sized for one chunk of prompt tokens.
   std::vector<float> batch_x_;

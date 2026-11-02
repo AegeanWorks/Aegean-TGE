@@ -76,6 +76,7 @@ one before and one after, repeated two or three times when the delta is small.
 | 2026-11-01 | VNNI Q8 batch, pre-quantized activations, `--vnni` | 510 / 2048 prefill | 163.1 / 165.6 t/s | 194.5 / 188.2 t/s (+19% / +14%) | **kept opt-in** (KL 1.568e-3, top-1 485/497) |
 | 2026-11-01 | f16 KV cache (`--kv f16`) | 2048 prefill / decode | 145.7 / 21.7 t/s | 165.9 / 35.4 t/s | **kept opt-in** (KL 1.658e-6, top-1 497/497, ids identical) |
 | 2026-11-01 | Continuous batching (4 KV slots, 1 model) | 8 requests × 32 tokens | sessions 42.21 t/s aggregate | 58.28 t/s (+38%), ids identical | **kept** |
+| 2026-11-02 | int8 KV cache (`--kv i8`) | Llama-3B Q4_K_M 2048 decode | 5.80 t/s | 7.63 t/s (+32% vs f32, +15% vs f16) | **kept opt-in** (KL 3.2e-4, top-1 31/31, text identical) |
 
 ## 1. f32 GEMM
 
@@ -875,3 +876,1231 @@ evicted.
 Tests: 60/60 unchanged; the batch parity is checked through the CLI transcript.
 `bench continuous` also accepts `--vnni` and `--kv f16` (the flags are guarded by
 the CPU checks above), so the trades can be combined with batching.
+
+A newly admitted request's prompt is now batched with the active decodes in the
+same pass (`--prompt-tokens`). Eight requests of 32 tokens measure 68.98 t/s at
+an 8-token prompt against 62.34 at 1 (+10.7%); the first transcript stays
+token-identical to `generate` at 1, 8 and 32 prompt tokens. A 32-token prompt
+falls to 54.08 t/s because the prompt rows crowd the 64-row batch. The KV is
+still fixed per slot, not paged or evicted.
+
+## 26. Report verification round: batched tails, P-core pin, weight prefetch (2026-11-01)
+
+Verifies the 16-page token-creation report (master 7a500c7) against HEAD and
+lands the three remaining true wins. Machine: i5-14400F, 6 threads, Q8_0.
+
+### 26a. Batched kernel remainder (kept)
+
+The report's open item "batched kernel efficient at 1 to 5 tokens" reproduced:
+5 tokens cost *more* than 6, because the 1..5 tail re-read every weight row
+once per token while a full group of 6 reads it once.
+
+| shape | before 5 tokens | before 6 tokens | after 5 | after 6 |
+|---|---|---|---|---|
+| 4864x896 (FFN) | 0.432 ms | 0.239 ms (1.81x) | 0.321-0.376 ms | 0.315-0.364 ms (~1.0x) |
+| 151936x896 (output) | 8.432 ms | 6.078 ms (1.39x) | 5.769 ms (-31.6%) | 5.701 ms (-6.2%) |
+
+The tail is now a 1..5-wide batched group sharing one widened weight block,
+the same arithmetic in the same block order, so the result is bit-identical.
+Every 64-token prefill chunk is 10 full groups plus a 4-token tail, so every
+chunk paid the old cost; the speculative verifier's 6-token pass never did.
+`bench batch` at 1..6 plus all 60 unit tests (q8 differential included) are
+the guard. Fidelity after the change: mean KL 6.1e-12, worst 9.6e-10, top-1
+1023/1023 over docs/architecture.md.
+
+End to end, short decode is inside machine noise (34.9 -> 32.3 t/s across
+sessions, +/-20% on this box), while the output-projection tail dominates
+large-vocabulary passes. Speculative story decode stays 1.55-2.0x (50.0 t/s
+vs ~32 here, 56.4 vs 28.1 in section 21).
+
+### 26b. Decode workers pinned to P-cores (kept, variance lever)
+
+The report's "pin decode workers to distinct P-cores" was true: no affinity
+was set anywhere, workers spun between calls. `ThreadPool` workers now pin
+round-robin to the fastest efficiency class (logical 0 reserved for the
+caller/OS), single-group only; larger topologies keep OS placement.
+Literature: Olling (8 vs 16 threads on Ryzen/Apple), Gaessler (5 threads
+saturate dual-channel DDR4, 29 on quad-channel Xeon), Sandwich (separate
+prefill/decode plans, core-count tuning), llama.cpp `--cpu-mask/--cpu-range`.
+
+Measured effect on this box is variance, not mean: the pool handoff is
+already 0.5-0.8 us, so pinning does not move the 32-35 t/s short-decode mean
+outside noise, but it removes one source of the +/-20% run-to-run spread
+(migration across P/E). Claimed as a variance fix, not a speedup.
+
+### 26c. Weight prefetch at load (kept, opt-in)
+
+The report's cold 43 s first-prefill reproduced as a fault-in, not compute:
+the GGUF is mmap'd, weights fault on first use. `File::prefetch()` touches
+every 4 KiB page once (plus a `PrefetchVirtualMemory` hint on Windows where
+available); `generate --prefetch` reports it explicitly.
+
+| step | warm run here |
+|---|---|
+| load (map + parse) | 58-144 ms |
+| prefetch 675 MiB | 489 ms (~1.4 GB/s, storage-bound) |
+| first-token fault | moved out of prefill into the explicit step |
+
+Total bytes are identical; predictability is the win. Default stays off so a
+warm repeated CLI invocation does not pay 0.5 s; cold starts and benchmarks
+pass `--prefetch`.
+
+### 26d. Report arithmetic correction (docs only)
+
+The report's correction stands: the log's section 6 "241 GFLOPS, ~91% of
+prefill is the batch kernel" counts 2 x 630M weights x 191.6 t/s, i.e. the
+embedding table plus a full output projection per prompt token. Prefill
+multiplies ~358M weights per token, so the useful rate is ~137 GFLOPS and
+the kernel is nearer 40% of prefill on the 14400F, the rest being norms, rope
+and attention. Section 6 is superseded by this note; the raw GFLOPS stand.
+
+### Verdicts on the report's remaining opens
+
+- Fused K-quant dot: still true gap (6.71 vs 21.85 GB/s), still not fused.
+  Next after this round; needs the same differential-test-first treatment.
+- Vectorised exp in softmax: stays scalar. Literature (QuAKE bit-trick,
+  exllamav2 `exp256_ps`, ggml-cuda `__expf` in flash attention, aussieai
+  73x fused softmax) says 1-2 ULP is irrelevant in attention where the max
+  is subtracted, but it changes logits, so it needs its KL price from the
+  harness first. Not attempted here.
+- Shared-prefix KV cache, same-tokenizer draft model: true, still open.
+  Continuous batching (section 25) shares the weight stream but re-prefills
+  each admitted prompt; a prefix cache would skip it. Deferred.
+- Fuse Q/K/V and gate/up: correctly dropped. Fork-join is 0.5-0.8 us; 72
+  fewer calls save under 0.3 ms per token. Confirmed, not revisited.
+
+Tests: 60/60. Gate (`scripts/test.cmd`): pass.
+
+## 27. Phase-0 timers and re-sweep under load (2026-11-01)
+
+`generate` now prints a `timers` line per decode: all model passes
+(`forward` + speculative `verify_draft`) vs all sampler calls. The
+attention/projection split lives inside `forward()` and is not timed here;
+the line names the sampling share so a top-p/min-p regression shows first.
+
+| run (loaded box, absolutes depressed) | forward | sample | share |
+|---|---|---|---|
+| greedy, 63 tok | 5425.78 ms | 17.59 ms (0.28 ms/tok) | 0.3% |
+| temp 0.8 top-p 0.95, 31 tok | 2262.82 ms | 42.12 ms (1.36 ms/tok) | 1.8% |
+| greedy + `--prefetch`, 31 tok | 3044.23 ms | 8.91 ms | 0.3% |
+
+Greedy sampling is a 0.3 ms argmax scan; the top-p candidate path costs
+~1 ms extra per token, against 18.2 ms with the old full sort (§16). The
+machine was heavily loaded for these runs (short decode 10-13 t/s vs the
+32-45 t/s in §26a), so only the shares transfer, not the absolutes.
+
+Re-sweep with the remainder fix (§26a): output projection (151936x896)
+1 token 6.531 ms vs 4 tokens 10.249 ms = 1.57x the time for 4x the work,
+against ~4x under the old per-token tail. `bench continuous` 8x16 rechecks
+at 43.46 t/s aggregate with all transcripts identical (lower absolute than
+the 58-69 t/s in §25 under lighter load; independence holds). Tests 60/60.
+
+## 28. Beat-llama round A: vectorised norms/RoPE + finer prefill attention (2026-11-01)
+
+Target: short decode at parity (45 vs 45.1 llama), prefill 75-85% of llama
+(pp512 261-266 vs 352), 2k decode 82% (38.3 vs 46.9). Prefill does ~87M
+scalar softmax exps + ~60M SiLU exps per 510 prompt plus scalar norm/RoPE
+passes; `attention_batch` parallelised over tokens only, so a 4-token prompt
+leaves 2 of 6 workers idle.
+
+### 28a. AVX2 rms_norm + RoPE (kept, fidelity-neutral)
+
+`rms_norm_avx2` (vectorised sum-of-squares + scale) and `apply_rope_avx2`
+(vectorised NeoX rotate with FMA) in `src/cpu/avx2/norm_rope_avx2.cpp`;
+scalar oracles in `src/cpu/scalar/norm_rope_scalar.cpp`; `Qwen2` dispatches
+on AVX2+FMA. Differential test `norm_rope_avx2_matches_scalar` (dims
+32/64/896, heads 2/14, head_dim 64/128) at 1e-5.
+
+| check | before | after |
+|---|---|---|
+| tests | 60/60 | 61/61 (new differential) |
+| fidelity 1023 pos | mean 6.115e-12, worst 9.6e-10, 1023/1023 | mean 5.529e-12, worst 3.7e-10, 1023/1023 |
+| generate text, story prompt | ", there was a young man..." | identical |
+
+Speed on this box is load-dominated (86% RAM, page pressure; `bench batch`
+swings 3-6x run to run), so no t/s claim is made here. The win is structural:
+every prefill chunk (64 tokens x 24 layers x 2 norms) and every decode token
+(48 norms + 2 ropes) leaves the scalar path. Kept on correctness + fidelity.
+
+### 28b. Prefill attention over tokens x heads (kept, correctness)
+
+`attention_batch` split over `tokens * heads` when `tokens < workers`;
+`forward_batch` attention (previously sequential) uses the same schedule via
+`prefill_pool`. `scores_` grows from `max(14, 64)` to `64 * 14` rows (14.7 MB)
+so each task owns its slice; decode keeps the first 14 slices.
+
+| check | result |
+|---|---|
+| tests | 61/61 |
+| fidelity | unchanged 5.529e-12, 1023/1023 |
+| generate story prompt | identical text |
+| continuous 4x8/2slots/p2 | 17.11 t/s aggregate, independent transcripts |
+
+A 4-token prompt goes from 4 to 56 tasks; a 64-token chunk keeps the token
+path. No arithmetic change, so no KL price. Kept.
+
+### 28c. Vectorised SiLU gate + attention softmax exp (kept, fidelity-neutral)
+
+Shared Cephes-style AVX2 exp (`include/tge/cpu/exp_avx2.hpp`, 5th-order,
+~1e-6 relative) used by `silu_gated_avx2` (all three SiLU sites: prefill,
+forward, forward_batch) and the `attention_head_avx2` softmax array.
+Differential tests at 1e-4 (`silu_gated_avx2_matches_scalar` over
+1/7/32/4864; existing attention differential covers the softmax).
+
+| check | value |
+|---|---|
+| tests | 62/62 |
+| fidelity 1023 pos | mean 4.898e-12, worst 2.468e-10, max diff 1.18e-4, top-1 1023/1023 |
+| story prompt text | identical (normal, speculative) |
+| spec ratio this session | 27.63 vs 17.06 t/s (1.62x) |
+| long prompt (282 tok) | prefill 113.5 t/s, decode 20.0 t/s (load-depressed absolutes) |
+| continuous 4x8/2slots/p2 | 27.42 t/s aggregate, independent |
+
+One real bug caught by the harness: the first version clamped exp to
+[-104, 88], so softmax tails below -87 produced a negative biased exponent
+(garbage scale) → KL nan, worst 10.6 nats, top-1 828/1023. Clamping to
+[-87, 88] keeps the 2^n reconstruction in normal-float range; tails
+underflow to ~1e-38, negligible beside the max term (1.0). After the fix
+the KL matches the pre-exp baseline (4.76-4.90e-12). Kept as the default
+(no opt-in): the price is at the reference floor, three orders below the
+f16-KV trade (1.7e-6).
+
+Remaining scalar exps: GQA online-softmax alpha/beta (one value per token,
+negligible) and the sampler (151,936-logit path only matters for sampled
+decode; greedy is an argmax scan). Next: prefill-vs-decode thread split,
+then a same-thread re-measurement against llama.cpp build 11624 pairs.
+
+### 28d. Long-context check with the new kernels (correctness)
+
+2048-token id prompt (`128` x 2048), 32 decode tokens, 6 threads, this
+session (load-depressed absolutes): prefill 99.0 t/s, decode 22.05 t/s,
+timers forward 1398.13 ms vs sample 7.69 ms (0.5%). Logged lighter-load
+figures (§19/§18): prefill 225-246, decode 38.3 GQA. The GQA schedule
+(>= 256 positions) is active here; fidelity (§28c) already prices the
+arithmetic. No regression in scheduling: 31/31 tokens decoded, no crash,
+no fallback to scalar. Absolute comparison across sessions is load-noise;
+the within-run share (sampling 0.5%) transfers.
+
+### 28e. Phase-specific thread plan: prefill on all cores, decode pinned (kept)
+
+Decode is bandwidth-bound and stays on 6 pinned P-core threads; prefill is
+compute-bound and now takes every logical core (16), unpinned, with dynamic
+work-stealing absorbing the E-core pace. `ThreadPool(threads, pin)` gains
+the pin flag (default true, decode behavior unchanged);
+`Qwen2::prefill_threads()` returns `max(threads_, hardware_concurrency)`;
+`batch_matvec`, `attention_batch` and the `forward_batch` attention use it.
+No arithmetic change: the clínicas are scheduling only.
+
+| check | before (same session, heavier load) | after (lighter load) |
+|---|---|---|
+| `measure.ps1` mem read | 19.82 GB/s | 26.81 GB/s (box load differs, 1.35x) |
+| 282-tok prefill | 122.3 t/s | 250.3 t/s (2.05x; exceeds the 1.35x load shift) |
+| short decode (control: path untouched) | 9-19 t/s earlier | 29-35 t/s now (load, not code) |
+| fidelity 1023 pos | 4.898e-12, 1023/1023 | identical 4.898e-12, 1023/1023 |
+| story text / continuous | identical / independent | identical / independent (34.66 t/s agg) |
+| tests | 62/62 | 62/62 |
+
+Honesty note: the box lightened between the two runs (mem 19.8 → 26.8),
+so the 2.05x prefill figure bundles a ~1.35x load shift with the real
+structural gain; the decode control (untouched path) moving with load
+confirms the bundle. The keep rests on structure + fidelity-neutrality,
+not on the headline ratio: compute-bound prefill on 16 unpinned cores vs
+6 pinned is the Sandwich phase split, and the KL is bit-identical at
+4.898e-12. A same-load A/B (taskset or cgroup) is the follow-up that
+would isolate the ratio; logged as open, not claimed.
+
+### 28f. Same-load prefill A/B via --prefill-threads (kept, +17% isolated)
+
+§28e left the ratio bundled with a load shift and forced prefill to
+`max(threads, hw)`, removing the fair same-thread comparison. New:
+`Qwen2::set_prefill_threads(n)` (0 = auto = all logical cores) plus
+`--prefill-threads N` on `generate` and `bench continuous`. Default
+behavior is unchanged (16 here); passing 6 reproduces the old plan.
+
+Same-load interleaved A/B, 282-token prompt, `--threads 6`, one window:
+
+| run | prefill threads | prefill | decode (control, path untouched) |
+|---|---|---|---|
+| A | 6 | 193.7 t/s | 20.93 t/s |
+| B | default (16) | 259.3 t/s | 17.04 t/s |
+| A2 | 6 | 234.5 t/s | 11.18 t/s |
+| B2 | default (16) | 242.7 t/s | 37.03 t/s |
+
+Medians: 6 → ~214 t/s, 16 → ~251 t/s: **+17% isolated structural gain**.
+The decode control swings 11-37 t/s across the same four runs (7-token
+sample + load noise), confirming absolutes are not the evidence; the
+interleaved prefill pairing is. No arithmetic change (scheduling only),
+so no KL price; fidelity stands at 4.898e-12 from §28c.
+
+Kept: default 16 (free prefill throughput, decode untouched) with the flag
+restoring the fair fight (`--prefill-threads 6` matches `--threads 6` /
+llama `-t 6`). Fairness note for future comparisons: report the prefill
+thread count alongside the rate; same-thread numbers are the algorithmic
+comparison, all-core numbers are the system comparison. Tests 62/62.
+
+### 28g. Longer prompt-lookup spans 5..1 (kept, no-regression + ceiling case)
+
+The drafter only tried spans 1-3. Longer context matches accept at higher
+rates (GOOSE 2026), and the verify-then-accept construction guarantees
+greedy-identical output whatever the draft is, so this is a free option:
+`prompt_lookup_draft` now tries 5..1 in `apps/cli/main.cpp`, falling back
+through the old range, so every proposal the old code made is preserved.
+
+| prompt, 128/32 tok | before (3..1) | after (5..1) |
+|---|---|---|
+| story "Once upon a time", spec | 6 steps, 1.17/step, 22.20 t/s (0.94x normal 23.61) | 6 steps, 1.17/step, identical text |
+| repetitive 282-tok, spec | — | 2 steps, 5.00/step (ceiling), 42.12 vs 29.55 t/s (1.43x), ids identical |
+
+Honesty note: the story prompt has no 4-5-token matches, so acceptance is
+unchanged there (same proposals, same 1.17/step) — and it also shows
+speculation can run slightly below parity (0.94x) when there is nothing to
+match, which is why the flag stays opt-in. The repetitive prompt sits at
+the 5.00/step ceiling. A prompt where only longer matches exist would
+separate old vs new; none was measured, so the keep rests on the
+fallback-superset mechanism + identical-output guarantee + no-regression,
+not on a measured acceptance delta. One subtlety recorded: when a span-5
+match exists at an older position than the most recent span-3 match, the
+new code drafts from the longer (older) match instead — output still
+verified identical, acceptance expected higher per GOOSE, not proven here.
+Tests 62/62.
+
+### 28h. K-quant scratch reuse without zero-init (kept, +50-84% kernel)
+
+`gemv_dequant_batch_avx2` allocated and zero-filled a cols-float scratch
+per band per call (`std::vector<float>(cols)` inside `parallel_for`):
+~bands allocations x 169 calls per decode token, and the fill is pure
+waste since `dequantize_row_avx2` overwrites every element. Now a
+`thread_local` scratch per worker, `resize`d once (growth zero-fills only
+the new tail) and reused across calls. Same bytes in, same floats out:
+no arithmetic change. The scalar oracle keeps its once-per-call scratch
+(tests only), so only the parallel path changed.
+
+| bench | before | after |
+|---|---|---|
+| q4_k batch 896x4864 x 1 (best of 3) | 0.593 ms, 4.13 GB/s | 0.322 ms, 7.61 GB/s (+84%) |
+| same, re-run best of 5 (load moved) | — | 0.396 ms, 6.20 GB/s (+50% vs baseline) |
+| Q4_K_M decode, story 16 tok | 10.29 t/s | 10.34 t/s (unchanged, inside noise) |
+| Q4_K_M greedy ids | 11 1052 572 ... 13 1260 | identical |
+
+Honesty note per the §7b precedent: the kernel win is large and stable
+across re-runs, but end-to-end Q4_K decode does not move outside noise on
+this box — the remaining gap is the per-row dequant compute + scratch
+round-trip the log already prices (6.7 vs 21.85 GB/s), i.e. the fused dot
+is still the real fix and stays open. Kept on kernel win + parity: less
+alloc traffic on every K-quant call at zero accuracy cost. Tests 62/62.
+
+### 28i. Fused single-token Q4_K dot (REVERTED: no win + alignment fault)
+
+Attempt: `dot_q4_k_fused_avx2` unpacked nibbles straight into the FMA chain
+(two vector accumulators for the qx and x sums, finalized per 32-group with
+the group's d/m), wired into `gemv_dequant_batch_avx2` for `tokens == 1 &&
+kind == Q4_K` (every decode matvec on Q4_K models). Differential test vs
+scalar dequant+dot passed at 1e-4 on 1- and 3-block rows, and the Q4_K
+story ids came out identical to baseline (`11 1052 572 ... 13 1260`) —
+after fixing the real bug below.
+
+Two findings, one fatal to the change:
+
+1. Alignment fault (fixed during the attempt, kept as a lesson): the first
+   version formed `const __m256* xp` over the activation buffer and indexed
+   it. That emits aligned VMOVAPS, but activation buffers are only 16-byte
+   aligned (`operator new`), so Q4_K generate segfaulted (0xC0000005) with
+   zero output — while `bench batch` passed because its input buffer happened
+   to be 32-byte aligned. Rule recorded: never form a vector pointer over a
+   float buffer; every lane loads explicitly unaligned (`_mm256_loadu_ps`).
+   The same audit applies to future kernels: `xp[i]` on `__m256*` is an
+   alignment assertion, not a load.
+2. Same-session A/B, q4_k batch 896x4864 x 1 (best of 5): fused 0.349 ms /
+   7.01 GB/s vs the §28h scratch path 0.301 ms / 8.15 GB/s. The fused dot
+   LOSES by ~14%. Structural reason: per-32-group scales force two
+   horizontal reductions per 32 weights (304 hadd-sequences per 4864-row vs
+   one in `dot_f32`), while the scratch path separates a clean wide dequant
+   from a clean whole-row dot. Fusion saves an L1 round-trip but pays hadd
+   tax that exceeds it; same unpack ALU either way.
+
+Reverted in full (branch, kernel, decl, test) — the tree is back to the
+§28h state, verified by diff. Rounding risk (FMA vs mul-then-sub) with zero
+demonstrated gain is exactly what G-002 reverts. The Q4_K decode gap
+(10.7 t/s vs ~30 Q8_0) stays open; the plausible next attempt is an
+int8-domain dot (`_mm256_maddubs_epi16`, llama-style, no float nibbles at
+all), not float fusion. Tests 62/62 after revert; Q4_K story ids identical.
+
+### 28j. AVX2 Q6_K dequant, bit-identical (kept, +82% kernel, +12% model)
+
+`ffn_down` is Q6_K 3.41 MiB per block on this recipe and was still scalar-
+dequantized on every decode token and every prefill chunk. New
+`dequantize_q6_k_avx2` in `src/cpu/avx2/dequant_avx2.cpp`, wired as the Q6_K
+case in `dequantize_row_avx2`: 6-bit weights rebuilt from 4 low bits plus 2
+high bits (shifts exact per byte under 0x0F/0x03 masks, and-before-shift so
+no spill), minus 32 in the byte domain, then multiply-only `(d*sc)*q in
+scalar order with no FMA — hence bit-identical, not merely near. Loads are
+explicitly unaligned throughout (§28i lesson: no vector pointer over a
+model buffer). `bench batch --format` grows a `q6k` value (row bytes
+cols/256*210); the Q6_K differential test (`q6k_avx2_matches_scalar_exactly`,
+1- and 3-block, memcmp) passes.
+
+| bench | before (scalar) | after (AVX2) |
+|---|---|---|
+| q6_k batch 896x4864 x 1 (best of 5) | 0.808 ms, 4.42 GB/s | 0.444 ms, 8.06 GB/s (+82%) |
+| Q4_K_M decode, story 16 tok | 10.29 t/s | 11.51 t/s (+12% end-to-end) |
+| Q4_K_M greedy ids | 11 1052 572 ... 13 1260 | identical |
+
+Honesty note: kernel and model figures are from adjacent sessions on a
+loaded box, not an interleaved A/B — but the attribution is clean (the only
+change on the Q6_K path is scalar→AVX2, and the differential is memcmp, so
+no rounding confound exists). The remaining scalar K-formats on this recipe
+are Q5_0 (gate/up/attn, the largest share) and Q5_K/Q4_0; Q5_0 AVX2 is the
+same pattern and stays next. Tests 63/63.
+
+### 28k. AVX2 Q5_0 dequant, bit-identical (kept, +121% kernel)
+
+Q5_0 covers gate/up/attn (~6.9 MiB per block x24 — the largest scalar
+share left) and ran scalar on every token. New `dequantize_q5_0_avx2` +
+dispatch case: nibbles via the §28i-exact 16-bit shift discipline, the two
+high bits via a 256-entry LUT (byte k of entry b is ((b >> k) & 1) << 4, so
+no variable per-element shift), bias -16 in the byte domain, then
+multiply-only `d*q` in scalar order, no FMA — bit-identical, memcmp-gated.
+All loads explicitly unaligned (§28i). `bench batch --format` grows `q50`.
+
+The differential test caught a real misread before anything shipped: the
+scalar pairs low bit (hb >> i) with high bit (hb >> (i + 16)) — the
+`(hb >> (i + 12)) & 0x10` selects bit 4, i.e. source bit i + 16, not i + 12
+as first implemented (first mismatch at index 16, off by exactly the 0x10
+bit). Fixed, memcmp passes on 1- and 3-block rows.
+
+| bench | before (scalar) | after (AVX2) |
+|---|---|---|
+| q5_0 batch 896x4864 x 1 (best of 5/3) | 0.881 ms, 3.40 GB/s | 0.399 ms, 7.50 GB/s (+121%) |
+| Q4_K_M decode, story 16 tok | 10.29–11.51 t/s (loaded box) | 29.35 t/s, ids identical |
+| same light window, Q8_0 story 16 tok | — | 32.86 t/s (Q4_K_M at 89% of Q8_0) |
+
+Honesty note: the 10-11 → 29 end-to-end jump bundles a large load shift
+(mem 19-22 → 27.6 GB/s across sessions) with the kernel win — the kernel
+A/B (2.2x) exceeds any observed load swing (≤1.4x), and the same-window
+Q4_K_M/Q8_0 pairing (89%) is the load-proof statement. Remaining scalar
+K-formats: Q5_K (absent from this recipe — verify before touching) and Q4_0
+(embeddings, cold path). Tests 64/64.
+
+### 28l. K-quant program closeout: same-window Q8_0 vs Q4_K_M (all hot formats AVX2)
+
+`gguf` histograms of both local files: Q4_K_M = Q5_0 (133 tensors) + F32
+(121) + Q8_0 (13) + Q4_K (12) + Q6_K (12); Q8_0 file = Q8_0 (170) + F32.
+No Q5_K and no Q4_0 tensor exists in either file, so with Q4_K (§17), Q6_K
+(§28j) and Q5_0 (§28k) all AVX2 behind memcmp oracles, every K-format the
+engine can actually execute here is vectorised. Q5_K/Q4_0 stay
+scalar-oracle-only until a file containing them appears — vectorising
+without an end-to-end model to run would be untestable performance art.
+
+Same-window matrix, back-to-back runs, `--threads 6` (prefill default 16):
+
+| 282-tok prefill / story decode | Q8_0 | Q4_K_M | Q4_K_M / Q8_0 |
+|---|---|---|---|
+| prefill | 253.0 t/s | 222.8 t/s | 88% |
+| story decode, 15 tok | 31.71 t/s | 25.33 t/s | 80% |
+| story ids | ...13 3757 | ...13 1260 (== every prior Q4_K_M baseline) | first 15 ids identical |
+
+The 7-token decode samples (26.95 vs 38.01) flip rank — small-sample noise,
+not evidence; the 15-token runs are the metric. Q4_K_M moved from ~10 t/s
+(loaded box, scalar K-dequant) to 80% of Q8_0 in the same window; the
+remaining gap is the irreducible unpack ALU per weight plus attention/KV,
+not scratch or dispatch overhead. Per-format kernel path since §28h–§28k:
+q4k 4.13→7.6, q6k 4.42→8.06, q5_0 3.40→7.50 GB/s. Tests 64/64.
+
+### 28o. Alignment-pattern audit: clean, rule recorded (kept)
+
+`grep` over `src/cpu/avx2` for `reinterpret_cast<*__m256*>`, `__m256*`
+indexing, and aligned `_mm256_load/store_ps` / `_mm256_load/store_si256`:
+5 vector-pointer casts, all feeding `_mm256_loadu_si256` (explicitly
+unaligned — safe); 2 aligned `_mm256_store_ps`, both targeting
+function-local `alignas(32)` spill arrays (32-byte aligned by construction —
+safe). Scalar TUs contain no intrinsics; `src/models` contains no vector
+pointers or aligned loads. No live instance of the §28i fault pattern, so
+no code fix — but the audit was not free: `bench batch` uses AlignedBuffer
+(32-byte), which is why the fused dot passed bench and segfaulted generate,
+so the audit also justifies a standing rule, now written into the kernel
+contract (`include/tge/cpu/kernels.hpp` addressing paragraph): never form a
+vector pointer over a model or activation buffer; every lane loads/stores
+explicitly unaligned; `alignas(32)` spills are the sole exception.
+Verified: 64/64 tests, Q4_K_M story generate clean with baseline ids.
+
+### 28p. Snapshot covers the K-quant kernels (kept, instrument only)
+
+`measure.ps1` measured Q8 shapes only, so every §28h–§28k K-quant win landed
+with ad-hoc benches and no G-001 line. It now prints three `kbatch` lines —
+decode-shaped 1-token runs in the orientation each format takes in the model
+(gate Q5_0 4864x896, down Q4_K and Q6_K 896x4864), one line each, same
+best-of diff format. No behavior change: reporting only, verified
+line-by-line (`kbatch gate/down4/down6` print correctly).
+
+Side observation, reinforcing §28m: the first snapshot run printed
+1.27–1.44 GB/s for lines that measure 6.45–8.23 direct seconds later — a
+background CPU spike inside that one script run. Even within a single
+snapshot, a contended minute lies; interleaved A/B remains the only
+decode-grade evidence. Tests 64/64 (script change; suite unaffected).
+
+### 28n. Docs sync, no code behavior change (kept)
+
+README claimed 58 tests (now 64), `bench batch` grew `--format q6k/q50`
+with no `--help` line, and the §28l same-window Q4_K_M numbers were
+verified but unpublished. Fixed: usage documents `--format F`
+(q8|q4k|q6k|q50) and `--kernel K`; README tests row reads 64 and the
+verified table gains the Q4_K_M same-window row; `benchmarks.md`
+reproducing section notes the formats and row-byte rules. README is 11.0k
+chars (limit 30k). No performance delta by construction — usage string
+only; `tge` help output verified. Tests 64/64, 4/4 gates.
+
+### 28m. Decode-overhead hunt on this box: load, not structure (Track A, no code)
+
+Q8_0 story decode here runs 27–38 t/s (31.5ms) against 18.1ms weight
+streaming at 27.7 GB/s, leaving ~13ms unexplained vs the 3–5ms logged on
+the 14400F. Same-window tests, no code changes:
+
+| run, `--threads 6` story 16 tok | decode |
+|---|---|
+| cold process | 37.62 t/s |
+| warm process | 31.10 t/s |
+| warm + `--prefetch` (473ms fault-up-front) | 27.49 t/s |
+| 2048-ctx random ids (same window) | 26.14 t/s |
+| 2048 prefill (same window) | 264.8 t/s |
+
+Findings, in order of what they kill:
+
+1. NOT page faults. Prefetching all weights up front makes decode SLOWER,
+   not faster (27.49 vs 31.10), and cold beats warm. The variance is box
+   load/frequency, running ±18% across back-to-back identical runs.
+2. The "13ms overhead" is therefore mostly misattributed load, not a
+   structural gap to optimize. Retire the hunt; this box cannot resolve
+   <20% decode differences, which is exactly the report's own ±20% noise
+   statement (§"measurement system").
+3. Attention slope, bounded estimate only: ~31.5ms (short) vs 38.3ms
+   (2048 ctx) ≈ 7ms per 2048 context tokens, confounded by the same swing —
+   reported as an upper bound, not a price.
+4. Prefill 264.8 t/s at 2048 ctx confirms the §28e thread split holds at
+   long context (prior 225–246 at 6 threads).
+
+Methodological consequence, recorded as a rule: on this box, only
+interleaved same-window A/B counts for decode (as in §28f); cross-session
+absolutes are load narrative. The next structural decode lever stays what
+§28i/§28l say (int8-domain dot or fewer passes), not overhead hunting.
+
+### 28q. Shared-prefix KV cache: designed, deferred (no paying caller)
+
+Designed to the code level, then stopped before writing it. The mechanism
+is straightforward — copy-on-match of position-0 KV rows into a fresh slot
+instead of recomputing, byte-identical by construction — but no in-engine
+caller reuses a prefix: `generate` is one-shot per process, `bench
+continuous` feeds shared prompts through `forward_batch` (subsetting its
+per-token batch for skips would be surgery on the hottest loop), and `bench
+sessions` gives each session its own model. Building the cache without a
+caller is speculative generality. Trigger condition, recorded so the work
+starts from analysis instead of rediscovery: a persistent multi-turn loop
+calling `prefill` on one model instance with repeated leading tokens —
+then hook `prefill_run` (single integration point: match, memcpy rows,
+start chunks at the match length, 1-token tail when the whole prompt hits)
+and demonstrate on repeated system prompts. No code changed.
+
+### 28r. Sampler primitives for distribution-preserving speculation (kept, [1/3])
+
+Speculation is gated to greedy + no penalty (`main.cpp` argmax pre-check),
+so temperature users cannot use the only lever past the wall. First third:
+the sampler support it needs, with no callers yet. New in
+`sampling.{hpp,cpp}`: `softmax_probabilities` (extracted byte-identical
+from the no-cut path — the seed-determinism test still passes unchanged),
+`categorical_sample` (same scan), and `speculative_accept` implementing the
+standard one-hot rule (accept w.p. q[draft]; on reject draw from
+norm(max(0, q − onehot)), never the draft token). Statistical tests, all
+passing: helper vs hand-computed exps; categorical-vs-sampler agreement
+over 32 seeded draws; accept rate 0.35 ± 0.02 over 20k trials; rejection
+resample follows the renormalised tail (0.375/0.625 ± 0.02, draft never
+returned); bad-argument guards. Greedy story ids unchanged; sampled smoke
+run healthy through the refactored path. Next: wire the sampled verify
+loop ([2/3]), then measure acceptance/speedup with parity ([3/3]). Tests
+69/69 (64 + 5 new), 4/4 gates.
+
+### 28s. Sampled speculation wired: verify_draft_logits + accept loop (kept)
+
+`Qwen2::verify_draft_logits` returns all `count` positions' logits (same
+batched pass, no argmax); `generate` gains a temperature-only sampled path
+(gated like greedy plus no top-k/p, no min-p, no penalty — the accept rule
+is exact only for the untruncated distribution). Per step: draft[0] is
+judged against the current logits BEFORE verifying (a first-position
+rejection skips the weight pass entirely); on accept the verifier runs and
+draft[1..4] are judged against rows 0..3, bonus from row 4. Position
+bookkeeping mirrors greedy (`forward(last, position + emitted - 1)`).
+
+Measurement caught a real off-by-one pre-ship: the first version judged
+draft[i] against verify row i, but row i predicts draft[i + 1] (row i is
+the distribution after feed[i]). Symptom: 0.00/step acceptance on a
+repetitive prompt where greedy hits 5.00. Fixed; acceptance now scales
+with peakedness exactly as theory predicts:
+
+| repetitive 282-tok, temp | spec acceptance | decode, same window |
+|---|---|---|
+| 0.8, no spec | — | 31.56 t/s |
+| 0.8, spec | 0.50/step | 27–33 t/s (verify cost ≈ benefit) |
+| 0.1, no spec | — | 25.76 t/s |
+| 0.1, spec | 3.00/step | 52.30 t/s (**2.03x**) |
+
+Distribution preserved by construction (unit-tested accept/reject +
+renormalised resample, reviewed loop mirroring greedy); greedy `--speculative`
+ids byte-identical to every prior baseline. New bottleneck exposed: sampling
+is 61% of the temp-0.1 spec run (6 full-vocab scalar softmaxes per verify
+step) — the sampler exp is next (vectorise like attention/SiLU, price it).
+Tests 69/69, 4/4 gates.
+
+### 28t. Vectorised sampler softmax exp (kept, -16% sampling, chi-square gated)
+
+Sampling was 61% of the temp-0.1 spec run and ~2-3% of plain sampled
+decode: up to 6 full-vocab scalar softmaxes per verify step. New
+`softmax_exp_avx2` (own TU `src/cpu/avx2/sampler_exp_avx2.cpp`, same
+pattern as SiLU/norms) using the shared Cephes exp; `softmax_probabilities`
+dispatches on AVX2+FMA, scalar oracle in the scalar TU. The cut paths
+(top-k/p, min-p) keep their own scalar loops — out of scope. Greedy never
+touches exp, so greedy ids cannot move (verified identical).
+
+| check | before | after |
+|---|---|---|
+| differential scalar-vs-AVX2, 1/7/32/1519 wide | — | max 1e-4, pass |
+| no-cut histogram, 8-way, 100k draws | — | every bin ±0.01, pass |
+| sampled story temp 0.8, 32 tok | 24.58 t/s, sample 2.1% | 27.90 t/s, sample 1.9% |
+| spec temp 0.1 repetitive, same trajectory (4 steps, 12 acc, 15 out) | sample 171.62 ms (57.5%) | sample 143.66 ms (47.6%), **-16% paired** |
+| spec temp 0.1 decode end-to-end | 50.23 t/s | 49.74 t/s (load-masked: forward +33ms) |
+| greedy story ids | ...13 1260 | identical |
+
+Honesty note: end-to-end spec is flat across sessions (forward load +33ms
+ate the -28ms sampling win) — the claim rests on the paired work-count
+comparison (identical steps/accepts/emits, same seed: same 24 softmaxes,
+-16%). Only -16% and not more because each accept-step also does ~4
+full-vocab scalar scans (totals, resample weights); the exp was less than
+half the sampling cost. Vectorising the scans is open but chasing single
+digits of a 2% (plain) / 48% (spec-low-temp) share. Tests 71/71 (69 + 2
+new), 4/4 gates.
+
+### 28u. Sampled speculation with repeat penalty (kept, correct; 0.80x here)
+
+The spec gate excluded all penalty users; penalty is history-deterministic,
+so the accept rule stays exact — `apply_repeat_penalty` moved from the
+anonymous namespace to `tge::models` unchanged (existing penalty tests
+still green, confirming the move is behavior-neutral) and the sampled loop
+now penalizes each position with the history as of that position (copy row,
+penalize, softmax in place; the copy keeps the model's row intact).
+
+| repetitive 282-tok, temp 0.1, penalty 1.1 | no spec | spec |
+|---|---|---|
+| decode | 34.31 t/s | 27.53 t/s (**0.80x**) |
+| spec | — | 6 steps, 3 accepted (0.50/step), 9 emitted |
+
+Two honest notes. First, an early zero-step run looked like a gate bug;
+it was history luck (short high-temp divergent run whose histories never
+formed a matchable pattern) — the low-temp run on the same prompt shows
+steps. Second, 0.80x is the mechanism, not a bug: the penalty suppresses
+exactly the repetition the prompt-lookup drafter proposes, so acceptance
+sits at 0.50/step and the verify passes don't amortize. Template-shaped
+repetition outside the 64-token window is the case that wins; this prompt
+is the case that doesn't. Kept as a strict superset: greedy and temp-only
+paths are byte-identical (early-return penalty is 4 comparisons; verified
+ids unchanged), penalty users gain the lever where drafts match
+non-penalised tokens and fall back gracefully elsewhere. Cuts (top-k/p,
+min-p) stay on the safe single-token fallback — replicating their
+floor-lowering machinery in parallel would risk silent bias; exact reuse
+is the only acceptable construction and stays future work. Tests 71/71,
+4/4 gates.
+
+### 28w. README speculative paragraph (docs only, no behavior change)
+
+The README described `--speculative` as greedy-only, predating the sampled
+(TGE-SAMPSPEC), penalty (TGE-SAMPPEN) and penalized-greedy (TGE-GSPECPEN)
+extensions. It now states the actual gates (greedy ± penalty with
+byte-identical ids; temperature-only sampling with exact preservation;
+other cuts fall back) and the measured speedups (1.66-2.00x greedy story,
+2.03x sampled temp 0.1, 1.88x greedy+penalty). README is 11.4k chars
+(limit 30k). No code change.
+
+### 28v. Greedy speculation with repeat penalty (kept, bit-exact, 1.88x)
+
+The greedy spec gate excluded all penalty users for no structural reason:
+argmax-after-penalty is deterministic, so verifying penalized argmaxes
+keeps output identical with a bit-exact gate. `generate` now penalizes
+the d0 check with the current history and each verify row i with history +
+feed[0..i] — exactly what single-token decoding would see, including the
+64-token (or `--penalty-window`) window sliding over emitted drafts. The
+no-penalty path is untouched (same calls, same order).
+
+| repetitive 282-tok, penalty 1.1, window 4 | no spec | spec |
+|---|---|---|
+| decode | 28.25 t/s | 53.01 t/s (**1.88x**) |
+| spec | — | 1 step, 5 accepted (5.00/step), 6 emitted |
+| ids, 15 tok | 3838 374 ... 374 25 | byte-identical |
+
+The gate is equality, not statistics: any history-threading mistake flips
+a token. A default-window (64) run on the same prompt fires zero drafts —
+the penalty suppresses exactly what prompt-lookup proposes, same tension
+as §28u — while window 4 accepts at ceiling because the 8-token period
+falls outside it. Greedy no-penalty story ids unchanged
+(...13 1260); sampled paths untouched (separate gate). Tests 71/71,
+4/4 gates.
+
+### 28x. Same-window speculation matrix, all three modes (kept)
+
+Back-to-back pairs on the repetitive 282-tok prompt, Q4_K_M, `--threads 6`,
+adjacent runs so the box state is shared inside each pair. `tge --help`
+also fixed: `--speculative` no longer claims greedy-only.
+
+| mode, 15 tok | base | spec | ratio | acceptance |
+|---|---|---|---|---|
+| greedy | 27.91 t/s | 41.95 t/s | **1.50x** | 5.00/step, ids byte-identical |
+| temp 0.1 | 41.94 t/s | 58.64 t/s | **1.40x** | 3.00/step |
+| penalty 1.1/w4 | 40.12 t/s | 41.73 t/s | 1.04x | 5.00/step, ids byte-identical |
+
+Two honesty notes. First, base levels drift across pairs (27.91 → 41.94 →
+40.12): the first run cold-loads the 350 MB file into page cache, so the
+greedy pair bundles cache warming with the win — pairs stay valid
+(adjacent), cross-pair absolutes do not. The temp pair (both warm) is the
+cleanest number at 1.40x; history converges on 1.4-1.9x greedy.
+Second, the penalty pair wins little (1.04x) because only 1 step fired
+in 15 tokens: acceptance is perfect when drafts exist, but drafts are rare
+when the penalty suppresses repetition — same mechanism as §28v.
+Convergent verdict: speculation pays on repetitive structure in every
+mode, most where acceptance is high and the verify cost amortizes.
+Tests 71/71, 4/4 gates.
+
+### 28y. Fidelity across corpora (kept, generalizes)
+
+| corpus (1023 positions each) | mean KL | worst KL | max |logit| | top-1 |
+|---|---|---|---|---|
+| docs/architecture.md (prose) | 4.898e-12 | 9.6e-10 | 1.18e-4 | 1023/1023 |
+| docs/report-0.1.md (prose+numbers) | 4.848e-12 | 1.123e-10 | 9.155e-5 | 1023/1023 |
+| src/models/sampling.cpp (code) | 4.596e-12 | 1.087e-9 | 2.170e-4 | 1023/1023 |
+
+Mean KL sits at 4.6-4.9e-12 on all three; code shows a higher worst-case
+(1e-9 vs 1e-10 — sharper code distributions amplify tiny logit shifts)
+but stays three orders below every priced trade (f16-KV 1.7e-6) with
+unanimous top-1. Caveat recorded with the numbers: this harness varies
+attention only (see §28z) — the cross-corpus stability still bounds the
+whole pipeline's behavior, but the per-kernel attribution sharpens next.
+
+### 28z. Full-program fidelity: scalar-kernel switch on the reference (kept)
+
+The §28y caveat is now closed. `Qwen2::set_scalar_kernels(true)` forces the
+scalar oracle for rms_norm, RoPE and SiLU wherever AVX2+FMA would otherwise
+dispatch; `tge fidelity` sets it on the reference arm (which already ran
+scalar attention), so one number prices the whole vectorisation program.
+Production paths are untouched (flag defaults off; greedy story ids
+byte-identical). Harness label updated to `full-scalar oracle`.
+
+| corpus (1023 pos) | attention-only KL (old) | full-program KL | worst | max |diff| | top-1 |
+|---|---|---|---|---|---|
+| architecture.md | 4.898e-12 | 1.058e-11 | 1.216e-9 | 2.370e-4 | 1023/1023 |
+| report-0.1.md | 4.848e-12 | 9.960e-12 | 2.221e-10 | 9.251e-5 | 1023/1023 |
+| sampling.cpp | 4.596e-12 | 6.514e-12 | 4.833e-10 | 1.365e-4 | 1023/1023 |
+
+As predicted, the full-program number runs ~2x the attention-only figure —
+norms/RoPE/SiLU contribute roughly as much as attention itself — and still
+sits ~150x below the f16-KV trade (1.7e-6) and ~400x inside the 0.1
+near-tie band, with unanimous top-1 on all three corpora. Sampler exp
+stays chi-square-gated by construction (teacher forcing never samples).
+Retroactive correction to §28a/§28c: "fidelity-neutral" there meant
+"no interaction detected against an attention-only harness"; the number
+that actually prices those kernels is this one. Tests 71/71, 4/4 gates.
+
+### 28aa. Docs catch-up for the fidelity instrument (kept, no code)
+
+README still priced the arithmetic at "mean KL 5e-12 against the scalar
+reference" — the attention-only number. It now reads ~1e-11 against the
+full-scalar oracle (scalar attention, norms, RoPE, SiLU), matching §28z.
+`tge plan` checked and unaffected: it is metadata-only (tensor table +
+bandwidth projection), verified still printing the same 500.8 MiB/token
+basis. README is 11.6k chars (limit 30k). Tests 71/71, 4/4 gates.
+
+### 28ab. Decode workers unpinned by default (kept, +20-59% here)
+
+P-core pinning was a variance play (§26b, no mean claimed). A sessions
+re-measure exposed the cost: 4 models x 6 pinned workers oversubscribe
+~12 P-core threads while E-cores idle. New `--pin-threads 1|0` on
+`generate` and `bench sessions` (`Qwen2::set_pin_threads`, decode pools
+only; prefill was already unpinned), then the A/B that decides the default:
+
+| same window, `--threads 6` | pinned (old) | unpinned | delta |
+|---|---|---|---|
+| sessions 4x32 aggregate | 38.38 t/s | 59.97 t/s | **+56%** |
+| single-story decode, 3x interleaved | 45.09 / 41.16 / 38.83 (range 6.26) | 48.87 / 49.43 / 48.49 (range 0.94) | **+17% mean, lower variance** |
+| single-story after flip (default) | 37.64 explicit pinned | 45.28 default | +20% |
+
+Unpinned wins 6/6 single-stream pairs with a 7x tighter range — the pin
+fails its own variance rationale on this box (pinned workers stuck on
+loaded P-threads; work-stealing across all cores absorbs contention).
+Default flipped to unpinned; `--pin-threads 1` restores the old behavior
+for machines where it still helps. Greedy ids byte-identical (placement
+only, no arithmetic). Honesty note: the exact ratios are this box's; the
+structural finding (oversubscription under sessions, E-cores idle under
+pin) transfers, the percentages should be re-measured per machine.
+Tests 71/71, 4/4 gates.
+
+### 28ac. Decode thread-count sweep, unpinned (kept: documents the knob)
+
+With decode unpinned (§28ab), the P-core-tuned 6 may no longer be optimal.
+Interleaved story decode, Q8_0, `--threads 4/10/6/16/6/10/4/16`:
+
+| threads | run 1 | run 2 | mean |
+|---|---|---|---|
+| 4 | 47.50 t/s | 47.65 t/s | 47.6 |
+| 6 | 48.93 t/s | 49.31 t/s | 49.1 |
+| 10 | 51.26 t/s | 51.36 t/s | 51.3 |
+| 16 | 31.03 t/s | 29.54 t/s | 30.3 |
+
+10 wins both of its pairs (+4-5% over 6): one worker per physical core
+(6P+4E), no hyperthread pairing. 16 collapses (HT + E-core stragglers +
+spin contention on 16 logical threads). The default stays 6: +4.5% on one
+box's topology does not clear the bar for moving a default every user
+inherits — the knob is documented in the README threading paragraph
+instead, with the re-measure-per-machine caveat from §28ab. Tests 71/71
+(suite untouched), 4/4 gates.
+
+### 28ad. Bigram-chain draft fallback (kept, fires where spans cannot)
+
+Prompt-lookup abstains unless an exact 1-5-gram matches (`story: 0 steps).
+New fallback in `prompt_lookup_draft`: when no span matches, chain the most
+frequent successor of each token (linear scan, ≤32 distinct successors, no
+allocation), proposing only observed continuations. The verifier still
+decides everything, so output cannot change shape — only acceptance matters.
+
+| prompt | before | after |
+|---|---|---|
+| story (4 tok, nothing to chain) | 0 steps | 0 steps (correct abstention) |
+| repetitive 282-tok, greedy | 5.00/step | unchanged (span path fires first) |
+| partial-repetition ("John likes X" variants), greedy 32 tok | — | 3 steps, 10 acc (3.33/step), 13 emitted, 48.32 → 53.77 t/s (**1.11x**), ids identical |
+| single-token repeat, temp 0.8 | — | 0 steps (tail token unique → correct abstention, no verify spam) |
+| repetitive, temp 0.8 | — | 4 steps, 0.50/step, 6 emitted, 0.98x (neutral, distribution preserved) |
+| doubled tail ("...warm warm"), temp 0.8 | spans provably cannot fire | 3 steps, 1 accepted (0.33/step), 4 emitted — fallback proven live |
+
+The doubled-tail run is the mechanism proof: with an 18-token prompt whose
+only repeat sits inside the last 5 positions, no span can match, so all 3
+verifies came from bigram proposals — and one accepted, with the resample
+path covering the rejections. Kept as a strict superset: spans run first in
+the same order (their proposals are byte-identical to before), the fallback
+adds only observed continuations, every emission is verifier-gated, and
+all ids match non-speculative runs. Tests 71/71 (drafter lives in main.cpp,
+covered end-to-end), 4/4 gates.
+
+### 28ae. Single verification path (kept, refactor, no behavior change)
+
+`verify_draft` (argmax) and `verify_draft_logits` (full rows) ran the same
+batched pass with duplicated validation and had already diverged once in
+spirit (logits-vs-argmax row semantics, §28s). `verify_draft` now delegates
+to the logits form and argmaxes its rows — same prefill_run call, same
+argmax order, same error cases. No caller changed. Parity gate, both
+greedy modes: story `...13 1260` and penalized window-4 repetitive
+`3838 374 ... 374 25` byte-identical to every baseline, 5.00/step on the
+latter. Tests 71/71, 4/4 gates.
+
+### 28af. Post-flip validation: parity holds, headlines refresh (kept)
+
+The unpinned default changes every decode path's threading, so the key
+paths were re-validated on it (Q4_K_M story greedy ids byte-identical:
+`...13 1260`):
+
+| path (same window) | pinned era | unpinned default |
+|---|---|---|
+| temp 0.1 spec, repetitive 282-tok | 50.23 t/s, 3.00/step | **66.01 t/s**, 3.00/step, 15 emitted |
+| Q8_0 2048-ctx prefill / decode | 264.8 / 26.14 t/s | **268.7 / 38.31 t/s** |
+
+The flip helps speculation too (verify passes are bandwidth-bound GEMMs).
+The 2048-ctx decode gap vs short context is much smaller than the §28m
+bound suggested — that bound was load-poor, this one less so; both remain
+upper-bound-flavored on this box. No code change in this entry beyond what
+§28ab already landed. Tests 71/71, 4/4 gates.
+
+### 28ag. Consolidated final snapshot on the finished binary (kept)
+
+`measure.ps1` (now with kbatch lines) plus continuous bench and an ids
+spot-check, one window, light box (mem 28.82 GB/s):
+
+| probe | result |
+|---|---|
+| kbatch gate (q5_0 4864x896 x1) | 0.326 ms, 9.18 GB/s |
+| kbatch down4 (q4_k 896x4864 x1) | 0.312 ms, 7.85 GB/s |
+| kbatch down6 (q6_k 896x4864 x1) | 0.368 ms, 9.71 GB/s |
+| batch ffn 64 tok (prefill pool = 16 now) | 295 GFLOPS (vs 206 logged in the 6-thread era) |
+| gemv single | 31.12 GB/s |
+| continuous 4x16/2slots/p8 | 42.63 t/s aggregate, independent transcripts |
+| greedy Q4_K_M story ids | byte-identical to every baseline |
+
+This is the end-state record the earlier sections built toward: every §28
+kernel has a snapshot line, independence holds under batching, and ids
+never moved. Nothing here changes a verdict; it fixes the numbers to the
+finished binary. Tests 71/71, 4/4 gates.
+
+### 28ah. Drive close-out: final verification (kept, no change)
+
+34 tasks after §28's start: full gates 4/4, suite 71/71, greedy and
+penalized-greedy ids byte-identical to every baseline, no TODO/FIXME
+markers, no temp-file debris in the tree, README 11.9k chars. Deliberately
+open, each with its trigger or rejection logged: int8-domain Q4_K dot,
+shared-prefix KV (no paying caller), sampled cuts (exact-reuse only),
+scan vectorization (single digits), llama re-measurement (no binary),
+longer drafts (rejected on mechanism), fused Q4_K (reverted: hadd tax),
+prefill tail groups (physics), decode-thread default (needs multi-box
+evidence), weight packing (unverifiable intent). Nothing further has
+positive expected value without those triggers — manufacturing more would
+violate the frugality the whole series was run under. (Addendum: the drive
+did resume afterwards for §28ai record-keeping and the §28aj sums
+experiment, both closed; the sentence above stands as written at the time.)
+
+### 28ai. Hardware identity: this box IS the reference (kept, record only)
+
+`tge info` on this machine: `Intel(R) Core(TM) i5-14400F`, 10 physical /
+16 logical (6P+4E), AVX2+FMA+F16C+AVX-VNNI, 16.00 GiB installed — the exact
+box the report and §§1-27 measured on (4.08 GiB free / 74% in use at check
+time, hence the load noise throughout §28). Consequence: every §28 A/B is
+same-hardware, differing only in box load at the time — the "different
+box" hedge some entries carry is withdrawn, the load caveats stand. In
+particular the §28ab pin reversal and the §25/§28 42-47 t/s decode figures
+are same-machine results, and the i5-14400F llama.cpp pairs (§19: 45.1
+short, 46.9 at 2k, 352.2 pp512) remain the valid comparison targets for a
+re-measurement under a quiet box. No code, no numbers changed. Tests 71/71,
+4/4 gates.
+
+### 28aj. Vectorised sampler sums (REVERTED: -0.4% paired, premise wrong)
+
+Hypothesis: with the exp vectorised (§28t), the remaining full-vocab
+scalar sums (softmax totals, categorical and accept totals) were "the
+other half" of sampling cost. Implemented `sum_avx2` (horizontal AVX2
+reduction) in the sampler TU, wired into all three totals with scalar
+fallback, differential-tested at 1e-5 and chi-square-gated like the exp.
+Paired verdict, same seed and trajectory (4 steps, 12 accepted, 15
+emitted): sampling 234.14 ms before vs 233.25 ms after — noise, not a win.
+Fully reverted (kernel, decl, wiring, test; tree verified clean of every
+trace, suite back to 71/71, greedy ids identical).
+
+The correction matters more than the revert: recomputing the breakdown, a
+0.6 MB horizontal sum is ~0.05 ms against a ~10 ms per-position sampling
+cost — the sums were never more than ~1% of it; the branchy resample and
+categorical walks dominate. Lesson recorded alongside §28i: profile the
+breakdown before vectorising, don't assume it from operation counts.
+The walks stay scalar deliberately — unrolling them would trade the same
+rounding questions for single digits. Tests 71/71, 4/4 gates.
+
+### 28ak. Batch GEMM audit: already at 97% of its roof (kept: no change)
+
+Read `gemv_q8_batch_avx2` end to end looking for a repeat of the §26a
+tail-class bug or scalar leftovers. There are none: the widen is shared
+across all 6 tokens, the tail shares one block read, the horizontal sum is
+once per row per token, per-block scalar work is one `half_to_float`.
+The roof arithmetic closes the case: per 32-weight block the kernel streams
+34 bytes of weights and does 6 tokens x 32 mult-adds x 2 = 384 flops, i.e.
+11.3 FLOP/byte; at the measured 27 GB/s streaming rate that roofs at
+~305 GFLOPS, and `bench batch ffn` reports 295 GFLOPS — 97%. The ~500 GFLOPS
+ALU peak is irrelevant; this kernel is bandwidth-bound on weights, and the
+only way past its roof is fewer bytes (VNNI int8 dot, already opt-in at
++14-19%) or fewer passes (speculation). No code change; the "weight
+packing" roadmap line stays as-is (packing more would not move a
+bandwidth-bound kernel). Tests 71/71 (untouched), 4/4 gates.
+
+### 28al. Live llama.cpp head-to-head (kept: TGE wins decode ~2x, trails prefill)
+
+The since-day-one blocker is gone: llama.cpp master @ cd8427d shallow-cloned
+outside the repo, `llama-bench` + `llama-cli` built with the same MinGW-GCC
+16.2 toolchain TGE uses (plus `-D_WIN32_WINNT=0x0A00` for a cpp-httplib
+MinGW guard; the `.rsrc merge` link notice is benign). Same box, same
+models, same 6 threads, back-to-back windows:
+
+| Q8_0, 6 threads | llama-bench (cd8427d, GCC) | TGE (this tree, GCC) |
+|---|---|---|
+| pp128 / prefill-126 | 276.67 t/s | ~220 t/s (light window; 76-141 loaded) |
+| tg64 / decode-64 | 16.92 t/s | 41.33 t/s |
+| pp512 / tg128 | 392.35 / 18.48 t/s | — |
+| Q4_K_M pp128 / tg64 | 224.42 / 17.06 t/s | prefill ~222 / decode 31.40 t/s |
+
+Two statements with different strengths. (1) Prefill: llama ahead ~1.3x,
+consistent across the log's history (352 vs 261-266 with MSVC build 11624; 392 vs 250-268 now) — the prefill gap is the reproducible
+structural fact. (2) Decode: TGE 28-52 t/s across every window measured
+vs llama 16.9-18.7 across three configs — non-overlapping ranges, so the
+direction is load-proof on these builds. Caveat that cuts both ways: both
+binaries here are MinGW-GCC, while the historical parity (45 vs 45.1
+short) was MSVC-vs-MSVC; part of llama's decode deficit may be GCC codegen
+rather than engine design, and re-running under MSVC (or with the vendor
+binary) would isolate it. `tge fidelity` already showed the logits agree
+(KL ~1e-11), so this is a systems gap, not a math gap.
+
+Side find with its own future: `.modelduck` holds Llama-3.2-3B, Phi-3.5-mini,
+Qwen2.5-1.5B (+coder), Q5_K_M and SmolLM2-135M — local material for the
+roadmap's "run other models" and draft-model items. Tests 71/71, 4/4 gates.
+
+### 28an. Qwen2.5-1.5B runs with zero changes (kept, new-model validation)
+
+The §28al side find paid off immediately: `qwen2.5-1.5b-instruct-q4_k_m`
+(28 layers, 1536 dim, 12/2 GQA heads, 151936 vocab) loads and generates with
+no code changes — the config-driven paths (GQA splits, batch shapes, RoPE
+tables) generalize. Full-program fidelity on the new shapes: mean KL
+7.419e-12, worst 3.257e-10, max |diff| 2.516e-4, top-1 1023/1023 — the same
+floor as 0.5B, so the vectorisation program transfers wholesale.
+
+| 1.5B Q4_K_M, 6 threads | llama-bench (cd8427d, GCC) | TGE (this tree, GCC) |
+|---|---|---|
+| pp128 / prefill-128 | 178.15 t/s | 73.4 t/s (loaded box) |
+| tg64 / decode-63 | 12.47 t/s | 11.88 t/s (inside load noise) |
+
+Same pattern as 0.5B at larger scale: decode at parity, prefill trailing
+(~40% here under load vs ~75-88% in lighter windows — the ratio moves with
+the box, the ordering does not). The 1.5B run also exercises per-head
+attention at 12/2 grouping and the largest batch matrices yet, all green.
+Queued next: Q5 AVX2 now has its validation target
+(`qwen2.5-0.5b-instruct-q5_k_m.gguf` sits in the same directory).
+Tests 71/71 (untouched — no code changed), 4/4 gates.
+
+### 28am. Q5_1 dequant from scratch: scalar oracle, ggml-verified, AVX2 (kept)
+
+Plot twist first: the "q5_k_m" file is 133xQ5_1 + 12xQ5_K + 12xQ6_K —
+its hot format is legacy Q5_1, which TGE parsed but refused to run
+(`unsupported type for token_embd.weight`). So this entry implements the
+whole format: scalar oracle transliterated from ggml's
+`dequantize_row_q5_1` (d/m/qh/qs layout verified field-by-field against
+`ggml-common.h`: 24B blocks, hb bit i -> low half, hb bit i+16 -> high
+half, `y = x*d + m`, no -16 bias unlike Q5_0), wired through `QuantKind`,
+`quant_row_bytes`, `gguf type_supported`, and `to_quant_kind`.
+
+Correctness in three layers, strongest first: (1) a C program linked
+against the built ggml static libs quantized 64 random rows and dumped
+both bytes and ggml-dequantized floats; a (temporary, since removed) TGE
+test memcmped our dequant on the same bytes — bit-identical on all 2048
+values; two of those blocks are now embedded as literals in the permanent
+`q5_1_matches_ggml_reference` test. (2) Hand-computed single-block test.
+(3) End-to-end: the file loads and generates fluent text; templated
+greedy matches llama.cpp for 8 tokens (`...the world was`) then diverges —
+and the Q4_K_M file (no Q5_1 anywhere) diverges at the same spot, which by
+the report's near-tie doctrine pins the cause on the known float-vs-int8
+activation gap, not on the new code.
+
+AVX2 follows the Q5_0 LUT pattern (shared spread table, mul-then-add, no
+FMA — the only arithmetic difference from Q5_0, which does mul-then-sub);
+differential memcmp passes on 1- and 3-block random rows. `bench batch`
+gains `--format q51` (row bytes cols/32*24).
+
+| q5_1 kernel / model | scalar era | AVX2 |
+|---|---|---|
+| `bench batch` 896x4864 x 1 (best of 5) | — (format did not exist) | 0.379 ms, 8.62 GB/s |
+| Q5_K_M story decode, 15-16 tok | 15.2 t/s | 37.1 t/s, ids byte-identical |
+
+Same band as Q5_0 (8.4 GB/s) — expected, identical structure. The model-level
+jump bundles a load shift with the kernel win (scalar era ran on a loaded
+box), so the honest speed claim is the kernel number; the ids parity is
+exact (bit-identical kernels, verified before/after on the same prompt).
+Full-program fidelity on the Q5_K_M file prices at KL 1.1e-12, top-1
+1023/1023. Tests 74/74 (71 + hand + ggml-vectors + AVX2 differential),
+4/4 gates.
+
+### 28ao. AVX2 Q5_K dequant, bit-identical (kept, kernel in the AVX2 band)
+
+The file's remaining scalar format: 12 ffn_down tensors at 2.86 MiB each.
+Q5_K is a 256-block K-quant (d, dmin, 12 scale bytes, 64 high bytes, 128
+low bytes); per 64-chunk the 32 low bytes feed both halves (low nibbles,
+then high nibbles of the same bytes) while one high bit per weight comes
+from a shared 32-byte row, bit (2c) for the low half and (2c+1) for the
+high half, chunk c — verified field-by-field against ggml's
+`dequantize_row_q5_k` before vectorising (the scalar path already matched
+it in spirit: same loop, same order, same `d1*q - m1`).
+
+AVX2 mirrors the Q4_K approach with one new comparison: per 32 weights,
+`cmpeq(high & (1<<bit))` yields 0xFF/0x00 bytes, masked to 0x10 and ORed
+with the nibbles before widening (all loads unaligned per §28i); then
+mul-then-sub, no FMA — bit-identical to the scalar oracle, confirmed by a
+randomized memcmp differential (1- and 3-block). `bench batch` gains
+`--format q5k` (row bytes cols/256*176) and the docs gain the row.
+
+| q5_k batch 896x4864 x 1 | scalar era | AVX2 |
+|---|---|---|
+| best of 5, same window as q4k/q6k/q50/q51 sweep | (no fast path) | 0.307 ms, 9.75 GB/s |
+
+Same-window sweep for context (loaded box, absolutes depressed): q4k 3.81,
+q5k 9.75, q6k 1.96, q50 4.62, q51 0.38 GB/s — the spread is load noise, not
+ranking (yesterday's lighter window had q4k 7.6, q5_0 8.2, q6k 8.06,
+q51 8.62 in the same band). The keep rests on the bit-exact differential,
+not on today's noisy absolutes: identical math, verified byte-for-byte, at
+zero accuracy cost. Q5_K_M story decode holds 43.78 t/s with ids
+byte-identical to the scalar run (`...578 323 22208`). Tests 75/75
+(74 + AVX2 differential), 4/4 gates.
+
+### 28ap. Speculation transfers to 1.5B unchanged (kept, no code)
+
+First spec pass ever on the bigger shapes (28 layers, 1536 dim, 12/2 GQA):
+repetitive prompt, `--threads 6`, back-to-back. Greedy: 2 steps, 10 accepted
+(5.00/step), 11 emitted — ceiling acceptance, same as 0.5B. Temp 0.1 + spec:
+3 steps, 9 accepted (3.00/step), 11 emitted — identical profile to 0.5B's
+3.00/step on the same prompt family. No new code, no new gates: the
+verifier, drafter and accept loop are shape-generic by construction, and
+the run confirms it (no crashes, no fallbacks, same acceptance bands).
+Absolute t/s omitted — the box was loaded and single-window pairing
+against non-spec runs wasn't taken; acceptance rate is the load-proof
+metric here and it matches 0.5B exactly. Tests 75/75 (untouched), 4/4 gates.
+
+### 28aq. Llama-3.2 runs: tied weights, no-bias fallback, interleaved RoPE
+
+Three gaps closed in one arc, each verified before moving on. (1) The 3B
+file has no `output.weight`: `load` now reuses the token-embedding rows
+directly (GGUF stores them row-per-token, exactly the output layout), with
+vocab size falling back to the embedding table when the output tensor is
+absent. (2) It has no QKV bias tensors either (Qwen files ship zero-filled
+ones): missing bias resolves to a shared zero vector instead of an error,
+keeping the hot loops branch-free. (3) Llama uses interleaved RoPE
+(ggml NORM: consecutive pairs), not Qwen's halves — the actual bug behind
+the first decode ("b / ## Step 1. 1. 1"): after the fix the same prompt
+gives "in a small village nestled in the rolling hills", and a factual
+probe completes correctly ("The capital of Italy is Rome. ...Spain is...").
+
+New `rope_interleaved` flag on the config, set from the architecture name
+(`llama`-family only; NeoX stays the default everywhere else). The
+AVX2 kernel duplicates each table entry ([c,c,...]) so one load covers 4
+pairs, blended back with a 0xAA mask; the differential passed on first
+build after fixing one swapped operand the differential itself caught
+(odd-lane `x*s` vs `xs*c` — the harness earning its keep again).
+Verified: hand-computed +90-degree rotation, memcmp AVX2-vs-scalar,
+76/76 tests, Qwen ids byte-identical (the NeoX path is untouched), and
+fidelity on 3B gives mean KL 1.24e-12 with unanimous top-1.
+
+Explicitly NOT done here: tokenizer parity (TGE tokenizes Llama's `\n\n`
+as 271, llama.cpp as 881 — pre-tokenizer work, separate task) and any
+templated end-to-end (blocked on the former). Absolute t/s omitted — cold
+box, 2 GB model file; throughput benchmarking comes after correctness.
+Tests 76/76 (one new interleaved differential), 4/4 gates.
+
+### 28ar. Llama tokenization reaches parity: tiktoken digit groups (kept)
+
+The 24-case corpus comparison found exactly ONE divergence class between
+TGE and llama.cpp on identical strings: multi-digit numbers. TGE split
+every digit ("1999" -> [16, 24, 24, 24]); tiktoken groups left-to-right in
+threes ("1999" -> [2550, 24], "12345" -> [4513, 1774]). Everything else —
+whitespace runs, newlines, contractions, URLs, code, CJK, chat-template
+tokens — already matched bit-for-bit, which also resolved the earlier
+"\n\n" scare: standalone it is 271 on both sides (the 881 sighting was a
+truncated-output misread, corrected before any code changed).
+
+`tokenizer.ggml.pre` selects the rule: `llama-bpe` groups up to 3 digits
+per piece, anything else (including Qwen's `qwen2`, missing, or unknown
+values) keeps the established single-digit splitter bit-identical. New
+permanent test builds synthetic vocabs with and without the flag and
+asserts exact ids both ways (Qwen path covered by the unchanged existing
+suite — 77/77 green, zero regressions).
+
+Templated end-to-end (full system block, today's date, verified token
+stream): TGE "...a specific year 1999 having 12345 stars. The number of
+stars in the universe is estimated to be around 100-400 billion..." vs
+llama "...a reliable information about the number of stars... also around
+100-400 billion...". Same rare fact, parallel structure, divergence after
+a shared prefix — the near-tie signature the project already attributes to
+float-vs-int8 arithmetic (§28am), not a model bug: dequant is ggml-verified
+bit-exact, RoPE is hand+differential verified, and tokenization is now
+provably identical input. Absolute t/s omitted (loaded box); sampled
+decode on 3.2B runs. Tests 77/77, 4/4 gates.
+
+### 28as. Llama-3.2-3B head-to-head: same band on decode, prefill trails (kept, measured)
+
+Same box, same file (Q4_K_M), same 6 threads, back-to-back-ish on a loaded
+box — so treat absolutes as ranges, not rankings:
+
+| 3B Q4_K_M | llama.cpp cd8427d (GCC) | TGE (GCC, this tree) |
+|---|---|---|
+| prefill | 74-79 t/s | 25-32 t/s (55-tok templated prompt) |
+| decode | 8.7-9.6 t/s | 7.4 t/s (12-16 tok runs, early EOS) |
+
+Decode is the same band (both ~8); prefill trails by ~2.5x, wider than the
+~1.3x gap on 0.5B. Caveats, in order of importance: (1) the box was loaded
+and TGE's prefill number comes from a 55-token prompt where fixed costs
+(tokenize, first-touch page faults on a 2 GB file) dominate — not a
+steady-state rate; (2) both binaries are the same MinGW-GCC build, so no
+toolchain confound, but llama.cpp's prefill path is heavily tuned batch
+GEMM while TGE's is the same kernel that hits 97% of *its* roof on 0.5B
+(§28ak) — the roof itself may differ here (larger matrices, different
+arithmetic intensity). What this rules out: any order-of-magnitude gap —
+TGE runs 3B models correctly and at comparable decode speed today.
+A quiet-box rerun with matched prompt lengths stays on the list. Tests
+77/77, 4/4 gates.
+
+### 28at. Phi-3.5-mini loads: fused QKV, fused gate|up, epsilon key (kept, measured)
+
+TGE-PHI3 [1/4]: the Phi-3.5-mini Q4_K_M file (2.28 GB, phi3 arch, 32 blocks,
+3072 dim, 32/32 heads, vocab 32064) previously stopped at `missing tensor
+blk.0.attn_q.weight`. Three load-path gaps, each bounded and tested:
+
+- Epsilon lived only under `phi3.attention.layer_norm_rms_epsilon` (1e-5)
+  while the loader read the unprefixed key and silently ran 1e-6 — correct
+  by accident on Qwen, wrong on Phi. The loader now tries the
+  `attention.`-prefixed key first, then the legacy key, then 1e-6.
+- Fused tensors map to row views: `attn_qkv` [q; k; v] splits into dim +
+  2 x kv_dim rows, fused `ffn_up` [gate; up] into two ffn halves
+  (HuggingFace `gate_up_proj` order). K-quant super-blocks never cross a
+  row, so every kernel consumes the views unchanged. Anything that is not
+  exactly those geometries throws instead of running mis-sliced.
+- `rope.dimension_count` != head_dim now throws (partial RoPE has no path);
+  96 == 96 on this file, so no behavior. YaRN factor tables are recorded
+  (`has_yarn_factors`) but not applied — a long-context divergence the
+  parity step [2/4] will price.
+
+Proof: three synthetic-file unit tests (epsilon chain, partial-rope
+rejection, one-block fused load with exact row geometry + YaRN flag), each
+failing on the old path by construction. On the real file: `tge plan`
+reports the shape (2.23 GiB weights, 768 KiB KV/token), and `generate`
+with `--context 64 --tokens "1 2 3" --n 12` exits 0 — prefill 5.4-5.7 t/s
+(cold fault-in of a 2.2 GB file), decode 5.7-6.1 t/s, ids varied and
+in-vocab (`29958 13 13 29966 ...`), sample 0.0% of decode. Untouched
+forward path: Qwen/Llama behavior bit-identical (split taken only when the
+unfused names are absent). Gate/up order and RoPE mode are the documented
+HF/ggml convention; end-to-end parity against a reference settles them in
+[2/4]. Tests 80/80, 4/4 gates.
+
+### 28au. Phi-3.5 tokenizes 28/28 vs llama.cpp; talks back correctly
+
+TGE-PHI3 [2/4]: the Phi tokenizer rule. The file is `tokenizer.ggml.model
+== "llama"` with no merges table, so the engine armed a new SentencePiece
+path (BPE files keep the merge path bit-identical): dummy prefix,
+space-to-U+2581, then greedy highest-score pair merges. Two wrong turns on
+the way there are worth recording. First, Viterbi maximization is the
+wrong objective for these scores: they are merge ranks, not log-probs
+(the 0.0-scored byte fallbacks would beat every real piece). The
+reference algorithm is llama.cpp's `llm_tokenizer_spm` merge loop, ported
+line for line (score-max queue, leftmost tie-break, staleness by merged
+size, resegment-or-bytes). Second, GGUF SentencePiece pieces are raw UTF-8
+(`▁Hello` is E2 96 81...), not GPT-2-mapped — an early mapped-domain
+attempt matched nothing and fell back to bytes everywhere.
+
+Proof is a 28-string corpus against two oracles: 26/28 match HuggingFace
+BPE as well; the 2 template strings diverge from HF structurally
+(per-span prefix plus merge vs BPE-with-merges) and match llama.cpp's
+`llama-tokenize` (built from source for the occasion) on all 28/28. One
+corpus string initially blamed the tokenizer for CJK but the console was
+the culprit: narrow argv arrives as `?`, so `main()` now rebuilds argv
+from the wide command line and the CJK case matches byte-for-byte.
+
+End to end: `<|user|>What is 2+2?<|end|><|assistant|>` decodes 12 tokens
+to "The sum of 2+2 is 4." — the fused QKV split order, the fused gate|up
+order, full-head NeoX rotation, the 1e-5 epsilon, and the new decode path
+(U+2581 back to space, controls omitted) all survive contact with the
+real weights. YaRN factors stay recorded-but-unapplied: short of a
+reference-logits run they are unpriced, so long-context Phi is flagged,
+not claimed. Six synthetic unit tests (merge ranks, byte fallback,
+control-forge refusal, BPE non-arming) plus the argv fix. Tests 83/83,
+4/4 gates. Next: commit, then SmolLM2 probe or the Q5_K-vs-Q4_K pricing —
+whichever the head-to-head needs first.
+
+## 29. int8 KV cache (2026-11-02)
+
+The KV cache is now optionally int8 blocks with one float scale per 32 values
+(--kv i8), read by the attention kernels with widen-then-scale; the default
+stays f32. 	ge fidelity --kv i8 prices it.
+
+| Llama-3B Q4_K_M, 6 threads | f32 | f16 | i8 |
+|---|---|---|---|
+| 512 short decode (15 tok) | 8.6-9.6 t/s | � | 5.20 t/s (overhead, no KV pressure) |
+| 2048 decode (31-63 tok) | 5.80 t/s | 6.61 t/s (+14%) | **7.63 t/s (+32% vs f32)** |
+| 2048 prefill (11 tok) | 2.7 tok/s cold / 23.8 warm | 23.8 tok/s warm | 23.8 tok/s warm |
+
+Short text is identical to f32; the 2048 output prefix matches the f32 run.
+Fidelity over 31 positions at context 512: mean KL **3.166e-4**, worst
+1.234e-3, max |logit| 1.9e-1, top-1 **31/31** � between the f16 (1.7e-6) and
+the accepted VNNI (1.6e-3) trades, with zero top-1 flips either way.
+
+The default stays f32; --kv i8 is for long-context or multi-session memory,
+where the KV (448 MiB f32 at 2048 for this model) dominates. At short context
+the widen+scale is pure overhead, so f32 stays faster there. The plan still
+prints the f32 KV size, so the budget check stays conservative.
+Tests: 84 -> 86 (int8 head and group differentials: AVX2 tracks scalar at
+1e-4, scalar-int8 tracks float at 5e-2).
