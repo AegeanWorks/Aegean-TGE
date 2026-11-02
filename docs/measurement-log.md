@@ -2089,13 +2089,13 @@ stays f32. 	ge fidelity --kv i8 prices it.
 
 | Llama-3B Q4_K_M, 6 threads | f32 | f16 | i8 |
 |---|---|---|---|
-| 512 short decode (15 tok) | 8.6-9.6 t/s | — | 5.20 t/s (overhead, no KV pressure) |
+| 512 short decode (15 tok) | 8.6-9.6 t/s | â€” | 5.20 t/s (overhead, no KV pressure) |
 | 2048 decode (31-63 tok) | 5.80 t/s | 6.61 t/s (+14%) | **7.63 t/s (+32% vs f32)** |
 | 2048 prefill (11 tok) | 2.7 tok/s cold / 23.8 warm | 23.8 tok/s warm | 23.8 tok/s warm |
 
 Short text is identical to f32; the 2048 output prefix matches the f32 run.
 Fidelity over 31 positions at context 512: mean KL **3.166e-4**, worst
-1.234e-3, max |logit| 1.9e-1, top-1 **31/31** — between the f16 (1.7e-6) and
+1.234e-3, max |logit| 1.9e-1, top-1 **31/31** â€” between the f16 (1.7e-6) and
 the accepted VNNI (1.6e-3) trades, with zero top-1 flips either way.
 
 The default stays f32; --kv i8 is for long-context or multi-session memory,
@@ -2114,7 +2114,7 @@ threads, context 512, both orders:
 | aggregate | 4.18 / 7.21 t/s | 10.19 / 10.78 t/s |
 
 Direction is consistent across orders with identical transcripts, but the f32
-spread (73%) far exceeds the box's usual band — that day had heavy background
+spread (73%) far exceeds the box's usual band â€” that day had heavy background
 load, so read the gap as contention-shaped, not a clean 2x claim. The
 plausible mechanism is the shared single-channel DIMM: two sessions stream
 2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.
@@ -2127,7 +2127,7 @@ norms/RoPE/SiLU (`rms_norm`, `apply_rope`, new `silu_gated` wrapper);
 `generate` resets before prefill and before decode and prints both
 `phases` lines next to `timers`. No arithmetic change: separate counters,
 no reordered math. Tests 86/86; fidelity full-program mean KL 1.006e-11,
-worst 3.113e-10, top-1 1023/1023 (same floor as §28z).
+worst 3.113e-10, top-1 1023/1023 (same floor as Â§28z).
 
 Same window, warm page cache, Llama-3B Q4_K_M, 6 threads (unless noted):
 
@@ -2146,9 +2146,9 @@ Same window, warm page cache, Llama-3B Q4_K_M, 6 threads (unless noted):
 Two corrections to the Stage-1 plan, both from measuring on true 3B
 shapes instead of quoting 0.5B numbers. First, Q4_K is not at 7-9 GB/s
 here: on 3072/8192 orientations it runs 13.0-13.8 GB/s (51-54% of the
-25.7 wall), and Q6_K down hits 18.71 (73%). Weighted effective ?55% —
+25.7 wall), and Q6_K down hits 18.71 (73%). Weighted effective ?55% â€”
 which *is* the end-to-end 52-58% figure, not a mystery overhead. The
-§28i/§28l "format tax" stands, but its size on 3B is ~2x smaller than
+Â§28i/Â§28l "format tax" stands, but its size on 3B is ~2x smaller than
 the 0.5B-shape quote. Second, attention is 0-2% at both ctx (positions
 100-120 here, per-head path; GQA never engages), so the GQA-retune branch
 of the plan does not fire.
@@ -2156,7 +2156,7 @@ of the plan does not fire.
 Verdict per the revised plan's gates (matvec >60% fires; kbatch <50%
 wall fails at 51-73%; attn >30% fails at 0-2%): no kernel/ALU change.
 The remaining unpack ALU (nibble split + per-32 scales + FMA) is the
-format price — fused lost 14% (§28i), integer lost twice (§12), repack
+format price â€” fused lost 14% (Â§28i), integer lost twice (Â§12), repack
 banned (mmap-first). Thread sweep +4% keeps the default. What ships is
 the instrument: every future decode claim now attributes instead of
 guessing. Next triggers, not attempted: int8-domain dot that avoids the
