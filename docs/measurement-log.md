@@ -2277,4 +2277,65 @@ now: a quiet box (mem read back at ~28, decode at ~4.5+) plus the same
 interleaved pairs; the stash-built-binaries pattern from Section 32
 applies. Tests 87/87.
 
+## 34. Single-token Q4_K int8 dot: faster-looking, unresolvable + over price, reverted (2026-11-02)
+
+Revised-plan Step 1 (zero-risk gate) first, same window, warm page
+cache, Llama-3B Q4_K_M, `--threads 6`:
+
+| 300-tok prompt, ctx 2048 (GQA engages >=256) | per-head | GQA (auto) |
+|---|---|---|
+| prefill | 22.9 t/s | 28.1 t/s (+23%) |
+| decode, 9 tok | 4.64 t/s | 5.37 t/s (+16%) |
+| decode attn share | 73.0 ms (4%) | 54.6 ms (3%) |
+| ids, 10 tok | 2 14924 ... 18 18 | identical |
+
+Short history (4-tok prompt, positions 4-34): head 4.32 vs gqa
+4.19 t/s (0.97x), ids identical, attn 0-1%. Conclusion: the auto
+schedule (>=256 GQA, else per-head) is already correct; no code
+ships from this gate. The +16%/+23% long-history pair is suggestive
+(single pair, box mid-load) not claimed.
+
+Then the int8 prototype: matvec-only `gemv_q4k_i8_matvec_single`
+(per-tensor activation quant once per call, shared read-only across
+rows; per-32 int32 `maddubs`+`madd` accumulation with one reduction
+site; float finalize per scale group), batch kernel untouched so
+prefill tails, verifier and the `dequant_batch` differential keep the
+shipped float path. Two findings, one fatal to landing:
+
+1. TLS-over-pool fault, fixed during the attempt and recorded: the
+   first version named the calling thread's `thread_local` activation
+   buffers inside the pool lambda. Workers resolve TLS names to their
+   own (empty) instance -- `r10=0` at
+   `vcvtsi2ssl (%r10,%rax,4)` in gdb -- so threads=1 passed and
+   threads>=2 segfaulted (0xC0000005). Fix: plain shared pointers
+   (`aq_shared`, `sums_shared`) captured by the lambda; the float
+   scratch stays worker-`thread_local` by design (each worker's own).
+   Lesson alongside §28i: never name a `thread_local` inside a pool
+   lambda unless every thread fills its own.
+2. Same-window A/B (stash-built float vs int8, short decode 14 tok):
+   OLD 4.77 vs NEW 6.53 (+37%) in round 1, then NEW 5.04 and 2.78 on
+   back-to-back repeats of the same binary. OLD sits inside NEW's own
+   2.78-6.53 spread (box spiking mid-window; `bench mem` read 15.04
+   vs 25.72 lighter windows). Per the §28m rule only interleaved
+   pairs count: no win is resolvable. Short ids identical either way
+   (26061 10 ... 426, all runs), so the distribution shift below did
+   not flip this greedy trace -- noted, not claimed as parity.
+
+Fidelity (the independent revert trigger): 31 positions, ctx 128,
+`docs/architecture.md`: mean KL **8.095e-3**, worst 2.703e-2, max
+|logit| 1.24, top-1 **28/30** -- ~5x the accepted VNNI (1.6e-3) and
+~500x the f16-KV (1.7e-6) trade, with 2 flips. Per-tensor int8
+activation quant (outliers crush the scale) is the price; per-64 or
+per-32 activation scales were not attempted once the speed gate
+failed first.
+
+Reverted in full (kernel file, `kernels.hpp` decl, `qwen2.cpp`
+matvec dispatch -- `git checkout --` all three, tree verified clean
+by `git status`); post-revert: 87/87 tests, fidelity back at mean
+KL 1.467e-11, worst 5.5e-11, 30/30, short ids unchanged. No
+differential or bench-harness change ships (batch path was never
+touched). Next triggers, not attempted: per-group activation scales
+(which re-add the quant cost the prototype tried to remove), or a
+quiet-box rerun of the same stash pairs.
+
 
