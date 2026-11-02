@@ -2163,3 +2163,54 @@ guessing. Next triggers, not attempted: int8-domain dot that avoids the
 hadd tax, or a 256+-history GQA A/B (this session never exceeded
 position ~120).
 2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.
+
+## 31. Prefill Step 0: 64-wide batch on true 3B shapes (2026-11-02)
+
+Revised-plan Step 0 (Stage 2): stop quoting 1-token kbatch at prefill;
+measure the batch kernel at prefill width plus a warm-cache long-prompt
+generate, same window, then let the decision gate fire. Box mid-to-heavy
+load throughout (mem read 23.77 vs 28.49 on lighter windows; decode
+2.5-2.8 t/s vs 4.36 earlier): absolutes depressed, within-window ratios
+and shares are the evidence. gguf display is [in, out], so bench
+rows=out, cols=in: gate/up Q4_K is rows 8192 x cols 3072, ffn_down Q6_K
+is rows 3072 x cols 8192. All Q4_K on this file have cols=3072; the only
+cols=8192 tensors are Q6_K down (and the lookup-only embedding).
+
+| bench batch x64, best of 3, same window | time | GFLOPS |
+|---|---|---|
+| q4k rows 8192 x cols 3072 (gate/up shape) | 19.446 ms | 165.65 |
+| q4k rows 3072 x cols 8192 (no 3B caller; asymmetry probe) | 49.071 ms | 65.64 |
+| q6k rows 8192 x cols 3072 (gate shape) | 15.524 ms | 207.50 |
+| q6k rows 3072 x cols 8192 (ffn_down shape) | 23.123 ms | 139.31 |
+
+Same total elements, orientation-dependent rate: cols=8192 runs 1.5x
+(q6k: 208 -> 139) to 2.5x (q4k: 166 -> 66) slower per element than
+cols=3072, both formats, back-to-back. Working hypothesis (not yet
+proven): the 8192-float (32 KiB) scratch row plus the 8192-float input
+row exceeds the 48 KiB L1D, so every token's dot re-fetches scratch
+from L2, while 12 KiB + 12 KiB fits; dequant writes are identical either
+way. Testable by tiling the token loop (L1 blocking) with per-dot order
+preserved, hence bit-identical output and no fidelity price beyond a
+memcmp differential plus ids parity.
+
+| generate, Llama-3B, 6 threads, --prefetch | prefill | phases |
+|---|---|---|
+| 120-tok prompt, ctx 2048 (cold file, prefetch 6.4 s) | 14.3 t/s | matvec 95%, attn 2%, norm 3% |
+| 480-tok prompt, ctx 2048, warm (best of 2: 18.4 / 14.2) | 18.4 t/s | matvec 93%, attn 3-4%, norm 3% |
+
+Per-layer FFN at 64-wide from the kernel table: 19.4 (gate) + 19.4
+(up) + 23.1 (down, q6k) = ~62 ms per chunk; x28 layers is ~1.7 s per
+64-tok chunk before attn/qkv/o/norms. End-to-end matches kernel rates:
+no mystery loop overhead, the prefill gap is kernel efficiency
+(139-208 GFLOPS vs ~300 roof), not dispatch. The 55-tok 25-32 t/s
+baseline (Section 28as) and today's 14-18 t/s differ by box load, not
+code; the llama 74-79 t/s side stands un-remeasured (llama-bench clone
+not relocatable this session: not on PATH, not in home/Desktop roots;
+full-home search times out -- follow-up, not this round).
+
+Decision gate FIRES: drill down on cols=8192 in gemv_dequant_batch_avx2
+(L1 token tiling, bit-identical), Q6_K down first (the real caller),
+q4k wide-shape second as the same code path. Out: VNNI (no Q8_0 in
+file), repack (mmap-first), thread default (knob exists), overhead hunt
+(phases close it: matvec 92-95%). Tests 86/86 (suite untouched).
+
