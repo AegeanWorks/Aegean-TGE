@@ -1,9 +1,12 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
 #include "harness.hpp"
+#include "tge/core/dispatch.hpp"
 #include "tge/cpu/kernels.hpp"
+#include "tge/tensor/ops.hpp"
 
 namespace {
 
@@ -337,6 +340,71 @@ TGE_TEST(q4k_avx2_matches_scalar_across_blocks) {
 
   TGE_CHECK(std::memcmp(scalar.data(), vectorised.data(),
                         scalar.size() * sizeof(float)) == 0);
+}
+
+void expect_dequant_batch_matches(tge::cpu::QuantKind kind,
+                                    const std::uint8_t* matrix, int rows,
+                                    int cols, int tokens, std::uint32_t seed) {
+  std::vector<float> input(static_cast<std::size_t>(tokens) * cols);
+  std::vector<float> reference(static_cast<std::size_t>(tokens) * rows, 0.0F);
+  std::vector<float> optimized(static_cast<std::size_t>(tokens) * rows, 0.0F);
+
+  std::uint32_t state = seed | 1u;
+  for (float& value : input) {
+    state = state * 1664525u + 1013904223u;
+    value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+  }
+
+  tge::cpu::DequantBatchArgs args;
+  args.data = matrix;
+  args.kind = kind;
+  args.rows = rows;
+  args.cols = cols;
+  args.input = input.data();
+  args.tokens = tokens;
+
+  args.out = reference.data();
+  tge::cpu::gemv_dequant_batch_scalar(args, tge::cpu::GemvConfig{1});
+
+  args.out = optimized.data();
+  tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+  tge::kernels().gemv_dequant_batch(
+      args, tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0), &pool});
+
+  // Panel tiling reorders the reduction, so this is near rather than exact:
+  // same tolerance discipline as the q8 batch differential.
+  const float worst = tge::ops::max_abs_diff(
+      reference.data(), optimized.data(),
+      static_cast<std::int64_t>(reference.size()));
+  const float tolerance = 1e-4F * static_cast<float>(cols) + 1e-3F;
+  if (!(worst <= tolerance)) {
+    std::fprintf(stderr,
+                 "    dequant batch kind=%d rows=%d cols=%d tokens=%d worst=%g "
+                 "tolerance=%g\n",
+                 static_cast<int>(kind), rows, cols, tokens,
+                 static_cast<double>(worst), static_cast<double>(tolerance));
+    tgetest::fail("dequant batch matches scalar", __FILE__, __LINE__);
+  }
+}
+
+TGE_TEST(dequant_batch_matches_scalar_reference) {
+  // Column counts cross the 1024 panel grid (exact, tail, wide) at prefill
+  // width and at decode width, for both hot K-quant formats on this file.
+  // Sized for three full rows: the batch kernel strides rows by
+  // quant_row_bytes, so a single-row matrix would read out of bounds.
+  constexpr int kRows = 3;
+  for (const int cols : {1024, 3072, 3328, 8192}) {
+    for (const int tokens : {1, 7, 64}) {
+      const std::vector<std::uint8_t> q4k =
+          make_q4_k_matrix(kRows * cols / kBlockElements, 0xB4710201u);
+      expect_dequant_batch_matches(tge::cpu::QuantKind::Q4_K, q4k.data(),
+                                   kRows, cols, tokens, 0x11111111u);
+      const std::vector<std::uint8_t> q6k =
+          make_q6_k_matrix(kRows * cols / kBlockElements, 0xB4710601u);
+      expect_dequant_batch_matches(tge::cpu::QuantKind::Q6_K, q6k.data(),
+                                   kRows, cols, tokens, 0x66666666u);
+    }
+  }
 }
 
 TGE_TEST(q4k_avx2_nibble_halves_are_distinct) {

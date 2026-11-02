@@ -2214,3 +2214,39 @@ q4k wide-shape second as the same code path. Out: VNNI (no Q8_0 in
 file), repack (mmap-first), thread default (knob exists), overhead hunt
 (phases close it: matvec 92-95%). Tests 86/86 (suite untouched).
 
+## 32. L1 panel tiling: falsified same-window, reverted (2026-11-02)
+
+Hypothesis from Section 31: 8192-wide dots run slower per element
+because 32 KiB scratch + 32 KiB input exceed the 48 KiB L1D. Change:
+column panels of 1024 in gemv_dequant_batch_avx2 (4 KiB + 4 KiB per
+dot, per-token accumulation in increasing column order), all K-quant
+kinds, one code path. Differential written first
+(dequant_batch_matches_scalar_reference: q4k/q6k, cols 1024/3072/3328/
+8192, tokens 1/7/64, tolerance 1e-4 x cols + 1e-3): it failed pre-ship
+on single-row test matrices read 3 rows out of bounds (heap garbage,
+nondeterministic across runs) -- the harness earning its keep again;
+fixed by sizing matrices to rows x blocks, green on the unmodified
+kernel before the change.
+
+| shape x64, best of 3 | pre-panel (Section 31 window) | post-panel (later window) | interleaved same-window old / new |
+|---|---|---|---|
+| q4k gate 8192x3072 | 165.65 GFLOPS | 186.40 | -- (not re-paired; gate was never the problem) |
+| q4k wide 3072x8192 | 65.64 | 101.39 | R1 132.47 / 101.71, R2 93.81 / 119.75 |
+| q6k gate 8192x3072 | 207.50 | 119.17 / 182.00 (re-samples) | -- |
+| q6k down 3072x8192 | 139.31 | 128.11 / 90.13 (re-samples) | R1 110.35 / 108.63, R2 82.48 / 91.23 |
+
+Cross-window reads (+54% on q4k wide) are load narrative: interleaved
+old/new pairs flip sign between rounds (R1 -23%, R2 +28%; q6k down
+-1.5% then +11%). Verdict: panels do not move any shape outside noise.
+Mechanism correction: panels keep total input traffic identical (2 MiB
+per 8192-wide row at 64 tokens), so if the cost is L2/DRAM re-reads of
+the input per row, panels cannot help; the fix would need cross-row
+input reuse (band + token blocking), which is bigger surgery and goes
+back through its own plan/verify round -- not attempted here.
+
+Reverted in full (kernel file back to the Section 31 state; diff shows
+only the test file). Kept: the batch-vs-scalar differential (first
+coverage of the K-quant batch path end to end; 86 -> 87 cases) and the
+Section 31 numbers. No fidelity run: no numerics change ships. No
+generate delta claimed: nothing lands. Tests 87/87, 4/4 gates.
+
