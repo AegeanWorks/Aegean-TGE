@@ -193,6 +193,15 @@ class Qwen2 {
 
   static int argmax(const float* values, int count);
 
+  /// Phase timers: wall nanoseconds accumulated inside matvec/batch_matvec,
+  /// attention, and norms/RoPE/SiLU. Zero arithmetic change; the CLI resets
+  /// before a measured region and prints the shares. All counters are
+  /// mutated from const methods, so they are mutable.
+  void reset_phase_timers() const;
+  std::uint64_t phase_matvec_ns() const { return phase_matvec_ns_; }
+  std::uint64_t phase_attn_ns() const { return phase_attn_ns_; }
+  std::uint64_t phase_norm_ns() const { return phase_norm_ns_; }
+
  private:
   struct Matrix {
     const std::uint8_t* data = nullptr;
@@ -243,6 +252,7 @@ class Qwen2 {
 
   void rms_norm(float* out, const float* in, const float* weight) const;
   void apply_rope(float* values, int heads, int position) const;
+  void silu_gated(float* gate, const float* up, int count) const;
   /// Lazy per-session pools; the decode and prefill sizes differ.
   /// Decode is bandwidth-bound and stays on a few pinned P-core threads;
   /// prefill is compute-bound and takes every logical core, unpinned.
@@ -286,6 +296,9 @@ class Qwen2 {
   bool kv_q8_ = false;
   mutable std::unique_ptr<core::ThreadPool> decode_pool_;
   mutable std::unique_ptr<core::ThreadPool> prefill_pool_;
+  mutable std::uint64_t phase_matvec_ns_ = 0;
+  mutable std::uint64_t phase_attn_ns_ = 0;
+  mutable std::uint64_t phase_norm_ns_ = 0;
 
   Matrix token_embd_;
   Matrix output_;

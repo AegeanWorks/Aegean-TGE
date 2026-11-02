@@ -2059,7 +2059,7 @@ wrong objective for these scores: they are merge ranks, not log-probs
 reference algorithm is llama.cpp's `llm_tokenizer_spm` merge loop, ported
 line for line (score-max queue, leftmost tie-break, staleness by merged
 size, resegment-or-bytes). Second, GGUF SentencePiece pieces are raw UTF-8
-(`â–Hello` is E2 96 81...), not GPT-2-mapped â€” an early mapped-domain
+(`â–Hello` is E2 96 81...), not GPT-2-mapped â€” an early mapped-domain
 attempt matched nothing and fell back to bytes everywhere.
 
 Proof is a 28-string corpus against two oracles: 26/28 match HuggingFace
@@ -2117,4 +2117,49 @@ Direction is consistent across orders with identical transcripts, but the f32
 spread (73%) far exceeds the box's usual band — that day had heavy background
 load, so read the gap as contention-shaped, not a clean 2x claim. The
 plausible mechanism is the shared single-channel DIMM: two sessions stream
+2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.
+
+## 30. Phase timers + Llama-3B decode attribution (2026-11-02)
+
+`Qwen2` now accumulates wall nanoseconds in `matvec`/`batch_matvec`,
+`attention`/`attention_batch` (+`forward_batch` inline region) and
+norms/RoPE/SiLU (`rms_norm`, `apply_rope`, new `silu_gated` wrapper);
+`generate` resets before prefill and before decode and prints both
+`phases` lines next to `timers`. No arithmetic change: separate counters,
+no reordered math. Tests 86/86; fidelity full-program mean KL 1.006e-11,
+worst 3.113e-10, top-1 1023/1023 (same floor as §28z).
+
+Same window, warm page cache, Llama-3B Q4_K_M, 6 threads (unless noted):
+
+| probe | result |
+|---|---|
+| `bench mem` (256 MiB, best of 3) | copy 21.67, read 25.72 GB/s (box mid-load) |
+| `bench batch` q4k 3072x8192 x1 (down, best of 5) | 1.025 ms, 49.08 GFLOPS, 13.81 GB/s |
+| `bench batch` q4k 8192x3072 x1 (gate, best of 5) | 1.086 ms, 46.35 GFLOPS, 13.04 GB/s |
+| `bench batch` q6k 3072x8192 x1 (down, best of 5) | 1.103 ms, 45.62 GFLOPS, 18.71 GB/s |
+| `bench batch` q6k 8192x3072 x1 (best of 5) | 1.682 ms, 29.91 GFLOPS, 12.27 GB/s |
+| short decode, 6-tok prompt, ctx 512, 14 tok | matvec 2813.0 ms (98%), attn 6.3 (0%), norm 55.5 (2%) |
+| 100-tok prompt, ctx 2048, 19 tok | matvec 3012.2 ms (96%), attn 50.0 (2%), norm 61.4 (2%) |
+| prefill, same runs | matvec 93-94%, attn 3%, norm 4-6% |
+| threads 6 vs 10, short decode interleaved | 4.25 vs 4.42 t/s (+4%, below the 15% bar; default stays 6) |
+
+Two corrections to the Stage-1 plan, both from measuring on true 3B
+shapes instead of quoting 0.5B numbers. First, Q4_K is not at 7-9 GB/s
+here: on 3072/8192 orientations it runs 13.0-13.8 GB/s (51-54% of the
+25.7 wall), and Q6_K down hits 18.71 (73%). Weighted effective ?55% —
+which *is* the end-to-end 52-58% figure, not a mystery overhead. The
+§28i/§28l "format tax" stands, but its size on 3B is ~2x smaller than
+the 0.5B-shape quote. Second, attention is 0-2% at both ctx (positions
+100-120 here, per-head path; GQA never engages), so the GQA-retune branch
+of the plan does not fire.
+
+Verdict per the revised plan's gates (matvec >60% fires; kbatch <50%
+wall fails at 51-73%; attn >30% fails at 0-2%): no kernel/ALU change.
+The remaining unpack ALU (nibble split + per-32 scales + FMA) is the
+format price — fused lost 14% (§28i), integer lost twice (§12), repack
+banned (mmap-first). Thread sweep +4% keeps the default. What ships is
+the instrument: every future decode claim now attributes instead of
+guessing. Next triggers, not attempted: int8-domain dot that avoids the
+hadd tax, or a 256+-history GQA A/B (this session never exceeded
+position ~120).
 2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.

@@ -1,6 +1,7 @@
 #include "tge/models/qwen2.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -32,6 +33,13 @@ constexpr int kPrefillChunk = 64;
 // Grouped-query attention splits decode positions into at most this many
 // chunks; the scratch is sized for the maximum.
 constexpr int kMaxGqaChunks = 16;
+
+inline std::uint64_t clock_ns() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 /// Quantizes one 32-value KV row slice to int8 with a single float scale.
 /// Same recipe as the Q8 batch path (max / 127, clamped to [-127, 127]) so
@@ -678,6 +686,7 @@ const float* Qwen2::vector(const char* name, int expected) const {
 
 void Qwen2::matvec(const Matrix& weight, const float* input,
                    float* output, const cpu::Q8Quantized* quantized) const {
+  const std::uint64_t t0 = clock_ns();
   // Decode is memory-bound and synchronisation-sensitive, so it uses the
   // decode pool rather than one worker per logical processor. Sizing each call
   // to the matrix was measured and gave no gain over a flat count, so the
@@ -698,6 +707,7 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
       args.quantized = quantized->values;
       args.quantized_scales = quantized->scales;
       cpu::gemv_q8_batch_vnni(args, config);
+      phase_matvec_ns_ += clock_ns() - t0;
       return;
     }
     cpu::Q8GemvArgs args;
@@ -707,6 +717,7 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
     args.vector = input;
     args.out = output;
     kernels().gemv_q8(args, config);
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   cpu::QuantKind kind;
@@ -720,6 +731,7 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
     args.tokens = 1;
     args.out = output;
     kernels().gemv_dequant_batch(args, config);
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   if (weight.type == gguf::TensorType::F32) {
@@ -731,6 +743,7 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
     args.vector = input;
     args.out = output;
     kernels().gemv_f32(args, config);
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   throw std::runtime_error("matvec: unsupported weight type");
@@ -742,6 +755,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
   if (tokens <= 0) {
     return;
   }
+  const std::uint64_t t0 = clock_ns();
   // Prompt processing is compute-bound, so it takes every logical processor
   // rather than the smaller decode pool (see prefill_threads()).
   const int workers = prefill_threads();
@@ -760,6 +774,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
       args.quantized = quantized->values;
       args.quantized_scales = quantized->scales;
       cpu::gemv_q8_batch_vnni(args, config);
+      phase_matvec_ns_ += clock_ns() - t0;
       return;
     }
     cpu::Q8BatchArgs args;
@@ -770,6 +785,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     args.tokens = tokens;
     args.out = output;
     kernels().gemv_q8_batch(args, config);
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   cpu::QuantKind kind;
@@ -783,6 +799,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     args.tokens = tokens;
     args.out = output;
     kernels().gemv_dequant_batch(args, config);
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   if (weight.type == gguf::TensorType::F32) {
@@ -796,6 +813,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
       args.out = output + static_cast<std::size_t>(token) * weight.rows;
       kernels().gemv_f32(args, config);
     }
+    phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
   throw std::runtime_error("batch_matvec: unsupported weight type");
@@ -858,17 +876,27 @@ void Qwen2::dequant_row(const Matrix& weight, int row, float* output) const {
                       output, weight.cols);
 }
 
+void Qwen2::reset_phase_timers() const {
+  phase_matvec_ns_ = 0;
+  phase_attn_ns_ = 0;
+  phase_norm_ns_ = 0;
+}
+
 void Qwen2::rms_norm(float* out, const float* in, const float* weight) const {
+  const std::uint64_t t0 = clock_ns();
   const int dim = config_.embedding_length;
   const auto features = cpu::detect().features;
   if (!scalar_kernels_ && features.avx2 && features.fma) {
     cpu::rms_norm_avx2(out, in, weight, dim, config_.rms_epsilon);
+    phase_norm_ns_ += clock_ns() - t0;
     return;
   }
   cpu::rms_norm_scalar(out, in, weight, dim, config_.rms_epsilon);
+  phase_norm_ns_ += clock_ns() - t0;
 }
 
 void Qwen2::apply_rope(float* values, int heads, int position) const {
+  const std::uint64_t t0 = clock_ns();
   const int half = config_.head_dim / 2;
   const std::size_t base =
       static_cast<std::size_t>(position) * static_cast<std::size_t>(half);
@@ -882,10 +910,12 @@ void Qwen2::apply_rope(float* values, int heads, int position) const {
     if (vectorise) {
       cpu::apply_rope_interleaved_avx2(values, heads, config_.head_dim,
                                        position, cosines, sines);
+      phase_norm_ns_ += clock_ns() - t0;
       return;
     }
     cpu::apply_rope_interleaved_scalar(values, heads, config_.head_dim,
                                        position, cosines, sines);
+    phase_norm_ns_ += clock_ns() - t0;
     return;
   }
   const float* cosines = rope_cos_.data() + base;
@@ -893,10 +923,23 @@ void Qwen2::apply_rope(float* values, int heads, int position) const {
   if (vectorise) {
     cpu::apply_rope_avx2(values, heads, config_.head_dim, position, cosines,
                          sines);
+    phase_norm_ns_ += clock_ns() - t0;
     return;
   }
   cpu::apply_rope_scalar(values, heads, config_.head_dim, position, cosines,
                          sines);
+  phase_norm_ns_ += clock_ns() - t0;
+}
+
+void Qwen2::silu_gated(float* gate, const float* up, int count) const {
+  const std::uint64_t t0 = clock_ns();
+  const auto features = cpu::detect().features;
+  if (!scalar_kernels_ && features.avx2 && features.fma) {
+    cpu::silu_gated_avx2(gate, up, count);
+  } else {
+    cpu::silu_gated_scalar(gate, up, count);
+  }
+  phase_norm_ns_ += clock_ns() - t0;
 }
 
 void Qwen2::attention_head(int sequence, int layer, int position, int head,
@@ -954,12 +997,14 @@ bool Qwen2::uses_gqa(int position) const {
 
 void Qwen2::attention(int sequence, int layer, int position,
                       const float* queries, float* out_buffer) {
+  const std::uint64_t t0 = clock_ns();
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
 
   if (uses_gqa(position)) {
     attention_gqa(sequence, layer, position, queries, out_buffer);
+    phase_attn_ns_ += clock_ns() - t0;
     return;
   }
 
@@ -972,6 +1017,7 @@ void Qwen2::attention(int sequence, int layer, int position,
                      out_buffer + static_cast<std::size_t>(head) * head_dim,
                      scores_.data());
     }
+    phase_attn_ns_ += clock_ns() - t0;
     return;
   }
 
@@ -983,6 +1029,7 @@ void Qwen2::attention(int sequence, int layer, int position,
                    scores_.data() +
                        static_cast<std::size_t>(head) * context_);
   });
+  phase_attn_ns_ += clock_ns() - t0;
 }
 
 void Qwen2::attention_gqa(int sequence, int layer, int position,
@@ -1122,6 +1169,7 @@ void Qwen2::merge_gqa_chunks(const float* maxima, const float* sums,
 
 void Qwen2::attention_batch(int sequence, int layer, int start_position,
                              int tokens) {
+  const std::uint64_t t0 = clock_ns();
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int dim = config_.embedding_length;
@@ -1147,6 +1195,7 @@ void Qwen2::attention_batch(int sequence, int layer, int start_position,
                        out + static_cast<std::size_t>(head) * head_dim, scores);
       }
     });
+    phase_attn_ns_ += clock_ns() - t0;
     return;
   }
   pool.parallel_for(tokens * heads, 1, [&](int task) {
@@ -1163,6 +1212,7 @@ void Qwen2::attention_batch(int sequence, int layer, int start_position,
                    queries + static_cast<std::size_t>(head) * head_dim,
                    out + static_cast<std::size_t>(head) * head_dim, scores);
   });
+  phase_attn_ns_ += clock_ns() - t0;
 }
 
 const float* Qwen2::forward_batch(const int* tokens, const int* positions,
@@ -1259,15 +1309,36 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
 
     core::ThreadPool& attn_pool = prefill_pool();
     const int attn_workers = prefill_threads();
-    if (count >= attn_workers) {
-      attn_pool.parallel_for(count, 1, [&](int token) {
-        const int position = positions[token];
-        const int sequence = sequences[token];
-        const float* q =
-            batch_q_.data() + static_cast<std::size_t>(token) * dim;
-        float* out =
-            batch_attn_.data() + static_cast<std::size_t>(token) * dim;
-        for (int head = 0; head < heads; ++head) {
+    {
+      const std::uint64_t ta0 = clock_ns();
+      if (count >= attn_workers) {
+        attn_pool.parallel_for(count, 1, [&](int token) {
+          const int position = positions[token];
+          const int sequence = sequences[token];
+          const float* q =
+              batch_q_.data() + static_cast<std::size_t>(token) * dim;
+          float* out =
+              batch_attn_.data() + static_cast<std::size_t>(token) * dim;
+          for (int head = 0; head < heads; ++head) {
+            float* scores = scores_.data() +
+                            (static_cast<std::size_t>(token) * heads + head) *
+                                context_;
+            attention_head(sequence, index, position, head,
+                           q + static_cast<std::size_t>(head) * head_dim,
+                           out + static_cast<std::size_t>(head) * head_dim,
+                           scores);
+          }
+        });
+      } else {
+        attn_pool.parallel_for(count * heads, 1, [&](int task) {
+          const int token = task / heads;
+          const int head = task % heads;
+          const int position = positions[token];
+          const int sequence = sequences[token];
+          const float* q =
+              batch_q_.data() + static_cast<std::size_t>(token) * dim;
+          float* out =
+              batch_attn_.data() + static_cast<std::size_t>(token) * dim;
           float* scores = scores_.data() +
                           (static_cast<std::size_t>(token) * heads + head) *
                               context_;
@@ -1275,25 +1346,9 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
                          q + static_cast<std::size_t>(head) * head_dim,
                          out + static_cast<std::size_t>(head) * head_dim,
                          scores);
-        }
-      });
-    } else {
-      attn_pool.parallel_for(count * heads, 1, [&](int task) {
-        const int token = task / heads;
-        const int head = task % heads;
-        const int position = positions[token];
-        const int sequence = sequences[token];
-        const float* q =
-            batch_q_.data() + static_cast<std::size_t>(token) * dim;
-        float* out =
-            batch_attn_.data() + static_cast<std::size_t>(token) * dim;
-        float* scores = scores_.data() +
-                        (static_cast<std::size_t>(token) * heads + head) *
-                            context_;
-        attention_head(sequence, index, position, head,
-                       q + static_cast<std::size_t>(head) * head_dim,
-                       out + static_cast<std::size_t>(head) * head_dim, scores);
-      });
+        });
+      }
+      phase_attn_ns_ += clock_ns() - ta0;
     }
 
     const cpu::Q8Quantized q_attn_out =
@@ -1324,16 +1379,8 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
                  vnni_ ? &q_ffn : nullptr);
     const std::size_t activation_elements =
         static_cast<std::size_t>(count) * static_cast<std::size_t>(ffn);
-    {
-      const auto features = cpu::detect().features;
-      if (!scalar_kernels_ && features.avx2 && features.fma) {
-        cpu::silu_gated_avx2(batch_gate_.data(), batch_up_.data(),
-                             static_cast<int>(activation_elements));
-      } else {
-        cpu::silu_gated_scalar(batch_gate_.data(), batch_up_.data(),
-                               static_cast<int>(activation_elements));
-      }
-    }
+    silu_gated(batch_gate_.data(), batch_up_.data(),
+               static_cast<int>(activation_elements));
 
     const cpu::Q8Quantized q_down =
         vnni_ ? quantize_activations(batch_gate_.data(), count, ffn)
@@ -1438,14 +1485,7 @@ const float* Qwen2::forward(int token, int position) {
     const cpu::Q8Quantized* q_ffn_ptr = vnni_ ? &q_ffn : nullptr;
     matvec(layer.w_gate, h_.data(), gate_.data(), q_ffn_ptr);
     matvec(layer.w_up, h_.data(), up_.data(), q_ffn_ptr);
-    {
-      const auto features = cpu::detect().features;
-      if (!scalar_kernels_ && features.avx2 && features.fma) {
-        cpu::silu_gated_avx2(gate_.data(), up_.data(), ffn);
-      } else {
-        cpu::silu_gated_scalar(gate_.data(), up_.data(), ffn);
-      }
-    }
+    silu_gated(gate_.data(), up_.data(), ffn);
     const cpu::Q8Quantized q_down =
         vnni_ ? quantize_activations(gate_.data(), 1, ffn) : cpu::Q8Quantized{};
     matvec(layer.w_down, gate_.data(), h_.data(),
@@ -1597,16 +1637,8 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                    q_ffn_ptr);
       const std::size_t activation_elements =
           static_cast<std::size_t>(chunk) * static_cast<std::size_t>(ffn);
-      {
-        const auto features = cpu::detect().features;
-        if (!scalar_kernels_ && features.avx2 && features.fma) {
-          cpu::silu_gated_avx2(batch_gate_.data(), batch_up_.data(),
-                               static_cast<int>(activation_elements));
-        } else {
-          cpu::silu_gated_scalar(batch_gate_.data(), batch_up_.data(),
-                                 static_cast<int>(activation_elements));
-        }
-      }
+      silu_gated(batch_gate_.data(), batch_up_.data(),
+                 static_cast<int>(activation_elements));
 
       const cpu::Q8Quantized q_down =
           vnni_ ? quantize_activations(batch_gate_.data(), chunk, ffn)

@@ -586,6 +586,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
               path.c_str(), config.block_count, config.embedding_length,
               config.head_count, config.head_count_kv, config.vocab_size);
 
+  model->reset_phase_timers();
   const auto prefill_start = Clock::now();
   const float* logits = model->prefill(prompt.data(),
                                        static_cast<int>(prompt.size()), 0);
@@ -596,6 +597,15 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   std::printf("prefill  : %zu tokens in %.2f ms (%.1f tok/s)\n", prompt.size(),
               prefill_seconds * 1e3,
               static_cast<double>(prompt.size()) / prefill_seconds);
+  {
+    const double mv_ms =
+        static_cast<double>(model->phase_matvec_ns()) / 1e6;
+    const double at_ms = static_cast<double>(model->phase_attn_ns()) / 1e6;
+    const double nx_ms = static_cast<double>(model->phase_norm_ns()) / 1e6;
+    std::printf("phases   : prefill matvec %.1f ms, attn %.1f ms, norm %.1f ms\n",
+                mv_ms, at_ms, nx_ms);
+  }
+  model->reset_phase_timers();
 
   std::vector<int> generated;
   std::vector<int> history = prompt;
@@ -904,6 +914,16 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         decode_seconds > 0.0 ? (samp_seconds / decode_seconds * 100.0) : 0.0;
     std::printf("timers   : forward %.2f ms, sample %.2f ms (%.1f%%)\n", fwd_ms,
                 samp_ms, samp_share);
+    const double mv_ms =
+        static_cast<double>(model->phase_matvec_ns()) / 1e6;
+    const double at_ms = static_cast<double>(model->phase_attn_ns()) / 1e6;
+    const double nx_ms = static_cast<double>(model->phase_norm_ns()) / 1e6;
+    const double ph_total = mv_ms + at_ms + nx_ms;
+    std::printf("phases   : decode matvec %.1f ms (%.0f%%), attn %.1f ms "
+                "(%.0f%%), norm %.1f ms (%.0f%%)\n",
+                mv_ms, ph_total > 0.0 ? mv_ms / ph_total * 100.0 : 0.0, at_ms,
+                ph_total > 0.0 ? at_ms / ph_total * 100.0 : 0.0, nx_ms,
+                ph_total > 0.0 ? nx_ms / ph_total * 100.0 : 0.0);
   }
   if (spec_steps > 0) {
     std::printf(
