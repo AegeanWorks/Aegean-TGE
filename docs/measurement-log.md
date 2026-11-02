@@ -2368,4 +2368,44 @@ auto-vs-auto pairs. Tests 87/87 (suite untouched). Attn shares stay
 problem on this DIMM, and the remaining gap is the §30 format tax,
 not scheduling.
 
+## 36. Matched head-to-head vs llama.cpp cd8427d on Llama-3B (2026-11-02)
+
+First fair 3B matrix (supersedes the mismatched §28as snapshot):
+same file, same 6 threads, warm page cache, interleaved, both
+MinGW-GCC builds. TGE `--prefetch` (fault-in untimed); llama-bench
+warms up internally (`-r 5` stats shown). TGE f32 default vs llama
+f16-KV default declared; one TGE `--kv f16` secondary. Prompts
+matched by token count (TGE id-list prompts; llama built-in).
+
+| test | llama-bench cd8427d | TGE (this tree) | TGE/llama |
+|---|---|---|---|
+| pp128 | 38.19 ± 3.33 | 24.6 / 29.3 (128-id prompt) | 64-77% |
+| tg64 @128 | 7.96 ± 1.01 | 7.56 / 10.00 | 95-126% |
+| pp512 | 95.35 ± 7.75 | 44.3 (512-id prompt) | 46% |
+| tg64 @512 | 10.77 ± 0.24 | 10.25 | 95% |
+| TGE-512 `--kv f16` | -- (same llama col) | 36.6 / 8.26 | unpaired drift, no format claim |
+
+`bench mem` wall this window: read 15.63 GB/s (mid-load; lighter
+windows 25-28). TGE `phases` on the 512 runs: prefill matvec 88%,
+attn 3%; decode matvec 92%, attn 7% (GQA engaged, positions 512+).
+
+Two statements with different strengths. (1) Decode: parity across
+every pairing (95-126% short, 95% long; llama's own ±13% on tg64
+shows the band). The GOAL short baseline (8.6-9.6) and the 2048-ctx
+f32 line (5.80) are TGE-vs-wall numbers, not TGE-vs-llama; against
+llama, decode is not the gap. (2) Prefill: trails at every length,
+and widens with prompt length (64-77% at 128, 46% at 512) -- the
+§31 wide-col kernel story (q6k down 111 vs q4k gate 208 GFLOPS,
+matvec ~90% of prefill), now confirmed end-to-end against the
+reference engine instead of inferred from kernel rates. The 4-token
+story prefill (12.5/24.5 across runs) is fixed-cost dominated and
+not compared.
+
+What this aims: the next code round attacks prefill batch-kernel
+efficiency on 3B shapes (gate/up Q4_K 8192x3072, down Q6_K
+3072x8192, 64-wide), not decode. f16 secondary is unpaired across
+time (slower than the f32 run here, contradicting the paired §29
++14% -- box drift, correctly unclaimed). No code changed, no
+fidelity owed, tests 87/87 untouched.
+
 
