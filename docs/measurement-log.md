@@ -2338,4 +2338,34 @@ touched). Next triggers, not attempted: per-group activation scales
 (which re-add the quant cost the prototype tried to remove), or a
 quiet-box rerun of the same stash pairs.
 
+## 35. GQA threshold sweep 256->64: leans GQA, inside noise, no move (2026-11-02)
+
+Revised-plan Step 0 (no code): forced `--attention head` vs `gqa`
+pairs at histories 4/64/128/192/300, Llama-3B Q4_K_M, `--threads 6`,
+warm cache, back-to-back. Prefill paths never consult `uses_gqa`
+(Stage 2: `attention_batch` and `forward_batch` are per-head always),
+so this gate is decode-only by construction; the speculative pin
+forces `Head` explicitly and is unaffected.
+
+| history | head decode | gqa decode | ratio | ids |
+|---|---|---|---|---|
+| 4 (story) | 4.32 t/s | 4.19 (0.97x) | 0.97 | identical |
+| 64 | 4.88 / 4.17 | 5.25 / 4.74 | 1.08 / 1.14 | identical |
+| 128 | 4.94 (R2) | ~5.2 equiv fwd (R1) / 4.04 (R2) | ~1.05 / 0.82 | identical |
+| 192 | fwd 2173.05 ms | fwd 2096.62 ms | ~1.04 | identical |
+| 300 (§34) | 4.64 | 5.37 | 1.16 | identical |
+
+Median ratio ~1.05, spread 0.82-1.16: the H128 round-2 flip (head
++22% one way after gqa +5% the other) is the §32/§33 signature --
+same-window pairing kills it. Nothing <256 wins outside the ±20%
+box band, so the Step-1 gate (move `256` in `uses_gqa`) does not
+fire; the constant stays, no code changed, no fidelity run owed
+(no arithmetic exists to price). Kept: the bracket itself -- if a
+quiet box ever shows gqa consistently ahead at 64+, the move is one
+line plus the full-corpus fidelity (which spans the threshold) and
+auto-vs-auto pairs. Tests 87/87 (suite untouched). Attn shares stay
+1-4% throughout; matvec 95-97% -- decode remains a weight-streaming
+problem on this DIMM, and the remaining gap is the §30 format tax,
+not scheduling.
+
 
