@@ -2250,3 +2250,31 @@ coverage of the K-quant batch path end to end; 86 -> 87 cases) and the
 Section 31 numbers. No fidelity run: no numerics change ships. No
 generate delta claimed: nothing lands. Tests 87/87, 4/4 gates.
 
+## 33. Token-block + L2 band cap: no effect same-window, reverted (2026-11-02)
+
+Second drill-down on the wide-col cost (Sections 31/32): token-blocks
+of 8 with bands capped to ~256 KiB of input so each block stays
+L2-resident across the band's rows; tokens==1 keeps the old loop
+exactly (decode neutral by construction); grain scales dispatch.
+Scheduling only, full-width dots in the same order -- bit-identical,
+no fidelity price.
+
+| q6k down 3072x8192 x64, best of 3 | old (stash-built) | new (token-block) | ratio |
+|---|---|---|---|
+| R1 | 102.68 GFLOPS | 102.36 | 1.00 |
+| R2 | 61.09 | 65.24 | 1.07 |
+| R3 | 83.83 | 127.88 | 1.53 |
+| R4 | 98.30 | 72.36 | 0.74 |
+| R5 | 66.03 | 93.25 | 1.41 |
+| R6 | 88.14 | 83.04 | 0.94 |
+
+Median ratio ~1.03, spread 0.74-1.53: the box spikes mid-window (same
+binary swings 102 -> 61 between adjacent runs), so no kernel delta is
+resolvable here today. Same-window pairing -- the rule that killed the
+panel illusion -- kills this one too. Reverted in full; differential
+reused unchanged (still green on both). Retry trigger, not attempted
+now: a quiet box (mem read back at ~28, decode at ~4.5+) plus the same
+interleaved pairs; the stash-built-binaries pattern from Section 32
+applies. Tests 87/87.
+
+
