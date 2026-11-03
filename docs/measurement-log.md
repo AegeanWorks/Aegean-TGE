@@ -2408,4 +2408,34 @@ time (slower than the f32 run here, contradicting the paired §29
 +14% -- box drift, correctly unclaimed). No code changed, no
 fidelity owed, tests 87/87 untouched.
 
+## 37. Tokens-sweep attribution: aborted, box throttling (2026-11-03)
+
+Round-4 sweep (Stage 2 verified the K-path has no group/tail kink,
+so `time(tokens)` should read fixed-vs-variable cleanly). Same
+window, interleaved, best-of-5, wall read 21.14 GB/s, 76% RAM in use:
+
+| point | time | GFLOPS |
+|---|---|---|
+| q4k gate x1 | 1.775 ms | 28.36 |
+| q6k down x1 | 9.339 ms, retry 6.670 | 5.39 / 7.55 |
+| q4k gate x4 | 14.338 ms | 14.04 |
+| q6k down x4 | 3.148 ms | 63.96 |
+
+q6k x4 (3.148 ms) faster than q6k x1 (9.339/6.670 ms) on the same
+binary back-to-back is physically impossible for this kernel --
+proof the x1 invocations were throttled throughout (all 5 reps),
+not a kernel shape effect. q4k x1->x4 at 8x for 4x tokens is the
+same spike from the other side. Best-of-N cannot save runs where
+contention persists across the whole invocation.
+
+Verdict per the round-4 plan's honest-outcome clause: no slopes, no
+aim, no surgery. The 16/64 points were not run -- two inversion
+proofs already settle unresolvability, more points would only spend
+wall time manufacturing variance. Retry trigger: same 8-point
+interleaved matrix on a quiet box (mem read back ~28, `tge info`
+available well above 50%, no x1>x4 inversion on the first pair);
+if the retry also inverts, the bench harness itself needs a
+contention guard before any prefill kernel work resumes. No code
+changed, no fidelity owed, tests 87/87 untouched.
+
 
