@@ -2477,4 +2477,38 @@ x64 point (16.497 ms) with the q4k-gate slope as the par line.
 Fixed-side (dequant) work is out: 5-6% cannot pay. No code this
 round; no fidelity owed (read-only bench); suite untouched 87/87.
 
+## 39. Token-block/rows interchange: consistent harm, reverted (2026-11-03)
+
+Round-6 implementation (revised plan: token-block-outer/rows-inner
+inside each band, Tb=8, `tokens==1` loop verbatim; no new
+thread_locals -- §34 lesson held). Suite 87/87 on the new binary
+(the 1/7/64 batch differential covers the new nest, partial block
+included). Stash-built old/new, interleaved, quiet-ish window
+(drifting heavier through it):
+
+| x64, best of 5 | OLD (stash) | NEW (interchange) | ratio |
+|---|---|---|---|
+| q6k down (target) | 16.560 ms, 194.52 GFLOPS | 16.926, 190.31 | 1.02 |
+| q4k gate (control) | 10.566 ms, 304.87 | 11.743, 274.32 | 1.11 |
+| q6k x1 (decode path) | -- | 0.937, 53.71 | identical loop, matches §38 0.964 |
+
+Verdict: revert. Target null-to-harmful (+2%), control harmed
+(+11%, consistent sign) -- the interchange pays 8x dequant
+recompute (once per row per token-block vs once per row) for input
+reuse the L3 largely already provides. The narrow shape, which
+never spilled, pays the full recompute for zero benefit: exactly
+the cost flagged in deliberation, confirmed by the control.
+§38 baselines (16.497/9.649) vs OLD here (16.560/+0.4%,
+10.566/+9.5%) show the window closing mid-round -- the quiet box
+did not hold, which flatters nothing here since both shapes move
+the same (harmful) direction.
+
+Not attempted: two-phase (pre-dequantize the band once into a
+~1.5 MB buffer, then block dots) would remove the recompute but
+adds its own traffic and a 16-worker footprint -- needs its own
+plan/verify round, and the single-phase result gives it no tailwind.
+Reverted in full (stash dropped, tree verified clean); post-revert
+87/87. No fidelity run: no numerics change ships (differential
+green on the new nest before revert).
+
 
