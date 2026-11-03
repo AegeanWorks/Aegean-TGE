@@ -2824,4 +2824,98 @@ continuation -- all fluent; equivalence to pre-round holds by
 code-identity (no code delta exists to move them) plus the measured
 spec-mode ids parity. No failures; nothing sent back.
 
+## 47. Research-swarm round: 12 scouts, no kernel fires, logged (2026-11-03)
+
+Twelve parallel scouts (L1-L6 literature, G1-G6 GitHub code), each
+with receipts (source + section/file + numbers + mmap-first AVX2 fit).
+Verification by sampling: llama.cpp PR #22345 fully confirmed
+(merged by ggerganov 2026-04-26; `MUL_MAT q6_K f32 4096x14336` n=1
+34.46 vs 26.91 GFLOPS +28%, n=8 128.53 vs 97.28 +32%, n=512 143.93
+vs 101.07 +42%; pp512 63.15 vs 49.75 +27%; tg128 15.63 vs 15.53
+parity). Its diff header confirms the live path is
+`ggml/src/ggml-cpu/arch/x86/quants.c` (the bare-domain fetch 404s;
+stale path, not fabrication). Remaining scout numbers are
+receipts-with-source, not independent facts: nothing below lands
+without a stash-built same-window A/B + fidelity gate, which is the
+real verification.
+
+Verdicts against TGE gates (mmap-first, unaligned-only, no
+retrain, integer needs pre-proof + KL <= VNNI 1.6e-3):
+
+- L1/G6 micro-unpack (MSB-xor, `hsum_float_8` tail, shuffle/LUT):
+  NO-GO. MSB-xor saves byte-subs that exist only in the integer
+  path, not TGE's float `write32` (mul-then-sub floats); `hsum`
+  tail changes summation order (bit-identity gate fails by
+  construction) for ~1-2 uops on a load-bound kernel -- needs full
+  fidelity for unresolvable gain. Shuffle/LUT adds tables for the
+  same uop count or needs MXFP4/FP8 quants TGE does not have.
+- L2/G3 two-phase K-chunk (`kc=128-256`, `thread_local` fp32
+  <=174 KB, dequant-once reuse-64x, MLAS 1D partition + complexity
+  gate): PLAN-ONLY, no code this round. Sources are real
+  (ik_llama PR #482 IQ 2.3-3.2x pp; SGLang #8750 INT8 4.37x GEMM;
+  ZINC staged-vs-fused 8.1x DRAM-tax math) but none is AVX2
+  Q4_K/Q6_K vs TGE `dot_f32`; single-phase interchange already
+  reverted (+2/+11% harm, §39). Next: prototype behind bench
+  flag with traffic math, differential-first, stash A/B.
+- L3 attention-CPU: NO FIRE. All GPU-only or arithmetic-changing
+  without KL (NoMAD PQ, sliding/local, FFD); GQA threshold stays
+  256 (swept 1.05x median, §35); SlimAttention exact-CPU is the
+  only hold, needs a paired 2048-ctx TGE measurement to fire.
+- L4/G5 KV: NO-CODE. KIVI/GEAR CUDA-only, break `kv_half/q8`
+  exclusivity, need new q2 CPU kernels; paging solves server
+  fragmentation TGE does not have; prefix cache still has no
+  caller (needs multi-turn `prefill` loop, §28q trigger stands).
+- L5/G4 speculation: KEEP baseline + TRUNCATE-ONLY allowed.
+  Spans 5..1 + bigram + gapped already cover LLMA/prompt-lookup
+  (2-2.5x grounded, ~1.2x chat) and GOOSE heterogeneity without
+  datastore/tree; recent-first/second-best stay reverted (ties);
+  LogitSpec last-logit and ngram frequency-abstention are the
+  only conditionals, both need acceptance-on-record first.
+- L6/G1/G2 integer dots (`Q4_KxQ8_K` nibble-direct, Q6_K
+  `unsignedDot-32*bsum` PR #22345, Q4_0/Q6_K AVX2): NO-GO under
+  the Stage-2 integer gate. Same `maddubs` family as the 0-for-5
+  (§12 x2, §28i, §34 KL 8e-3 + 2 flips, §44 -16-196% kernel);
+  PR #22345 states no KL/top-1 and no vs-float-dequant A/B, and
+  its tg128 is parity while TGE needs decode. Next trigger: a
+  bench-flag prototype with pre-proof (reduction/uop analysis)
+  + differential + KL <= 1.6e-3 + stash A/B win -- not opened.
+
+Implementation this round: NONE (no code delta). Rationale per
+§28ah frugality: every kernel candidate either breaks a hard
+rule (repack/integer-without-price), changes numerics for
+single-digit uops, or needs a prototype round of its own; the
+drafter conditionals need acceptance deficits on record first.
+What ships is the record above so no finding is re-researched
+without its trigger. Tests 87/87 (`scripts/test.cmd` Passed
+28.6s), `aikit.py check aegean-tge` 4/4 -- both re-run for this
+docs-only change.
+
+Stage-4 check on this round (code delta nil -- `git diff --stat`
+is `docs/measurement-log.md +66`, no code): rebuild no-op
+(`ninja: no work to do`), `ctest --preset release` Passed
+(13.0s), `bench mem` wall read **57.76 GB/s** (healthiest window
+this turn; foreign-process collapse of §§45-46 not present),
+`aikit.py check aegean-tge` 4/4. Fidelity re-run at the same
+token count (`--context 512 --tokens 31`, Llama-3B Q4_K_M):
+corpus 30 positions, mean KL **1.467e-11**, worst 5.531e-11,
+top-1 **30/30** -- exact match to the §42 floor, as required
+with no numerics change. End-to-end re-run (`--prompt "Once
+upon a time" --n 15 --threads 6 --prefetch --print-ids`):
+promptids `12805 5304 264 892`, ids
+`11 304 264 2678 14458 89777 304 279 20700 35231 315 279
+47967 11 1070` -- prefix `11 304` and suffix `11 1070` match
+the §46 story baseline exactly; sample share 0.1%, phases
+decode matvec 98% (no structural surprise). Absolute t/s
+(prefill 4.6, decode 2.72) unclaimed: single run, 4-token
+prompt is fixed-cost dominated per the §36 precedent, and
+cross-session absolutes are load narrative per §28m. Each
+rejected finding traces: integer dots to PR #22345 (verified
+merged, no KL/top-1 stated) and in-log §§12/28i/34/44;
+tilings to §§31/32/33/39; drafter ties to §§42a/46; KV to
+§§29/41/43 + §28q no-caller trigger. No failures; nothing
+sent back to implementation. Triggers standing: K-chunked
+two-phase prototype (bench-flag, differential-first),
+LogitSpec/frequency-abstention acceptance-on-record, paired
+SlimAttention measurement at 2048 ctx.
+
 
