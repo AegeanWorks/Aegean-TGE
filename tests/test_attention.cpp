@@ -5,6 +5,7 @@
 
 #include "harness.hpp"
 #include "tge/cpu/kernels.hpp"
+#include "tge/models/qwen2.hpp"
 
 namespace {
 
@@ -362,5 +363,115 @@ TGE_TEST(attention_group_i8_matches_float) {
         }
       }
     }
+  }
+}
+
+TGE_TEST(sparse_index_dense_when_short) {
+  // At or below sink + window the builder returns the full range, so the
+  // model keeps the exact dense path instead of a gathered copy.
+  const tge::models::SparseConfig config{true, 4, 512, 4};
+  for (const int span : {1, 7, 64, 516}) {
+    const std::vector<int> kept = tge::models::build_sparse_index(span, config);
+    TGE_CHECK(static_cast<int>(kept.size()) == span);
+    for (int position = 0; position < span; ++position) {
+      TGE_CHECK(kept[static_cast<std::size_t>(position)] == position);
+    }
+  }
+  // Disabled config is always dense.
+  const tge::models::SparseConfig off{false, 4, 512, 4};
+  const std::vector<int> kept = tge::models::build_sparse_index(2048, off);
+  TGE_CHECK(static_cast<int>(kept.size()) == 2048);
+}
+
+TGE_TEST(sparse_index_selects_sink_stride_window) {
+  const tge::models::SparseConfig config{true, 4, 512, 4};
+  for (const int span : {1024, 2048, 8192}) {
+    const std::vector<int> kept = tge::models::build_sparse_index(span, config);
+    TGE_CHECK(!kept.empty());
+    // Sorted and strictly increasing (unique).
+    for (std::size_t index = 1; index < kept.size(); ++index) {
+      TGE_CHECK(kept[index] > kept[index - 1]);
+    }
+    TGE_CHECK(kept.front() == 0);
+    TGE_CHECK(kept.back() == span - 1);
+    // Sink head is identity.
+    for (int position = 0; position < 4; ++position) {
+      TGE_CHECK(kept[static_cast<std::size_t>(position)] == position);
+    }
+    // Window tail is identity.
+    for (int position = 0; position < 512; ++position) {
+      TGE_CHECK(kept[kept.size() - 512 + position] == span - 512 + position);
+    }
+    // Middle is every 4th position starting at the sink end.
+    const int middle = span - 4 - 512;
+    const int middle_kept = (middle + 4 - 1) / 4;
+    TGE_CHECK(static_cast<int>(kept.size()) == 4 + middle_kept + 512);
+    for (int index = 0; index < middle_kept; ++index) {
+      TGE_CHECK(kept[static_cast<std::size_t>(4 + index)] == 4 + index * 4);
+    }
+  }
+}
+
+TGE_TEST(sparse_gather_matches_subset_reference) {
+  // The model's sparse path gathers kept rows into compact buffers and runs
+  // the unchanged scalar kernel over them. The reference below computes the
+  // same subset attention directly, so the test catches gather offset bugs.
+  const tge::models::SparseConfig config{true, 4, 64, 4};
+  const int span = 600;
+  const int head_dim = 64;
+  const std::vector<float> query = make_values(head_dim, 21u);
+  const std::vector<float> keys = make_values(span * head_dim, 22u);
+  const std::vector<float> values = make_values(span * head_dim, 23u);
+  const std::vector<int> kept = tge::models::build_sparse_index(span, config);
+  TGE_CHECK(static_cast<int>(kept.size()) < span);
+
+  std::vector<float> compact_keys(kept.size() * head_dim);
+  std::vector<float> compact_values(kept.size() * head_dim);
+  for (std::size_t index = 0; index < kept.size(); ++index) {
+    const std::size_t row = static_cast<std::size_t>(kept[index]) * head_dim;
+    std::copy(keys.begin() + row, keys.begin() + row + head_dim,
+              compact_keys.begin() + index * head_dim);
+    std::copy(values.begin() + row, values.begin() + row + head_dim,
+              compact_values.begin() + index * head_dim);
+  }
+
+  std::vector<float> scores(kept.size());
+  std::vector<float> out(head_dim);
+  tge::cpu::AttentionArgs args;
+  args.query = query.data();
+  args.keys = compact_keys.data();
+  args.values = compact_values.data();
+  args.kv_stride = head_dim;
+  args.span = static_cast<int>(kept.size());
+  args.head_dim = head_dim;
+  args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+  args.scores = scores.data();
+  args.out = out.data();
+  tge::cpu::attention_head_scalar(args);
+
+  // Direct reference over the same kept positions.
+  float maximum = -INFINITY;
+  std::vector<float> raw(kept.size());
+  for (std::size_t index = 0; index < kept.size(); ++index) {
+    const std::size_t row = static_cast<std::size_t>(kept[index]) * head_dim;
+    float product = 0.0F;
+    for (int axis = 0; axis < head_dim; ++axis) {
+      product += query[axis] * keys[row + axis];
+    }
+    raw[index] = product * args.scale;
+    maximum = std::max(maximum, raw[index]);
+  }
+  float total = 0.0F;
+  for (float value : raw) {
+    total += std::exp(value - maximum);
+  }
+  for (int axis = 0; axis < head_dim; ++axis) {
+    float expected = 0.0F;
+    for (std::size_t index = 0; index < kept.size(); ++index) {
+      const std::size_t row = static_cast<std::size_t>(kept[index]) * head_dim;
+      expected += std::exp(raw[index] - maximum) / total *
+                  values[row + axis];
+    }
+    TGE_CHECK_NEAR(out[axis], expected, 1e-4);
   }
 }

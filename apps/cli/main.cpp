@@ -95,6 +95,9 @@ void print_usage() {
       "        --penalty-window N  recent tokens the penalty sees; 0 is all (default 64)\n"
       "        --seed N         random seed for sampling\n"
       "        --attention A    auto|scalar|head|gqa attention (default auto)\n"
+      "        --sparse         static sparse subset: sink(4)+stride+window\n"
+      "        --sparse-window N  most-recent kept positions (default 512)\n"
+      "        --sparse-stride N  every N-th middle position kept (default 4)\n"
       "        --speculative    prompt-lookup speculation: greedy +-penalty,\n"
       "                         temperature-only sampling (other cuts fall back)\n"
       "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
@@ -106,6 +109,9 @@ void print_usage() {
       "        --model PATH --corpus PATH\n"
       "        --vnni           compare against the VNNI batch kernels\n"
       "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --sparse         price the static sparse subset on the candidate\n"
+      "        --sparse-window N  most-recent kept positions (default 512)\n"
+      "        --sparse-stride N  every N-th middle position kept (default 4)\n"
       "        --context N      context used by both models (default 1024)\n"
       "        --tokens N       stop after N corpus tokens (default all)\n"
       "        --threads N      worker threads (default: all logical)\n"
@@ -459,8 +465,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      int context_limit, bool print_text,
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
-                      bool speculative, bool vnni, bool kv_half, bool kv_q8,
-                      bool prefetch, int prefill_threads, bool pin_threads) {
+                     bool speculative, bool vnni, bool kv_half, bool kv_q8,
+                     bool prefetch, int prefill_threads, bool pin_threads,
+                     tge::models::SparseConfig sparse) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -526,6 +533,21 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     model->set_attention_mode(tge::models::AttentionMode::Head);
   }
   model->set_vnni(vnni);
+  if (sparse.enabled) {
+    if (kv_half || kv_q8) {
+      std::fprintf(stderr,
+                   "generate: --sparse needs the f32 KV cache (no --kv f16|i8)\n");
+      return 2;
+    }
+    try {
+      model->set_sparse_config(sparse);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "generate: %s\n", error.what());
+      return 2;
+    }
+    std::printf("sparse   : sink %d, window %d, stride %d\n", sparse.sink,
+                sparse.window, sparse.stride);
+  }
 
   const tge::models::Qwen2Config& config = model->config();
 
@@ -1617,6 +1639,7 @@ int run_generate(int argc, char** argv) {
   bool prefetch = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
+  tge::models::SparseConfig sparse;
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--print-ids") == 0) {
@@ -1629,6 +1652,10 @@ int run_generate(int argc, char** argv) {
     }
     if (std::strcmp(argv[index], "--speculative") == 0) {
       speculative = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--sparse") == 0) {
+      sparse.enabled = true;
       continue;
     }
     if (std::strcmp(argv[index], "--vnni") == 0) {
@@ -1676,6 +1703,10 @@ int run_generate(int argc, char** argv) {
       }
     } else if (std::strcmp(flag, "--seed") == 0) {
       ok = parse_int(value, seed);
+    } else if (std::strcmp(flag, "--sparse-window") == 0) {
+      ok = parse_int(value, sparse.window);
+    } else if (std::strcmp(flag, "--sparse-stride") == 0) {
+      ok = parse_int(value, sparse.stride);
     } else if (std::strcmp(flag, "--attention") == 0) {
       if (std::strcmp(value, "scalar") == 0) {
         attention_mode = tge::models::AttentionMode::Scalar;
@@ -1731,11 +1762,17 @@ int run_generate(int argc, char** argv) {
     return 2;
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
+  if (sparse.enabled && (sparse.window < 1 || sparse.stride < 2)) {
+    std::fprintf(stderr,
+                 "generate: --sparse-window must be >= 1 and --sparse-stride "
+                 "must be >= 2\n");
+    return 2;
+  }
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
                           vocabulary, attention_mode, speculative, vnni,
                           kv_half, kv_q8, prefetch, prefill_threads,
-                          pin_threads != 0);
+                          pin_threads != 0, sparse);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -1846,7 +1883,8 @@ int run_mem_bench(int argc, char** argv, int first) {
 
 int command_fidelity(const std::string& path, const std::string& corpus_path,
                      int context, int max_tokens, int threads, bool vnni,
-                     bool kv_half, bool kv_q8) {
+                     bool kv_half, bool kv_q8,
+                     tge::models::SparseConfig sparse) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   if (vnni && !cpu.features.avx_vnni) {
     std::fprintf(stderr, "fidelity: --vnni needs AVX-VNNI on this CPU\n");
@@ -1899,6 +1937,19 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   // The test model runs every kernel as production would.
   reference->set_scalar_kernels(true);
   candidate->set_vnni(vnni);
+  if (sparse.enabled) {
+    if (kv_half || kv_q8) {
+      std::fprintf(stderr,
+                   "fidelity: --sparse needs the f32 KV cache (no --kv f16|i8)\n");
+      return 2;
+    }
+    try {
+      candidate->set_sparse_config(sparse);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "fidelity: %s\n", error.what());
+      return 2;
+    }
+  }
 
   const std::unique_ptr<tge::models::Tokenizer> tokenizer =
       tge::models::Tokenizer::from_gguf(reference->file(), error);
@@ -2010,10 +2061,11 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
       mode_name = "gqa";
       break;
   }
-  std::printf("fidelity : full-scalar oracle vs %s attention (%s%s%s)\n",
+  std::printf("fidelity : full-scalar oracle vs %s attention (%s%s%s%s)\n",
               tge::kernels().attention_name.c_str(), mode_name,
               vnni ? ", vnni" : "",
-              kv_half ? ", f16 kv" : (kv_q8 ? ", i8 kv" : ""));
+              kv_half ? ", f16 kv" : (kv_q8 ? ", i8 kv" : ""),
+              sparse.enabled ? ", sparse" : "");
   std::printf("load     : %.1f ms\n",
               std::chrono::duration<double>(load_end - load_start).count() * 1e3);
   std::printf("corpus   : %d positions, context %d\n", positions, usable);
@@ -2035,10 +2087,15 @@ int run_fidelity(int argc, char** argv) {
   bool vnni = false;
   bool kv_half = false;
   bool kv_q8 = false;
+  tge::models::SparseConfig sparse;
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--vnni") == 0) {
       vnni = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--sparse") == 0) {
+      sparse.enabled = true;
       continue;
     }
     if (std::strcmp(argv[index], "--kv") == 0) {
@@ -2079,6 +2136,10 @@ int run_fidelity(int argc, char** argv) {
       ok = parse_int(value, max_tokens);
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
+    } else if (std::strcmp(flag, "--sparse-window") == 0) {
+      ok = parse_int(value, sparse.window);
+    } else if (std::strcmp(flag, "--sparse-stride") == 0) {
+      ok = parse_int(value, sparse.stride);
     } else {
       std::fprintf(stderr, "fidelity: unknown option '%s'\n", flag);
       return 2;
@@ -2097,8 +2158,14 @@ int run_fidelity(int argc, char** argv) {
     std::fprintf(stderr, "fidelity: --corpus is required\n");
     return 2;
   }
+  if (sparse.enabled && (sparse.window < 1 || sparse.stride < 2)) {
+    std::fprintf(stderr,
+                 "fidelity: --sparse-window must be >= 1 and --sparse-stride "
+                 "must be >= 2\n");
+    return 2;
+  }
   return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
-                          vnni, kv_half, kv_q8);
+                          vnni, kv_half, kv_q8, sparse);
 }
 
 }  // namespace

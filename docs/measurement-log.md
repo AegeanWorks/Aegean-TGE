@@ -2993,4 +2993,50 @@ Retry trigger, not attempted: quiet box (wall ~48-59 AND story
 ~9-11 together, no concurrent worker) plus the same interleaved
 pairs; kc default stays an open question inside that retry.
 
+## 50. Static sparse subset (sink+stride+window, `--sparse`): kept opt-in (2026-11-03)
+
+LSA Stage 3 candidate (a): content-blind kept-set geometry from LSA §3.2
+(sink + selected long-range + window) with stride sampling instead of
+scored buckets. `SparseConfig{enabled,sink=4,window=512,stride=4}` in
+`qwen2.hpp`; subset gather inside `Qwen2::attention_head` (f32 KV only,
+thread-local scratch, same kernel over compacted rows); precedence in
+`Qwen2::attention()` before `uses_gqa` so long decode takes the per-head
+sparse loop; exact dense path whenever span <= sink+window, KV is f16/i8,
+or mode is Scalar. CLI: `generate`/`fidelity --sparse [--sparse-window N]
+[--sparse-stride N]` (defaults 512/4); `bench continuous` stays dense.
+Unit tests: index identity/short-span, sink/stride/window geometry at
+1024/2048/8192, gather-vs-direct-subset reference (`test_attention.cpp`).
+
+| Check | Dense | Sparse (sink 4, window 512, stride 4) |
+|---|---|---|
+| `tge_tests` | 90/90 green (3 new sparse cases) | same binary |
+| fidelity Q8_0 ctx 1024, arch corpus | KL mean 9.248e-12, worst 2.418e-10; top-1 1023/1023 | KL mean 2.597e-02, worst 7.867; top-1 975/1023 |
+| fidelity, first 600 toks | — | KL mean 4.002e-04, worst 3.865e-02; top-1 598/599 |
+| generate ctx 512, 64 toks | decode 30.87 t/s | decode 23.06 t/s; ids identical 63/63 (exact fallback, span <= 516) |
+| generate ctx 8192, 7001-tok prompt, 32 toks (run 1) | prefill 43.0 t/s (attn 54.0 s), decode 10.21 (attn 49%) | prefill 58.6 (attn 42.2 s), decode 9.32; ids 31/31 identical |
+| same (run 2) | prefill 58.3 (attn 44.0 s), decode 11.70 | prefill 73.2 (attn 33.4 s), decode 16.63; ids 31/31 identical |
+| `python aikit.py check aegean-tge` | 4/4 green | 4/4 green |
+
+Verdict: **kept opt-in (default off)**. Prefill attn phase is consistently
+lower (54.0→42.2, 44.0→33.4 s) and end-to-end prefill faster in both pairs,
+but absolute tok/s moved ±35% between back-to-back dense runs: a parallel
+worker was building in this repo throughout, so the box was contended and
+no absolute speedup is claimed beyond the attn-phase direction. Decode is
+noise (±attn share, matvec-bound). Fidelity prices the approximation
+honestly: 48 flips/1023 on natural text at ctx 1024 (worse than VNNI's
+12/497 at KL 1.6e-3) but identical ids on the repetitive 7k prompt.
+Use for prefill-bound long prompts; natural-text long context stays dense
+until scored selection (candidate b) is measured. One full-corpus sparse
+fidelity run exited -1 with no output mid-stage, then passed cleanly on
+rerun (193 s, exit 0): recorded as box flake, not a code path (the 600-tok
+and full runs bracket it green). Mid-stage, `apps/cli/main.cpp` lost its
+uncommitted sparse plumbing (parallel Vulkan bring-up reset the shared
+file; `qwen2.*`/tests intact); re-applied, rebuilt 46/46, re-verified
+90/90 + gates before commit. Rejections on the record (receipts in
+goal Stages 1-3): distilled `W(idx)`+τ (§3.3, needs GPU distill + SGLang
+maps, no transfer to Qwen2.5 GGUF CPU), N-LSA native (§3.4, needs
+100B+12B pretrain), CuTe/H200 kernels + CP8/TP8 + 10M serving (no CUDA
+path; `kHardMaxContext` 32768; mmap-first), tree/beam (single-stream
+decode is flat per paper §4.1; revisit only on measured headroom).
+
 

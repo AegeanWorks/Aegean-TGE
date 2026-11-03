@@ -66,8 +66,8 @@ inline float quantize_kv_block(const float* source, std::int8_t* destination) {
 /// scales. `slot` is the element offset of the position; the scale slot is
 /// the same offset divided by 32 (kv_dim is always a multiple of 32).
 inline void store_kv_q8(const float* k, const float* v, int kv_dim,
-                        std::size_t slot, std::int8_t* k_out,
-                        std::int8_t* v_out, float* k_scales, float* v_scales) {
+                         std::size_t slot, std::int8_t* k_out,
+                         std::int8_t* v_out, float* k_scales, float* v_scales) {
   const int blocks = kv_dim / 32;
   const std::size_t scale_slot = slot / 32;
   for (int block = 0; block < blocks; ++block) {
@@ -105,6 +105,46 @@ bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {  switch (type)
 }
 
 }  // namespace
+
+void Qwen2::set_sparse_config(const SparseConfig& config) {
+  if (config.enabled && config.stride < 2) {
+    throw std::runtime_error("sparse: stride must be >= 2");
+  }
+  if (config.enabled && (config.sink < 0 || config.window < 1)) {
+    throw std::runtime_error("sparse: sink must be >= 0 and window >= 1");
+  }
+  sparse_ = config;
+}
+
+std::vector<int> build_sparse_index(int span, const SparseConfig& config) {
+  std::vector<int> kept;
+  if (span <= 0) {
+    return kept;
+  }
+  if (!config.enabled || span <= config.sink + config.window) {
+    kept.resize(static_cast<std::size_t>(span));
+    for (int position = 0; position < span; ++position) {
+      kept[static_cast<std::size_t>(position)] = position;
+    }
+    return kept;
+  }
+  const int stride = config.stride < 2 ? 2 : config.stride;
+  kept.reserve(static_cast<std::size_t>(config.sink + config.window +
+                                        span / stride + 1));
+  const int sink_end = std::min(config.sink, span);
+  for (int position = 0; position < sink_end; ++position) {
+    kept.push_back(position);
+  }
+  const int window_start = span - config.window;
+  for (int position = sink_end; position < window_start; position += stride) {
+    kept.push_back(position);
+  }
+  for (int position = std::max(window_start, sink_end); position < span;
+       ++position) {
+    kept.push_back(position);
+  }
+  return kept;
+}
 
 Qwen2Config read_config(const gguf::File& file) {
   const std::string architecture = file.get_string("general.architecture", "");
@@ -983,6 +1023,34 @@ void Qwen2::attention_head(int sequence, int layer, int position, int head,
   args.scores = scores;
   args.out = out;
 
+  // Static sparse subset (f32 KV only, never the Scalar oracle): gather the
+  // kept rows into thread-local scratch and run the same kernel over them.
+  // The span fits check keeps the exact dense path bit-identical below it.
+  if (sparse_.enabled && !kv_half_ && !kv_q8_ &&
+      attention_mode_ != AttentionMode::Scalar &&
+      args.span > sparse_.sink + sparse_.window) {
+    const std::vector<int> kept = build_sparse_index(args.span, sparse_);
+    thread_local std::vector<float> sparse_keys;
+    thread_local std::vector<float> sparse_values;
+    const std::size_t kept_count = kept.size();
+    sparse_keys.resize(kept_count * static_cast<std::size_t>(head_dim));
+    sparse_values.resize(kept_count * static_cast<std::size_t>(head_dim));
+    for (std::size_t kept_index = 0; kept_index < kept_count; ++kept_index) {
+      const float* key_row =
+          args.keys + static_cast<std::size_t>(kept[kept_index]) * kv_dim;
+      const float* value_row =
+          args.values + static_cast<std::size_t>(kept[kept_index]) * kv_dim;
+      std::memcpy(sparse_keys.data() + kept_index * head_dim, key_row,
+                  sizeof(float) * static_cast<std::size_t>(head_dim));
+      std::memcpy(sparse_values.data() + kept_index * head_dim, value_row,
+                  sizeof(float) * static_cast<std::size_t>(head_dim));
+    }
+    args.keys = sparse_keys.data();
+    args.values = sparse_values.data();
+    args.kv_stride = head_dim;
+    args.span = static_cast<int>(kept_count);
+  }
+
   if (attention_mode_ == AttentionMode::Scalar) {
     cpu::attention_head_scalar(args);
   } else {
@@ -997,12 +1065,44 @@ bool Qwen2::uses_gqa(int position) const {
           (attention_mode_ == AttentionMode::Auto && position >= 256));
 }
 
+bool Qwen2::uses_sparse(int position) const {
+  return sparse_.enabled && !kv_half_ && !kv_q8_ &&
+         attention_mode_ != AttentionMode::Scalar &&
+         position + 1 > sparse_.sink + sparse_.window;
+}
+
 void Qwen2::attention(int sequence, int layer, int position,
                       const float* queries, float* out_buffer) {
   const std::uint64_t t0 = clock_ns();
   const int heads = config_.head_count;
   const int head_dim = config_.head_dim;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+
+  // Static sparse takes the per-head loop (with the subset applied inside
+  // attention_head) before the GQA schedule: one index list per query shared
+  // across the group is future work, and the grouped kernels stay dense.
+  if (uses_sparse(position)) {
+    core::ThreadPool& pool = decode_pool();
+    if (threads <= 1) {
+      for (int head = 0; head < heads; ++head) {
+        attention_head(sequence, layer, position, head,
+                       queries + static_cast<std::size_t>(head) * head_dim,
+                       out_buffer + static_cast<std::size_t>(head) * head_dim,
+                       scores_.data());
+      }
+      phase_attn_ns_ += clock_ns() - t0;
+      return;
+    }
+    pool.parallel_for(heads, 1, [&](int head) {
+      attention_head(sequence, layer, position, head,
+                     queries + static_cast<std::size_t>(head) * head_dim,
+                     out_buffer + static_cast<std::size_t>(head) * head_dim,
+                     scores_.data() +
+                         static_cast<std::size_t>(head) * context_);
+    });
+    phase_attn_ns_ += clock_ns() - t0;
+    return;
+  }
 
   if (uses_gqa(position)) {
     attention_gqa(sequence, layer, position, queries, out_buffer);

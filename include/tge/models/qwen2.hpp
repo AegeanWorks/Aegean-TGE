@@ -21,6 +21,24 @@ namespace tge::models {
 /// `Scalar` is the sequential oracle the fidelity harness compares against.
 enum class AttentionMode { Auto, Scalar, Head, Gqa };
 
+/// Static sparse selection: sink + strided middle + window.
+///
+/// LSA-shaped (§3.2 kept-set geometry: sink + selected long-range + window)
+/// but content-blind: the middle keeps every `stride`-th position instead of
+/// scored buckets. Opt-in; the dense path is bit-identical whenever the span
+/// fits in sink + window, the KV cache is not f32, or the mode is Scalar.
+struct SparseConfig {
+  bool enabled = false;
+  int sink = 4;     ///< First positions always kept (paper Table 2: nsink = 4).
+  int window = 512; ///< Most-recent positions always kept (paper: nw = 512).
+  int stride = 4;   ///< Every stride-th position kept in between (must be >= 2).
+};
+
+/// Sorted unique kept positions in [0, span). Returns the full 0..span-1
+/// range (dense) when the span fits in sink + window, so the caller keeps
+/// the exact dense path instead of a gathered copy.
+std::vector<int> build_sparse_index(int span, const SparseConfig& config);
+
 struct Qwen2Config {
   int block_count = 0;
   int embedding_length = 0;
@@ -134,6 +152,14 @@ class Qwen2 {
   /// Attention scheduling. See `AttentionMode`.
   void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
   AttentionMode attention_mode() const { return attention_mode_; }
+
+  /// Static sparse selection (sink + strided middle + window). Disabled by
+  /// default; when enabled, the per-head decode/prefill paths attend only the
+  /// kept positions once the span exceeds sink + window. Requires stride >= 2
+  /// (throws otherwise) and applies to the f32 KV cache only: half/int8 and
+  /// Scalar mode keep the exact dense path.
+  void set_sparse_config(const SparseConfig& config);
+  SparseConfig sparse_config() const { return sparse_; }
 
   /// Force the scalar oracle for rms_norm, RoPE and SiLU even where AVX2 is
   /// available. The fidelity harness sets this on the reference arm so one
@@ -276,6 +302,11 @@ class Qwen2 {
   /// True when this position takes the grouped-query schedule in decode and
   /// prefill alike; `threads <= 1` keeps the per-head path.
   bool uses_gqa(int position) const;
+  /// True when the static sparse path applies at this position: enabled,
+  /// f32 KV, non-oracle mode, and the span exceeds sink + window. Checked
+  /// before `uses_gqa`, so sparse takes the per-head loop at long context;
+  /// GQA keeps the exact dense path whenever sparse does not apply.
+  bool uses_sparse(int position) const;
   /// Merges one query head's per-chunk online-softmax states.
   static void merge_gqa_chunks(const float* maxima, const float* sums,
                                const float* accumulators, std::size_t base,
@@ -290,6 +321,7 @@ class Qwen2 {
   bool pin_threads_ = false;
   int sequence_count_ = 1;
   AttentionMode attention_mode_ = AttentionMode::Auto;
+  SparseConfig sparse_;
   bool scalar_kernels_ = false;
   bool vnni_ = false;
   bool kv_half_ = false;
