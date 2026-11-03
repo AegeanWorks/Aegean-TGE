@@ -2918,4 +2918,79 @@ two-phase prototype (bench-flag, differential-first),
 LogitSpec/frequency-abstention acceptance-on-record, paired
 SlimAttention measurement at 2048 ctx.
 
+## 48. Hybrid bring-up [1/4]: Vulkan selector scaffolding, no offload (2026-11-03)
+
+Backend bring-up first, numerics untouched: `TGE_ENABLE_VULKAN` +
+`find_package(Vulkan QUIET)` (`TGE_HAS_VULKAN=0` without the SDK),
+`include/tge/gpu/backend.hpp` + `src/gpu/noop.cpp` (loader probe via
+pure OS calls, reports Unavailable, single CPU fallback) +
+`src/gpu/vulkan_context.cpp` (real enumeration, compiled only with the
+SDK) + `tests/test_gpu_fallback.cpp` (4 cases). Static thresholds pinned
+by test: batch offload wish at tokens >= 8 (6-token verifier stays CPU),
+GQA wish at span >= 256 with threads > 1; short-decode output budget
+3584 + 607744 = 611328 bytes (hidden 896 + logits 151936 f32).
+
+| Check | Result |
+|---|---|
+| `cmake --preset release` / `--build --preset release` | clean (Vulkan not found, `TGE_HAS_VULKAN=0`) |
+| `tge_tests` | **94/94 green** (90 pre-existing incl. parallel sparse work + 4 new `gpu_*`) |
+| `python aikit.py check aegean-tge` | **4/4 gates passed** |
+| `tge info` | i5-14400F avx-vnni, 32 GiB installed / 6.6 avail (loaded box) |
+| `vulkaninfo` | 1.4.344, RX 9060 XT discrete, heaps 15.93 host + 15.92 `DEVICE_LOCAL` GiB, INT8-dot accelerated |
+
+No fidelity price owed (no numerics changed); no speedup claimed.
+Next: `--gpu` flag + `Qwen2::use_gpu_` dispatch hook (needs the
+in-flight sparse/K-chunk files to settle — shared `qwen2.*`/`main.cpp`
+left untouched), then one offloaded op with measured transfer
+accounting. Verdict: **kept (scaffolding)**.
+
+## 49. K-chunk dot reorder: built, differential-green, unresolvable, reverted (2026-11-03)
+
+Round-2 trigger from §47. Prototype: new TU
+`dequant_batch_kchunk_avx2.cpp` (since removed) behind
+`bench batch --kernel kchunk --kchunk-kc N` (default 256) —
+dequantize once per row into worker scratch (unchanged), then
+consume the row in K-chunks (per-token stack accumulators, one
+write to out; no output re-touch, no `thread_local` in the pool
+lambda, `tokens==1` verbatim shipped loop). R2-L1 scout receipts
+(SGLang PR #8750 `loop_2d`/`BLOCK_N=64`/bounded per-thread
+staging; ik_llama PR #482 dequant-once-vs-`Q8_0_R8` at N≥16/24,
+32-row tiles, 2.28-3.15x PP-512 prefill-only) confirmed the
+direction; kc sweep {128,256,512,1024,2048} fixed regardless.
+Differential-first: new `dequant_batch_kchunk_matches_scalar_
+reference` (cols {1024,3072,3328,8192} x tokens {1,7,64} x kc
+sweep x Q4_K/Q6_K, near-tolerance 1e-4·cols+1e-3 per the shipped
+discipline) green on first build — indexing and the 3328 tail
+correct. Suite green with the prototype in (94 peer + new
+differential, `ctest` Passed).
+
+Same-binary interleaved A/B (old path untouched in the binary,
+no stash needed), best-of-5, wall gate 51.25 read GB/s at start:
+
+| q6k down 3072x8192 x64 | ms | q4k gate 8192x3072 x64 | ms |
+|---|---|---|---|
+| shipped | 30.739 | shipped | 18.487 |
+| kc128 | 28.421 | kc128 | 22.021 (-19% lean-harm) |
+| kc256 | 33.763 | kc256 | 19.035 |
+| kc512 | 29.390 | kc512 | 17.597 |
+| kc1024 | 24.850 | kc1024 | 34.530 |
+| kc2048 | 23.559 | kc2048 | 39.475 |
+| shipped re | 22.918 (-25% vs own earlier) | shipped re | 38.631 (2x vs own earlier) |
+
+No kc wins ≥15% on both shapes; kc128 leans harmful on the
+control; shipped swings 25-100% against itself. Inversion proof
+(§37 tripwire): x1 q6k — shipped 21.025 ms vs kchunk 4.783 ms on
+the verbatim-identical loop (4.4x on identical code). Wall
+re-check at end: copy **6.59** (was 49.65), read 28.97 — box
+collapsed mid-round; concurrent-worker contention observed
+(peer Vulkan/sparse files landing in-tree, two stale `tge.exe`
+locks cleared with a 120 s bounded wait, peer files untouched
+throughout). Per the round gate and §§32/33/39 precedents:
+**reverted in full** (TU deleted, 4-file checkout, post-revert
+rebuild + `ctest` Passed 37.5s; peer files and §48 intact).
+No fidelity run: bench-only, verifier/model/sampler untouched.
+Retry trigger, not attempted: quiet box (wall ~48-59 AND story
+~9-11 together, no concurrent worker) plus the same interleaved
+pairs; kc default stays an open question inside that retry.
+
 
