@@ -2758,4 +2758,56 @@ attempt (healthy = wall ~48-59 with story ~9-11, both at once --
 bandwidth alone no longer suffices as a gate after the 61.75/0.90
 split).
 
+## 46. Bigram second-best fallback: tied everywhere, reverted (2026-11-03)
+
+Revised-plan implementation (Stage 2 verified): new
+`bigram_second_best_draft` in `apps/cli/main.cpp` as a fourth fallback
+after exact spans, best bigram chain and gapped windows -- chains the
+second-most-frequent successor per position (observed continuations
+only, <2 distinct successors abstains), same 5-token contract, same
+zero-alloc scan, same verifier gating with the d0 pre-check skipping
+the weight pass on a miss. Fallback-superset preserved: every
+pre-existing proposal byte-identical by construction. Stash-built
+old/new, interleaved per prompt, Llama-3B Q4_K_M, `--threads 6`,
+`--prefetch`, greedy `--speculative`:
+
+| prompt, 12-15 tok | old (stash) | new (second-best) |
+|---|---|---|
+| story "Once upon a time" | 0 steps (correct abstention) | 0 steps, ids `11 304 ... 11 1070` identical |
+| partial "John likes ..." | 3 steps, 5.00/step, ids identical | 3 steps, 5.00/step, ids identical |
+| ambivalent "apples pears ... grapes ..." | 3 steps, 3.00/step, ids identical | 3 steps, 3.00/step, ids identical |
+
+Verdict: revert. Tied on all three families with identical ids --
+no family where the second-best chain fires and the first three miss
+(the best chain or an exact span already covers every repetitive
+history probed; the novel tail correctly abstains in both). Per the
+§42a no-evidence rule a tie is a revert, not a keep: an extra fallback
+that never fires is speculative surface, not a lever. The mechanism
+window (best exists-but-misses AND gapped abstains) proved too narrow
+to find by blind prompt-guessing, and each guess costs minutes on this
+box -- the search itself is the expense the frugality rule forbids.
+
+Honesty notes. (1) The box was collapsed throughout (wall read 42.23
+vs the 48-59 healthy band; story probe 0.60-3.05 t/s vs 9-11; foreign
+`python` PID 19856 still pinning at ~12.6k CPU-s, power Balanced) --
+so no t/s ratio is claimed anywhere here: back-to-back identical
+binaries swung 0.60 vs 2.64 t/s on the same story prompt, which is the
+§28m rule in one pair. Acceptance/step and ids are deterministic in
+history and survive the collapse; t/s does not. (2) The §45 f16/i8
+matrix stays suspended (health gate failed both halves). (3) Thinking
+guard is vacuous for a reverted drafter-only diff: non-spec paths never
+call the drafter (gated on `speculate`/`speculate_sampled`), and every
+spec run above was ids-identical -- no reasoning or creative output
+existed to degrade. (4) No fidelity run: no numerics change ships
+(differential-free, verifier/sampler/model untouched -- the §32/§39
+precedent).
+
+Reverted in full (`git checkout -- apps/cli/main.cpp`, stash binary
+removed, tree verified clean); post-revert rebuild + `scripts/test.cmd`
+green. Suite untouched throughout (drafter lives in main.cpp, covered
+end-to-end per §28ad). Next trigger, not attempted: a prompt family
+with a demonstrated best-misses/gapped-abstains split (acceptance
+deficit on record first), or a unit surface for the drafter if
+fallback-hunting resumes.
+
 
