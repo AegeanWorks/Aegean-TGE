@@ -2727,4 +2727,35 @@ Next trigger for this shape, not attempted: none from the integer
 domain -- the remaining lever per §41 is fewer weight passes
 (speculation acceptance), not cheaper passes.
 
+## 45. 2048-history head-to-head, f32 pair stands, matrix suspended (2026-11-03)
+
+Round-3 Step 0, partial. Same file (Llama-3.2-3B Q4_K_M), same 6
+threads, adjacent runs, both MinGW-GCC builds (llama cd8427d, TGE
+d1a2e5c), `--prefetch`, llama `-r 3`:
+
+| 2048-history | llama-bench cd8427d | TGE f32 (2050-tok prompt) | TGE/llama |
+|---|---|---|---|
+| prefill | 24.49 +- 4.39 | 11.5 | 47% |
+| decode 63-64 tok | 4.85 +- 0.74 | 2.99 | 62% |
+
+`phases` on the TGE run: decode matvec 80%, attn 19% (GQA at 2000+;
+first history where attention is not noise -- 128/512 showed 0-7%),
+norm 1%; prefill attn 15%. The 128/512 band (§43: prefill 52-56%,
+decode 56-70%) holds at 2048: no long-context surprise in the
+weight path, and the f32/i8 question stays open, not answered.
+
+Suspended, not finished: during the f16 run the box collapsed (story
+probe 0.81 t/s, matvec 100%, mem bandwidth healthy at 58.97 --
+frequency/capacity collapse, not format). Two cooldowns (10+15 min)
+did not restore it (story 4.07, then 0.90 at wall 61.75: bandwidth
+fine, ALU ~10x slow). Cause identified, not fixed: a foreign `python`
+(PID 19856, ~8000 CPU-s and climbing) is pinning the cores; power
+scheme is Balanced, compounding clocks. Not killed -- not our process.
+The collapsed f16 numbers (7.2/0.79) and probes (0.81/4.07/0.90) are
+drift artifacts and stay out of the table. f16/i8 at 2048 plus the
+parity check resume when the box is free; wall + story gate each
+attempt (healthy = wall ~48-59 with story ~9-11, both at once --
+bandwidth alone no longer suffices as a gate after the 61.75/0.90
+split).
+
 
