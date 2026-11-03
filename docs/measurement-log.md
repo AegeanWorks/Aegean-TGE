@@ -3064,6 +3064,31 @@ check aegean-tge` **4/4 passed**. One transient `test.cmd` FAIL observed
 mid-window (parallel run holding `tge.exe` during the internal rebuild);
 clean on immediate re-run. Verdict stands: **kept**.
 
+## 51. Hybrid [2/4]: GPU control plumbing, no dispatch change (2026-11-03)
+
+`--gpu auto|off|on` on `generate` + `fidelity` (default auto),
+`Qwen2::set_use_gpu` + `wants_gpu_batch`/`wants_gpu_gqa` (backend
+readiness excluded by construction), `--gpu on` without a ready backend
+fails pre-load with the reason, `tge info` prints a GPU section, and the
+dispatch itself is untouched: every mat still runs the proven CPU
+kernel. Eligibility conjunctions from the revised plan are unit-tested
+(tokens>=8, span>=256/threads>1, Q8_0|F32-only, clean flags, dense-only).
+
+| Check | Result |
+|---|---|
+| `cmake --build --preset release` | clean (one transient `tge.exe` lock from a parallel bench run; green after 90 s) |
+| `tge_tests` | **96/96 green** (94 + 2 `gpu_eligible_*`) |
+| `tge.exe generate --gpu bogus` | exit 2, `takes auto\|off\|on` (parse-before-load) |
+| `tge.exe generate/fidelity --gpu on` | exit 2 pre-load, `needs a ready GPU backend (vulkan-1 loader present (compile-time off))` |
+| `tge.exe info` | `GPU/status: unavailable (CPU fallback)` + loader line |
+| `python aikit.py check aegean-tge` | **4/4 passed** |
+
+No numerics changed (same kernels execute); no fidelity price owed; no
+speedup claimed. First real offload ([3/4]: output-region + prefill
+batch + GQA shaders) is blocked on the Vulkan SDK (no `glslc`,
+no headers, no `VULKAN_SDK` on this box; `winget search` inconclusive —
+timed out). Verdict: **kept (plumbing)**.
+
 ## 51. Acceptance map: drafter saturated, LogitSpec stays unopened (2026-11-03)
 
 Round-3 read-only measurement (no code; L5/G4 receipts consumed, not
@@ -3104,5 +3129,68 @@ chain is saturated at 1.0-5.0/step everywhere repetition
 exists. Next trigger: a prompt family with demonstrated
 best-misses/gapped-abstains split, or acceptance < 1.0/step
 with repetition present.
+
+## 52. llama.cpp prefill-path teardown at cd8427d: integer dots on Q8_K activations (2026-11-03)
+
+Round-4 research product (read-only; no TGE code). Two-scout swarm on
+the pinned tree `cd8427d018c07eefab6c110f7f115c31ec4c6157`
+(PR #29730, verified direct: commit touches only
+`src/llama-context.cpp`). Sampling: dispatch table fetched and
+confirmed verbatim (`Q4_K: vec_dot q4_K_q8_K, vec_dot_type Q8_K,
+nrows 1`; `Q6_K` same shape; `Q8_K: from_float quantize_row_q8_K`;
+`nrows 2` ARM-only); helpers (`mul_sum_us8_pairs_float`
+maddubs→madd, `hsum_float_8`, `bytes_from_nibbles_32`,
+`get_scale_shuffle_k4`, AVX2 `quantize_row_q8_0`) confirmed in the
+real `arch/x86/quants.c` (4172 lines at pin); `assert(nrc == 1)`
+pattern confirmed across dots. Scout line numbers for the K-dot
+bodies (`quants.c:2102`, `:2490`) and the MUL_MAT driver
+(`ggml-cpu.c:1174-1480`) are dual-scout-consistent but beyond
+fetch-truncation depth — cited as scout receipts, not independently
+re-read; the mechanism below rests on the triple-confirmed parts.
+
+The mechanism (both scouts agree, receipts above): llama factorizes
+the opposite way from TGE. Weights are never dequantized;
+activations are quantized to Q8_K **once per token row**
+(`ggml_compute_forward_mul_mat`, scalar `quantize_row_q8_K_ref`
+even on AVX2, cost amortized over all `nr0` outputs), then
+`64 x nr0` vec_dots per pass, each integer `maddubs`+`madd` with
+one float scale per 256-block and the ±bias via precomputed bsums
+(`dmin` side accumulator Q4_K; `q8sclsub << 5` Q6_K; nibbles stay
+unsigned, never shifted by 8/32). Batch = one `MUL_MAT` per weight
+(`llama-graph.cpp`), threads split N/M in `16x16` work-steal tiles
+(`nchunk0/1`, `nth*4` rule — same shape as TGE bands), K stays
+inside the dot, `nrc == 1` on x86.
+
+Per-pass byte math, 64-wide (my derivation from the receipts):
+gate 8192x3072 Q4_K — weights 13.5 MB DRAM both sides. TGE:
+768 KB fp32 input L3-resident, re-read per row; dots float-FMA
+over 24 KB L1-resident sets. llama: one 768 KB scalar quant pass
+→ 224 KB Q8_K rows resident; dots integer-maddubs over ~3.6 KB
+sets. Down 3072x8192 Q6_K — TGE dot set 64 KB spills 48 KB L1D
+(§31); llama dot set ~9.5 KB resident. So llama holds two
+compounding edges: ~4x dot ALU (32 int8 MACs vs 8 fp32 FMA per
+instr) and L1 residency at wide cols. TGE's 139-208 vs ~300
+GFLOPS prefill fits ALU-bound float dots exactly where int8
+would be 2-4x.
+
+Verdict: **bin (b) — conditional trigger ARMED, not fired.**
+The admissible construction is now precise (per-row scalar Q8_K
+activation quant into thread-local `wdata` + per-(row,token)
+`q{4,6}_K_q8_K` maddubs dots, `nrc == 1`, unaligned-only,
+mmap-safe, no repack — TGE's missing piece is the activation
+quantizer + KxQ8 dispatch; its `q8_batch` covers Q8 weights
+only). It reopens the integer lane despite 0-for-5 because it
+specifies what those attempts lacked (per-superblock float
+scale + bsums bias + per-row activation quant, production-used
+upstream). Entry gates for a round-5 prototype, all required:
+(1) binary re-pairing (clone still unlocatable — rebuild/
+relocate and re-run §36 pairs first); (2) the prototype carries
+its own price proof (differential → 3-corpus fidelity ≤ VNNI
+1.6e-3, top-1 held; bench-flag only until the kernel pulses);
+(3) quiet box + no concurrent worker. Excluded again with
+receipt: tiled/repack/sgemm bypasses, VNNI-fused and ARM
+`nrows=2` paths (break mmap-first). No PPL citation found for
+Q4_K/Q6_K-x-Q8_K AVX2 — the TGE-measured fidelity in gate (2)
+is the designated substitute.
 
 
