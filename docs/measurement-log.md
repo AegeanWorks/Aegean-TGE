@@ -2688,4 +2688,43 @@ differential-first, stash-built A/B, fidelity gate <= VNNI 1.6e-3,
 ids parity) proceeds against this table, not the goal's single-channel
 baselines. No code changed, no fidelity owed, suite 87/87 untouched.
 
+## 44. Q6_K single-token int8 dot: slower at the kernel, reverted (2026-11-03)
+
+Step 1 implementation (revised plan): new `q6k_int8_avx2` TU behind
+bench `--kernel int8` (Q6_K-only by construction, everything else
+delegates to the shipped path), differential-first
+(`q6k_int8_dot_tracks_float_reference` vs the scalar oracle at 2% of
+reference magnitude, plus Q4_K-delegation memcmp) -- green 88/88 on
+first build, so the indexing and the 16-weight scale-group map were
+right. Design: per-64 activation quant (max/127), weights kept int8
+(6-bit exact), widen/mullo/madd with one horizontal reduction per
+16-weight scale group and one float finalize per group -- the
+reduction-minimal shape the analysis allowed (no bias-correction sums,
+unlike the maddubs form). No generate wiring: the kernel had to show a
+pulse first, and it showed the opposite.
+
+| q6k down 3072x8192 x1, best of 5, same binary interleaved | float (shipped) | int8 (new) |
+|---|---|---|
+| R1 | 1.190 ms, 17.35 GB/s | 1.381 ms, 14.95 GB/s (+16%) |
+| R2 | 1.259 ms, 16.40 GB/s | 1.504 ms, 13.73 GB/s (+19%) |
+| R3 (wall read 60.72, session best) | 1.054 ms, 19.59 GB/s | 3.122 ms, 6.61 GB/s (+196%) |
+
+Verdict: revert. The int path loses 3/3 pairs with consistent sign,
+and R3 is the inversion-proof: at the fastest wall of the session the
+float path posts its best number (19.59, the §30 18.71 band) while int8
+posts its worst -- no load narrative can carry that. This is the Stage-2
+mechanism prediction confirmed in silicon: one reduction per 16 weights
+plus ~7 integer uops per lane does not beat the float unpack+FMA chain
+it replaces; the tax moved domains, exactly as objected, and the extra
+finalizes (16 per block vs one per row) dominate. Third integer-domain
+loss on this engine (§12 twice, §28i, §34, now here -- 0 for 5).
+
+Reverted in full (TU deleted, header/CMake/bench/test hunks
+checked out, tree verified clean, suite back to 87/87). No fidelity
+run: no numerics change ships (differential was pre-ship, on the new
+binary only). No generate delta claimed: generate was never wired.
+Next trigger for this shape, not attempted: none from the integer
+domain -- the remaining lever per §41 is fewer weight passes
+(speculation acceptance), not cheaper passes.
+
 
