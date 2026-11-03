@@ -826,6 +826,7 @@ cpu::Q8Quantized Qwen2::quantize_activations(const float* input, int tokens,
       cols % cpu::kQ8BlockElements != 0) {
     return result;
   }
+  const std::uint64_t t0 = clock_ns();
   const std::size_t values = static_cast<std::size_t>(tokens) *
                              static_cast<std::size_t>(cols);
   const std::size_t scales =
@@ -841,6 +842,7 @@ cpu::Q8Quantized Qwen2::quantize_activations(const float* input, int tokens,
                          q8_scales_.data());
   result.values = q8_values_.data();
   result.scales = q8_scales_.data();
+  phase_matvec_ns_ += clock_ns() - t0;
   return result;
 }
 

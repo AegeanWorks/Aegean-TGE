@@ -36,7 +36,7 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 ### ADR-004: f16 KV cache is opt-in
 - **Date**: 2026-11-01
 - **Status**: Accepted
-- **Context**: The KV cache is f32 while llama.cpp uses f16, and the 2048 decode is the engine's weak spot. An f16 cache halves the KV (192 -> 96 MiB at 8192 tokens) and reads it with F16C. Measured against the f32 reference over 497 positions: mean KL 1.658e-6, worst 2.446e-5, top-1 497/497, with identical free-running ids on the 2048, story and speculative traces. The speed is mixed (510 prefill +58%, 2048 prefill +14%/-14%, decode -24%/+63% across runs; the machine moves Â±20%).
+- **Context**: The KV cache is f32 while llama.cpp uses f16, and the 2048 decode is the engine's weak spot. An f16 cache halves the KV (192 -> 96 MiB at 8192 tokens) and reads it with F16C. Measured against the f32 reference over 497 positions: mean KL 1.658e-6, worst 2.446e-5, top-1 497/497, with identical free-running ids on the 2048, story and speculative traces. The speed is mixed (510 prefill +58%, 2048 prefill +14%/-14%, decode -24%/+63% across runs; the machine moves ±20%).
 - **Decision**: Add `--kv f16` (half storage, F16C attention reads); the default stays f32. The plan still prints the f32 KV size, so the budget check stays conservative.
 - **Consequences**: The memory case is the reason to use it; the accuracy price is two orders of magnitude below the VNNI's (1.7e-6 vs 1.6e-3 KL); the speed is not a uniform win, so it is not the default; tests 58 -> 60 with the half round-trip and f16 attention differential.
 
