@@ -2511,4 +2511,36 @@ Reverted in full (stash dropped, tree verified clean); post-revert
 87/87. No fidelity run: no numerics change ships (differential
 green on the new nest before revert).
 
+## 40. Vocab projection attribution: proportional, not the gap (2026-11-03)
+
+Round-7 sweep on the quietest box yet (wall read **54.46 GB/s**,
+copy 44.03): the output projection reuses token_embd
+(`128256x3072 Q6_K`, 308.2 MiB) as a tall-skinny batch --
+128256x3072 x{64,16,1}, best-of-5, same kernel as the §31 shapes:
+
+| tokens | time | GFLOPS | effective GB/s |
+|---|---|---|---|
+| 64 | 188.542 ms | 267.49 | 1.71 |
+| 16 | 57.211 ms | 220.38 | 5.65 |
+| 1 | 11.735 ms | 67.15 | 27.54 |
+
+Marginals ~2.7-3.0 ms/token (flat); x1 is pure weight streaming
+(308 MB at 27.5 GB/s). Share per 64-chunk: ~189 ms against an
+FFN bill of ~28 x 62 ms (gate+up+down, §31) ~ 1.7 s plus
+qkv/o/attn/norms -- roughly **7-8% of the chunk**, consistent with
+the closed warm-prefill totals. Per decode token the full-vocab
+logit vector costs ~11.7 ms (~5-10% of a short-ctx step) -- real,
+and already inside the 55%-of-ceiling decode figure, not a new
+claim.
+
+Honest null, twice over: at 267 GFLOPS the projection is the
+*fastest* per-FLOP of the q6k shapes (down: 195), so tall-skinny
+scheduling is healthy (128k rows feed all workers; 64 bands hold),
+and its share is single digits. The §31 FFN estimate being rough
+does not move the gap: prefill still trails llama 46% at 512 with
+the deficit concentrated in gate/down dots (§§36/38). The
+round-8 proposal stays the §38 one (input-residency work on the
+wide-col path), not band retuning for 128k rows. No code, no
+fidelity owed, suite untouched 87/87.
+
 
