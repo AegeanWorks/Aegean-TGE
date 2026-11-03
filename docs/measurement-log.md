@@ -2438,4 +2438,43 @@ if the retry also inverts, the bench harness itself needs a
 contention guard before any prefill kernel work resumes. No code
 changed, no fidelity owed, tests 87/87 untouched.
 
+## 38. Tokens-sweep retry on quiet box: variable-side, wide-row (2026-11-03)
+
+Retry of §37 on the trigger box: 8.24 GiB avail (48%), wall read
+**31.60 GB/s** (highest this turn). Interleaved, best-of-5, no
+inversion anywhere (first-pair tripwire clear):
+
+| tokens | q4k gate 8192x3072 | q6k down 3072x8192 |
+|---|---|---|
+| 1 | 0.712 ms, 70.67 GFLOPS | 0.964 ms, 52.20 GFLOPS |
+| 4 | 0.982 ms, 204.95 | 1.544 ms, 130.39 |
+| 16 | 2.783 ms, 289.34 | 3.751 ms, 214.70 |
+| 64 | 9.649 ms, 333.82 | 16.497 ms, 195.27 |
+
+Marginal ms/token between points (q4k): 0.090 / 0.150 / 0.143 --
+flat ~0.14 after x4. Same (q6k): 0.193 / 0.184 / **0.266** --
+rises at x64. Intercepts (whole-matrix fixed: dequant + dispatch):
+~0.57 ms q4k, ~0.77 ms q6k -- 5-6% of the x64 totals. The gap is
+**not** the fixed dequant side: at x64, 94-95% of both totals is
+variable, and q6k's marginal (0.266) is 1.86x q4k's (0.143).
+
+Reading: per-token dots on 8192-wide rows cost ~2x per element
+what the same FLOPs cost on 3072-wide rows, and the penalty grows
+with the token set (0.19 -> 0.27). Capacity arithmetic fits: per
+dot working set is scratch + input row = 24 KB at cols 3072
+(inside the 48 KB L1D) vs 64 KB at cols 8192 (spills every dot).
+This is the §31 L1 hypothesis with slope evidence behind it --
+and it reconciles §§32-33: both falsified tilings kept total
+traffic identical (my own §32 verdict), so on the variable side
+they could never move; §33's band+token shape failed on a
+throttling box (spread 0.74-1.53), which is noise, not
+falsification.
+
+Decision: the next code round retries cross-row input reuse
+(band + token blocking that keeps the input set resident across
+rows -- the §33 shape) on a box this quiet, aimed at the q6k-down
+x64 point (16.497 ms) with the q4k-gate slope as the par line.
+Fixed-side (dequant) work is out: 5-6% cannot pay. No code this
+round; no fidelity owed (read-only bench); suite untouched 87/87.
+
 
