@@ -3089,6 +3089,55 @@ batch + GQA shaders) is blocked on the Vulkan SDK (no `glslc`,
 no headers, no `VULKAN_SDK` on this box; `winget search` inconclusive —
 timed out). Verdict: **kept (plumbing)**.
 
+## 52. SDK present: real backend builds, links, reports ready (2026-11-03)
+
+The box now has LunarG SDK 1.4.363.0 (`C:\VulkanSDK\1.4.363.0`,
+machine `VULKAN_SDK` set; `Bin\glslc.exe` + `Include\vulkan\vulkan.h` +
+`Lib\vulkan-1.lib` all present). Reconfigured with the SDK visible:
+`find_package` resolves headers + import lib, `TGE_HAS_VULKAN=1`, and
+`src/gpu/vulkan_context.cpp` (fixed one const-pointer mistake in the
+queue-family query: clamped non-const count) compiles and links under
+MinGW against `vulkan-1.lib` — no link workaround needed.
+
+| Check | Result |
+|---|---|
+| `cmake --build --preset release` | clean, `tge.exe` + `tge_tests.exe` relinked |
+| `tge_tests` | **96/96 green** |
+| `tge.exe info` | `GPU/status: ready`, `device: AMD Radeon RX 9060 XT` (was `unavailable (CPU fallback)`) |
+| `python aikit.py check aegean-tge` | **4/4 passed** |
+
+`glslc` is not on `PATH` yet (fresh shells need re-login or a PATH
+edit); the CMake shader step in [3/4] must reference
+`$(VULKAN_SDK)/Bin/glslc.exe` explicitly. No numerics changed; no
+fidelity owed. Next: no-op compute dispatch (device/queue/fence +
+`noop.comp` via `glslc`) to prove the submit path before any numerics.
+Verdict: **kept (SDK bring-up)**.
+
+## 53. First GPU dispatch: no-op round trip on RX 9060 XT (2026-11-03)
+
+`src/gpu/shaders/noop.comp` (invocation 0 writes 1u) compiled by
+`glslc -O` and embedded via `cmake/bin2h.cmake` (alignas(4) bytes, so
+the binary stays single-file); `vulkan_context` grew a persistent
+device/queue/pool plus `run_noop()` (storage buffer, descriptor,
+pipeline, one dispatch, fence wait, exact readback); `tge info` prints
+the round trip; `tge_tests` pins it (`gpu_noop_roundtrip`: Ready implies
+ok + readback exactly 1, not-Ready implies clean no-op).
+
+| Check | Result |
+|---|---|
+| `cmake --build --preset release` | clean (fixed one header-path mismatch: generated header now flat in the generated root) |
+| `tge_tests` | **97/97 green** (96 + `gpu_noop_roundtrip`) |
+| `tge.exe info` | `ready / AMD Radeon RX 9060 XT / roundtrip: ok (submit 2587.9 us, readback 1)` |
+| `python aikit.py check aegean-tge` | **4/4 passed** |
+
+Roofline note: 2.6 ms covers pipeline creation + submit + fence (pipeline
+is built per call today); a persistent-pipeline design will cut the
+steady-state submit toward the ~10-50 us budget in §3. Transfer on this
+path is one 4-byte buffer — the accounting story starts with the first
+real kernel. No numerics changed; no fidelity owed. Next: output-region
+GEMV (Q8 dequant + dot, single sync) with its fidelity price.
+Verdict: **kept (submit path proven)**.
+
 ## 51. Acceptance map: drafter saturated, LogitSpec stays unopened (2026-11-03)
 
 Round-3 read-only measurement (no code; L5/G4 receipts consumed, not
@@ -3192,5 +3241,7 @@ receipt: tiled/repack/sgemm bypasses, VNNI-fused and ARM
 `nrows=2` paths (break mmap-first). No PPL citation found for
 Q4_K/Q6_K-x-Q8_K AVX2 — the TGE-measured fidelity in gate (2)
 is the designated substitute.
+
+Box watch (2026-11-03, wakeup re-check): wall read **61.00 GB/s** (best window yet; PID 19856 gone) but story probe **2.18 t/s** -- the §45 split (bandwidth healthy, ALU ~5x slow) with new pinners (`node` 37k + 17k CPU-s). Health gate needs both halves; still collapsed, no t/s claimed, §45 matrix stays suspended.
 
 
