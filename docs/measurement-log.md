@@ -3244,4 +3244,45 @@ is the designated substitute.
 
 Box watch (2026-11-03, wakeup re-check): wall read **61.00 GB/s** (best window yet; PID 19856 gone) but story probe **2.18 t/s** -- the §45 split (bandwidth healthy, ALU ~5x slow) with new pinners (`node` 37k + 17k CPU-s). Health gate needs both halves; still collapsed, no t/s claimed, §45 matrix stays suspended.
 
+## 53. Binary re-paired at cd8427d: prefill gap confirms at 52% / decode at 55% (2026-11-03)
+
+Round-5 infra round (no TGE code; the clone lives outside the repo).
+Path, logged first per the §31 lesson:
+`C:\Users\Yunus-Emre\AppData\Local\Temp\kilo\llama.cpp-cd8427d`
+(shallow clone, detached HEAD at
+`cd8427d018c07eefab6c110f7f115c31ec4c6157`, tree clean).
+Procedure from `docs/build.md` at the pin (stock CPU build):
+`cmake -B build`, then the §28al necessity re-proved itself —
+`vendor/cpp-httplib` fails without `-D_WIN32_WINNT=0x0A00`
+(`CreateFile2` undeclared), so
+`cmake -B build -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0A00`;
+`cmake --build build --config Release --target llama-bench llama-cli`
+(`-j 6`). The `.rsrc merge failure: multiple non-default manifests`
+link notice recurs (§28al: harmless — both binaries run).
+Versions confirm the pin:
+`0.8.0-dev (build 1, commit cd8427d), GNU 16.2.0 for Windows AMD64`
+(both tools). ggml 0.28.0, ggml commit cd8427d, CPU backend,
+`-march=native`, OpenMP 5.2.
+
+Same-window pairs, 6 threads (box loaded — absolutes depressed on
+both sides, pairing is the point):
+llama-bench `-p 128 -n 64 -r 3`: **pp128 22.16 ± 1.36**,
+**tg64 5.20 ± 0.08**. TGE same window: 138-tok prefill
+(tripled-F2 paragraph) **11.6 t/s** (matvec 95.5% of prefill,
+attn 1.6%); story decode (F1) **2.88 t/s**, ids
+`11 304 … 11 1070` both current-binary runs.
+So: prefill **52%**, decode **55%** of pinned llama — the gap
+confirms inside the standing bands (43-56% prefill, 56-70%
+decode), now against a version-verified binary instead of the
+lost §36 build. Scope correction: no Q8_0 GGUF exists on disk
+(glob empty) — the §28al Q8_0 pair is unre-runnable; the Q4_K_M
+pair above is the reference-model pair and the only one the
+armed trigger needs.
+Round-6 gate (1) **OPENS**: re-pairing done (path + version on
+record). Remaining gates for the Q8_K-activation prototype:
+own price proof (gate 2) + quiet box (gate 3). Binary note: the
+TGE runs above used the peer-relined binary (`gpu: auto (ready,
+CPU fallback armed)` vs the older loader-present line) — CPU
+path confirmed armed, ids identical, no behavior delta.
+
 
