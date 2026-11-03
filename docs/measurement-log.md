@@ -2543,4 +2543,44 @@ round-8 proposal stays the §38 one (input-residency work on the
 wide-col path), not band retuning for 128k rows. No code, no
 fidelity owed, suite untouched 87/87.
 
+## 41. KV-ladder head-to-head on the quiet box: i8 not a general card (2026-11-03)
+
+Wall 48.15 GB/s (quietest window yet). TGE best-of-1s per cell
+(single runs -- the ladder gaps exceed the noise band, but treat
+prefill deltas <10% as unclaimed) vs llama `-r 5` stats,
+interleaved per history, same file, 6 threads:
+
+| 128-history | llama | TGE-i8 | TGE-f16 | TGE-f32 |
+|---|---|---|---|---|
+| prefill | 87.88 ± 6.87 | 44.2 | 43.8 | 37.7 |
+| decode 63 tok | 14.70 ± 0.85 | 9.22 | 9.11 | 8.90 |
+
+| 512-history | llama | TGE-i8 | TGE-f16 | TGE-f32 |
+|---|---|---|---|---|
+| prefill | 92.17 ± 7.63 | 39.7 | 37.3/38.5 | 39.0 |
+| decode 63 tok | 15.07 ± 0.10 | 7.81 | 9.48/9.99 | 9.09 |
+
+Best-TGE/llama: prefill 50% (128) / 43% (512); decode 63% / 66%.
+Two findings:
+
+1. i8 is not a general head-to-head card. The §29 +32% was
+   2048-ctx steady state where KV reads dominate; at 128/512 the
+   ladder collapses (128: all within 4%; 512: f16 best, i8
+   *worst* at 7.81 -- quant/dequant overhead exceeds the KV-read
+   saving when attention is ~7%). i8 stays a long-context opt-in
+   with its §29 price, not a goal-round lever at these histories.
+2. Structural: on the quiet box llama decode nearly doubled
+   (§36: 7.96/10.77 -> 14.70/15.07) while TGE decode did not move
+   (§36: 7.56-10.25 -> 8.90-9.99). TGE decode does not scale with
+   freed bandwidth -- it is unpack-ALU-bound (§30 format tax);
+   llama is bandwidth-bound and pulls away exactly when bandwidth
+   is plentiful. The goal gap for decode *widens* on a quiet box.
+   Beating llama therefore requires removing ALU work per streamed
+   weight (the §34 int8 attempt, failed on price) or removing
+   streamed weights per token -- not scheduling, not thresholds,
+   not KV formats at these histories.
+
+No code, no fidelity re-price (i8 price stands from §29; f32/f16
+paths numerically untouched), suite 87/87.
+
 
