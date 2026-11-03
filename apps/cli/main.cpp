@@ -1522,12 +1522,53 @@ bool bigram_chain_draft(const std::vector<int>& history, int* draft) {
   return true;
 }
 
+/// Drafts the continuation of a near-match of the last two to five tokens
+/// with exactly one substitution. Last resort after the exact spans and the
+/// bigram chain: both abstain only where the tail is novel, and a single
+/// novel token still leaves a 4-of-5 match worth proposing. Windows are tried
+/// most-recent first, longest span at each position first; every proposal is
+/// observed history the verifier still decides, and a first-position miss
+/// skips the weight pass entirely (greedy d0 pre-check, sampled pre-judge),
+/// so a wrong proposal costs microseconds, never a pass. Returns false when
+/// no window is within one substitution.
+bool gapped_draft(const std::vector<int>& history, int* draft) {
+  const int length = static_cast<int>(history.size());
+  for (int end = length - 2; end >= 1; --end) {
+    if (length - 1 - end < 5) {
+      continue;
+    }
+    for (int span = 5; span >= 2; --span) {
+      if (span > end + 1 || length < span + 5) {
+        continue;
+      }
+      int mismatches = 0;
+      for (int offset = 0; offset < span; ++offset) {
+        if (history[static_cast<std::size_t>(length - span + offset)] !=
+            history[static_cast<std::size_t>(end - span + 1 + offset)]) {
+          if (++mismatches > 1) {
+            break;
+          }
+        }
+      }
+      if (mismatches != 1) {
+        continue;
+      }
+      for (int index = 0; index < 5; ++index) {
+        draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 /// Drafts the continuation of the latest earlier match of the last one to
 /// five tokens. Returns five tokens or nothing. Longer spans are tried
 /// first: a longer context match accepts at a higher rate, and the fallback
 /// to shorter spans keeps every proposal the old 3..1 range would have made.
 /// When no exact span matches, a bigram chain proposes from single-token
-/// statistics instead of abstaining.
+/// statistics instead of abstaining; when the chain also abstains (novel
+/// tail), one-substitution windows get the last word.
 bool prompt_lookup_draft(const std::vector<int>& history, int* draft) {
   const int length = static_cast<int>(history.size());
   for (int span = 5; span >= 1; --span) {
@@ -1550,7 +1591,10 @@ bool prompt_lookup_draft(const std::vector<int>& history, int* draft) {
       return true;
     }
   }
-  return bigram_chain_draft(history, draft);
+  if (bigram_chain_draft(history, draft)) {
+    return true;
+  }
+  return gapped_draft(history, draft);
 }
 
 int run_generate(int argc, char** argv) {

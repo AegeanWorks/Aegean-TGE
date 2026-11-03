@@ -2583,4 +2583,64 @@ Two findings:
 No code, no fidelity re-price (i8 price stands from §29; f32/f16
 paths numerically untouched), suite 87/87.
 
+## 42. Drafter hit-rate round: recent-first reverted, gapped fallback kept (2026-11-03)
+
+Revised-plan implementation (Stage 2: draft-model rejected -- SmolLM2
+vocab 49152 vs Llama-3B 128256, cross-vocab drafts are meaningless to
+`verify_draft_logits`; no same-vocab small Llama is local, so that stays
+a trigger-gated future). Two drafter-only changes, each gated separately
+on acceptance/step (deterministic, load-proof) with ids byte-identical;
+box breathed 57.2 -> 47.9 -> 59.2 read GB/s through the round, so no t/s
+ratio is claimed -- same-steps/same-accepts pairs with different
+absolutes are load narrative per §28m (the §32/§39 rule).
+
+Reference model throughout: Llama-3.2-3B-Instruct-Q4_K_M, `--threads 6`,
+`--prefetch`, warm page cache. Baseline (stash-built pre-change binary,
+kept at `Temp/kilo/tge_ab/tge_old.exe` for interleaved pairs): story
+4-tok 0 steps; repetitive 40-tok 3 steps 5.00/step (plain 10.72 vs spec
+18.06 t/s, 1.68x, ids `578 11422 ...` identical); partial-repetition 6
+steps 2.00/step ids `3842 13452 ...` identical; mixed
+alpha/beta/gamma 3 steps 4.00/step (12 acc, 14 emitted) ids `40097 13
+8451 ...` identical; fidelity floor mean KL 1.467e-11, worst 5.531e-11,
+30/30; suite 87/87.
+
+(a) Recent-first span order (REVERTED): `prompt_lookup_draft` tried
+candidate ends most-recent first (longest span at each end) instead of
+the shipped longest-span-first. Acceptance tied on every family (5.00 /
+2.00 / 4.00 / 0 steps, ids identical everywhere incl. 4.00 on mixed R1).
+Same-work t/s pairs leaned new (+12-18% on mixed bests) with identical
+step/accept/emission counts -- same weight passes, so physics says load
+or placement, not code; claimed as nothing. Reverted in full (`git
+checkout -- apps/cli/main.cpp`, tree verified clean); the shipped order
+stands for want of evidence either way.
+
+(b) Skip-one gapped fallback after the bigram chain (KEPT): new
+`gapped_draft` in `apps/cli/main.cpp` tries spans 5..2 with exactly one
+substitution, most-recent window first, only when the exact spans AND
+`bigram_chain_draft` both abstain -- every pre-existing proposal is
+byte-identical by construction (exact and bigram paths untouched; the
+old tail `return bigram_chain_draft(...)` is now try-bigram-then-gapped).
+A first-position miss skips the weight pass (greedy d0 pre-check,
+sampled pre-judge §28s), so a wrong proposal costs microseconds. Drafter
+lives in main.cpp, covered end-to-end (no unit surface, per §28ad).
+
+| prompt, Llama-3B spec | before (old binary) | after (gapped) |
+|---|---|---|
+| repetitive 40-tok | 5.00/step, ids identical | 5.00/step, ids identical |
+| partial-repetition | 2.00/step, ids identical | 2.00/step, ids identical |
+| story 4-tok | 0 steps (correct abstention) | 0 steps (correct abstention) |
+| mixed alpha/beta/gamma | 4.00/step (12 acc, 14 emitted, 4 runs) | **4.67/step (14 acc, 16 emitted)** |
+| mixed spec vs nonspec (new binary) | -- | ids byte-identical |
+| fidelity 31 pos ctx 512 | mean 1.467e-11, worst 5.531e-11, 30/30 | identical 1.467e-11, 5.531e-11, 30/30 |
+
+The mixed delta is code, not load: greedy drafts are deterministic in
+history, so acceptance cannot move with box state (old pins 4.00 across
+four runs spanning the whole wall swing; new gives 4.67). Trajectory
+diverges exactly where the gapped window fires mid-run; the untouched
+exact/bigram paths cannot produce it. Narrow but real, and the keep
+rests on the §28g precedent (fallback-superset + identical output +
+no-regression), not on a t/s headline: +0.67/step on one prompt family,
+ceiling families untouched. Tests 87/87, `scripts/test.cmd` green,
+`aikit.py check aegean-tge` 4/4.
+
 
