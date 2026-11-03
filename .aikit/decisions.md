@@ -52,3 +52,10 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 - **Context**: At 2048 tokens the engine is compute-bound (~12 GB/s effective vs 26 GB/s wall) and the Llama-3B KV is 448 MiB f32. f16 halved it for +14% decode (5.80 -> 6.61 t/s). An int8 block cache (one float scale per 32) halves it again (448 -> 112 MiB) with widen-then-scale attention reads. Measured at 2048: 7.63 t/s (+32% vs f32, +15% vs f16); short-context text identical, long-context prefix identical. Fidelity over 31 positions: mean KL 3.166e-4, worst 1.234e-3, top-1 31/31 — between f16 (1.7e-6) and the accepted VNNI (1.6e-3), zero flips.
 - **Decision**: Add --kv i8 (int8 storage, widen-then-scale attention reads in head and group kernels, scalar oracle parity); the default stays f32. The plan still prints the f32 KV size, so the budget check stays conservative.
 - **Consequences**: The memory case is the reason to use it (long-context, multi-session); at short context the widen+scale is pure overhead (5.20 vs ~9 t/s) so f32 stays faster there; tests 84 -> 86 with head and group int8 differentials.
+
+### ADR-008: Static sparse attention subset (opt-in)
+- **Date**: 2026-11-03
+- **Status**: Accepted
+- **Context**: Latent Sparse Attention (arXiv 2610.42147) selects a kept set per query (sink + selected long-range + window); its indexer (distilled latents, GPU kernels, 10M context) cannot land here. Full record in `docs/decisions/ADR-0008-static-sparse-subset.md`; measurement in `docs/measurement-log.md` §50.
+- **Decision**: `SparseConfig{enabled,sink=4,window=512,stride=4}` gathered in `attention_head` (f32 KV only), `uses_sparse` before `uses_gqa`, exact dense fallback otherwise; `--sparse` on `generate`/`fidelity`; default off.
+- **Consequences**: Fidelity Q8_0 ctx1024: KL 2.6e-02, top-1 975/1023. Generate 8192: prefill attn phase lower both pairs, ids 31/31 identical; 512: ids identical via fallback. Kept opt-in for prefill-bound long prompts.
