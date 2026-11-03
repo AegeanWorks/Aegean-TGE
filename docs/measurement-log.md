@@ -3039,4 +3039,70 @@ maps, no transfer to Qwen2.5 GGUF CPU), N-LSA native (§3.4, needs
 path; `kHardMaxContext` 32768; mmap-first), tree/beam (single-stream
 decode is flat per paper §4.1; revisit only on measured headroom).
 
+## 50. Hybrid [1/4] restore after parallel commit (2026-11-03)
+
+The parallel sparse commit (`b7eda07`) reverted `CMakeLists.txt` as a
+side effect (dropped the K-chunk wiring and, with it, the Vulkan
+scaffolding hunks). Re-applied the four bring-up hunks only
+(`TGE_ENABLE_VULKAN`, `noop.cpp`, optional-find block, gpu test) onto
+the pristine file; no other tree file touched.
+
+| Check | Result |
+|---|---|
+| `cmake --preset release` | clean |
+| `tge_tests` | **94/94 green** (90 incl. new sparse cases + 4 `gpu_*`) |
+| `tge.exe` relink | **blocked: file locked** (parallel agent benchmarking; Windows holds running executables) — `tge_tests.exe` relinked fine, `libtge_core.a` rebuilt |
+| full `aikit.py check` | deferred until the lock clears (prior 4/4 on equivalent code) |
+
+No numerics changed; no fidelity price owed; no speedup claimed.
+`tge.exe` binary on disk is their sparse build (21:38) until relink.
+Verdict: **kept (scaffolding restored, pending relink)**.
+
+Addendum (same session): lock cleared, `cmake --build --preset release`
+fully green incl. `tge.exe`; `tge_tests` **94/94**; `python aikit.py
+check aegean-tge` **4/4 passed**. One transient `test.cmd` FAIL observed
+mid-window (parallel run holding `tge.exe` during the internal rebuild);
+clean on immediate re-run. Verdict stands: **kept**.
+
+## 51. Acceptance map: drafter saturated, LogitSpec stays unopened (2026-11-03)
+
+Round-3 read-only measurement (no code; L5/G4 receipts consumed, not
+re-scouted). Pre-registered families x modes, greedy + temp 0.1
+(seed 1234) + repeat-penalty 1.1/window 4, Llama-3B, 34 runs:
+
+| Family | Greedy | Sampled 0.1 | Penalty 1.1/w4 |
+|---|---|---|---|
+| F1 story (n=15) | 0 steps, ids `11 304 … 11 1070` both arms | 0.00/step (5 steps, divergent path) | — |
+| F2 repetitive | 3.43/step (7 st, 24 acc) | 2.56/step (9/23) | 3.43/step, byte-identical |
+| F3 partial | 2.71/step (7/19) | 1.36/step (14/19, ids identical) | 2.60/step, byte-identical |
+| F4 triple | 2.50/step (6/15) | 1.00/step (15/15, ids identical) | **5.00/step**, byte-identical |
+| F5 prose | 5.00/step (prompt-echo) | — | — |
+| F6 code | 3.00/step (7/21) | 2.10/step (10/21) | — |
+| F7 wrapper | 3.50/step (8/28) | 3.12/step (8/25, ids identical) | — |
+| F8 doubled tail | 4.00/step (3/12) | — | — |
+
+Greedy: every pair ids-identical. Sampled: F2 det-proven
+(identical rerun, 9/23 both times) — cross-arm divergence at
+single positions with reconvergence is RNG-consumption mechanics,
+not a verifier bug; §28w "exact preservation" is distributional,
+and the plan's stop-condition was corrected to determinism (not
+cross-arm identity) before judging. F4-sampled is the floor at
+exactly 1.00/step with identical ids — caught, not abstained.
+F4-penalty hits ceiling: the penalty steers onto the repeated
+triple and the drafter catches all of it (5.00/step). No family
+shows abstain-or-miss with repetition present.
+
+Corrections banked: `--temp`/`--repeat-penalty` (plan said
+`--temperature`/`--penalty`, both hard-error); one `unknown
+command` event from a peer relink racing exec (re-ran clean);
+binary changed mid-block (peer's sparse landing — greedy block
+on one binary, sampled block on the current one; per-binary
+determinism holds, cross-binary absolutes unclaimed).
+Verdict: **global close — LogitSpec last-logit and ngram
+frequency-abstention stay unopened**; the spans+bigram+gapped
+chain is saturated at 1.0-5.0/step everywhere repetition
+exists. Next trigger: a prompt family with demonstrated
+best-misses/gapped-abstains split, or acceptance < 1.0/step
+with repetition present.
+
 
