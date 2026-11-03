@@ -53,8 +53,8 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 - **Decision**: Add --kv i8 (int8 storage, widen-then-scale attention reads in head and group kernels, scalar oracle parity); the default stays f32. The plan still prints the f32 KV size, so the budget check stays conservative.
 - **Consequences**: The memory case is the reason to use it (long-context, multi-session); at short context the widen+scale is pure overhead (5.20 vs ~9 t/s) so f32 stays faster there; tests 84 -> 86 with head and group int8 differentials.
 
-### ADR-008: Static sparse attention subset (opt-in)
-- **Date**: 2026-11-03
+### ADR-007: Static sparse attention subset (opt-in)
+- **Date**: 2026-11-03 (numbered for the `.aikit` sequence; full record lives at `docs/decisions/ADR-0008-static-sparse-subset.md`, whose filename is kept to avoid colliding with the parallel Vulkan `ADR-0007` draft)
 - **Status**: Accepted
 - **Context**: Latent Sparse Attention (arXiv 2610.42147) selects a kept set per query (sink + selected long-range + window); its indexer (distilled latents, GPU kernels, 10M context) cannot land here. Full record in `docs/decisions/ADR-0008-static-sparse-subset.md`; measurement in `docs/measurement-log.md` §50.
 - **Decision**: `SparseConfig{enabled,sink=4,window=512,stride=4}` gathered in `attention_head` (f32 KV only), `uses_sparse` before `uses_gqa`, exact dense fallback otherwise; `--sparse` on `generate`/`fidelity`; default off.
