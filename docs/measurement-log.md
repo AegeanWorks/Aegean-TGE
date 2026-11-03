@@ -2810,4 +2810,18 @@ with a demonstrated best-misses/gapped-abstains split (acceptance
 deficit on record first), or a unit surface for the drafter if
 fallback-hunting resumes.
 
+Stage-4 check on the reverted tree (this round's code delta is nil --
+`git diff af51916 HEAD` is docs-only, +52 lines here): rebuild no-op,
+`tge_tests` Passed, `aikit.py check aegean-tge` 4/4. Fidelity 31 pos
+ctx 512: mean KL 1.467e-11, worst 5.531e-11, 30/30 -- exact match to
+the §42 floor. Post-revert generate: story ids `11 304 ... 11 1070`
+and partial 5.00/step ids identical to the Stage-3 pairs. Thinking
+set (final binary, Llama-3B, collapsed box ~1.4-2.7 t/s so absolutes
+unclaimed): R1 structured steps, R2 telephone-circle analogy with
+map-back, R3 ordered everyday consequences, C1 8-item umbrella list
+(temp 0.8, seed 1234), C2 weather-metaphor (same seed), C3 Emily story
+continuation -- all fluent; equivalence to pre-round holds by
+code-identity (no code delta exists to move them) plus the measured
+spec-mode ids parity. No failures; nothing sent back.
+
 
