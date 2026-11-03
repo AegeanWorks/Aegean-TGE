@@ -2643,4 +2643,49 @@ no-regression), not on a t/s headline: +0.67/step on one prompt family,
 ceiling families untouched. Tests 87/87, `scripts/test.cmd` green,
 `aikit.py check aegean-tge` 4/4.
 
+## 43. Re-baselined head-to-head on the 32 GiB box (2026-11-03)
+
+Step 0 of the revised Round-2 plan (Stage 2): no code, re-ground the
+numbers the goal's baselines no longer describe. `tge info` reports
+32.00 GiB installed; `bench mem` read 51.18 at the matrix start, 53.92
+at its end (mid-load; llama's own pp128 ±22% agrees). Single-channel
+DDR5-4800 tops at 38.4 GB/s theoretical, so the 16 GB single-channel
+premise is retired: at 51.18 the decode ceiling is 51.18 / 1.57 =
+**~32.6 t/s** (1.57 GiB/token from `tge plan`), not the goal's 15.8.
+
+Same file (Llama-3.2-3B Q4_K_M), same 6 threads, interleaved per
+history, both MinGW-GCC builds (llama cd8427d, TGE d1a2e5c),
+`--prefetch` on TGE (fault-in untimed), llama `-r 5` stats:
+
+| 128-history | llama-bench cd8427d | TGE f32 (130-tok prompt) | TGE/llama |
+|---|---|---|---|
+| prefill | 52.50 ± 11.70 | 27.2 | 52% |
+| decode 63-64 tok | 8.00 ± 1.65 | 5.63 | 70% |
+| TGE `--kv f16` secondary | -- | 21.5 / 4.49 | unpaired drift, no format claim |
+
+| 512-history | llama-bench cd8427d | TGE f32 (510-tok prompt) | TGE/llama |
+|---|---|---|---|
+| prefill | 42.33 ± 5.50 | 23.7 | 56% |
+| decode 63 tok | 8.28 ± 0.77 | 4.61 | 56% |
+| TGE `--kv f16` secondary | -- | 19.0 / 3.83 | unpaired drift, no format claim |
+
+`phases` on all four TGE runs: matvec 94-97%, attn 2-5% (GQA engaged
+at 512: positions 510+, attn 3-5%; per-head at 128: 2%), norm 2-4%.
+
+Three statements. (1) The gap is confirmed at the new ceiling: TGE
+decode 4.6-5.6 t/s is ~15-17% of the current ~32.6 t/s wall while
+llama's ~8-8.3 is ~25% -- TGE converts barely three-fifths of what
+llama converts, and matvec owns 94%+ of every step, so the ALU gap the
+kernel round aims at is real and current, not a stale-ratio artefact.
+(2) Ratios sit in the §41 band (prefill ~50-56% both histories; decode
+56-70% vs §41's 63-66% -- same band, load-shifted, not a trend).
+(3) f16 secondaries run slower than f32 in both histories here,
+contradicting the paired §29 +14% -- unpaired across time, correctly
+unclaimed per the §36 precedent; no KV-format conclusion moves.
+
+What this fires: revised-plan Step 1 (Q6_K single-token int8 dot,
+differential-first, stash-built A/B, fidelity gate <= VNNI 1.6e-3,
+ids parity) proceeds against this table, not the goal's single-channel
+baselines. No code changed, no fidelity owed, suite 87/87 untouched.
+
 
