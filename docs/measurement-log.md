@@ -2146,7 +2146,7 @@ Same window, warm page cache, Llama-3B Q4_K_M, 6 threads (unless noted):
 Two corrections to the Stage-1 plan, both from measuring on true 3B
 shapes instead of quoting 0.5B numbers. First, Q4_K is not at 7-9 GB/s
 here: on 3072/8192 orientations it runs 13.0-13.8 GB/s (51-54% of the
-25.7 wall), and Q6_K down hits 18.71 (73%). Weighted effective ?55% —
+25.7 wall), and Q6_K down hits 18.71 (73%). Weighted effective ~55% —
 which *is* the end-to-end 52-58% figure, not a mystery overhead. The
 §28i/§28l "format tax" stands, but its size on 3B is ~2x smaller than
 the 0.5B-shape quote. Second, attention is 0-2% at both ctx (positions
@@ -2162,7 +2162,6 @@ the instrument: every future decode claim now attributes instead of
 guessing. Next triggers, not attempted: int8-domain dot that avoids the
 hadd tax, or a 256+-history GQA A/B (this session never exceeded
 position ~120).
-2 x 1.57 GiB of weights per step plus KV, and i8 quarters the KV stream.
 
 ## 31. Prefill Step 0: 64-wide batch on true 3B shapes (2026-11-02)
 
