@@ -465,7 +465,7 @@ int command_gguf(const char* path) {
 /// will not.
 enum class VocabularyMode { Auto, Eager, Lazy };
 
-bool prompt_lookup_draft(const std::vector<int>& history, int* draft);
+bool prompt_lookup_draft(const std::vector<int>& history, int* draft, int need);
 
 int command_generate(const std::string& path, const std::vector<int>& prompt_ids,
                      const std::string& prompt_text, int count, int threads,
@@ -705,9 +705,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
          (generated.empty() || !config.is_end_token(generated.back()))) {
     if (speculate && position + tge::models::Qwen2::kSpeculativeBatch <=
                          model->max_context()) {
-      int draft[5];
+      // Six-deep greedy draft: the verifier's whole batch carries drafts,
+      // the padding slot is gone, and the five-deep form stays as the
+      // fallback inside prompt_lookup_draft for short histories.
+      int draft[6];
       bool first_ok = false;
-      if (prompt_lookup_draft(history, draft)) {
+      if (prompt_lookup_draft(history, draft, 6)) {
         if (no_penalty) {
           first_ok =
               tge::models::Qwen2::argmax(logits, vocab_size) == draft[0];
@@ -729,10 +732,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
       }
       if (first_ok) {
         int feed[tge::models::Qwen2::kSpeculativeBatch];
-        for (int index = 0; index < 5; ++index) {
+        for (int index = 0; index < 6; ++index) {
           feed[index] = draft[index];
         }
-        feed[5] = 0;
         int predicted[tge::models::Qwen2::kSpeculativeBatch];
         const auto v0 = Clock::now();
         if (no_penalty) {
@@ -748,9 +750,13 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
           if (static_cast<int>(scores.size()) < vocab_size) {
             scores.assign(static_cast<std::size_t>(vocab_size), 0.0F);
           }
+          // Penalized rows: row i predicts draft[i + 1] with the history as
+          // of that position (history + feed[0..i]), and row 5 predicts the
+          // bonus token after the sixth draft. All six rows are penalized,
+          // so the bonus keeps the exact single-token penalty semantics.
           std::vector<int> widened = history;
-          widened.reserve(history.size() + 5);
-          for (int index = 0; index < 5; ++index) {
+          widened.reserve(history.size() + 6);
+          for (int index = 0; index < 6; ++index) {
             widened.push_back(feed[index]);
             std::memcpy(scores.data(),
                         rows +
@@ -762,14 +768,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
             predicted[index] = tge::models::Qwen2::argmax(scores.data(),
                                                           vocab_size);
           }
-          predicted[5] = tge::models::Qwen2::argmax(
-              rows + static_cast<std::size_t>(5) * vocab_size, vocab_size);
         }
         const auto v1 = Clock::now();
         fwd_seconds += std::chrono::duration<double>(v1 - v0).count();
 
         int accepted = 1;
-        while (accepted < 5 && predicted[accepted - 1] == draft[accepted]) {
+        while (accepted < 6 && predicted[accepted - 1] == draft[accepted]) {
           ++accepted;
         }
         const int corrected = predicted[accepted - 1];
@@ -820,8 +824,11 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     // first-position rejection skips the weight pass entirely.
     if (speculate_sampled && position + tge::models::Qwen2::kSpeculativeBatch <=
                                  model->max_context()) {
+      // Sampled path keeps the historical five-deep draft shape: proposals
+      // and verify rows are byte-identical to before this change, so the
+      // distribution-preserving accept loop is untouched.
       int draft[5];
-      if (prompt_lookup_draft(history, draft)) {
+      if (prompt_lookup_draft(history, draft, 5)) {
         if (static_cast<int>(scores.size()) < vocab_size) {
           scores.assign(static_cast<std::size_t>(vocab_size), 0.0F);
         }
@@ -1567,13 +1574,14 @@ bool parse_float(const char* text, float& value) {
 /// history token; draft[i + 1] follows draft[i]. Proposes only observed
 /// continuations (never invents a token); the verifier still decides.
 /// One linear pass per chain step with a small distinct-successor set.
-bool bigram_chain_draft(const std::vector<int>& history, int* draft) {
+/// `need` is 6 for the greedy deep draft, 5 for the sampled path.
+bool bigram_chain_draft(const std::vector<int>& history, int* draft, int need) {
   const int length = static_cast<int>(history.size());
-  if (length < 2) {
+  if (length < 2 || need < 1 || need > 6) {
     return false;
   }
   int prev = history.back();
-  for (int index = 0; index < 5; ++index) {
+  for (int index = 0; index < need; ++index) {
     int best = -1;
     int best_count = 0;
     // Small distinct-successor set: text bigrams fan out narrowly, so a
@@ -1614,23 +1622,26 @@ bool bigram_chain_draft(const std::vector<int>& history, int* draft) {
   return true;
 }
 
-/// Drafts the continuation of a near-match of the last two to five tokens
+/// Drafts the continuation of a near-match of the last two to six tokens
 /// with exactly one substitution. Last resort after the exact spans and the
 /// bigram chain: both abstain only where the tail is novel, and a single
-/// novel token still leaves a 4-of-5 match worth proposing. Windows are tried
-/// most-recent first, longest span at each position first; every proposal is
-/// observed history the verifier still decides, and a first-position miss
-/// skips the weight pass entirely (greedy d0 pre-check, sampled pre-judge),
-/// so a wrong proposal costs microseconds, never a pass. Returns false when
-/// no window is within one substitution.
-bool gapped_draft(const std::vector<int>& history, int* draft) {
+/// novel token still leaves a near-full match worth proposing. Windows are
+/// tried most-recent first, longest span at each position first; every
+/// proposal is observed history the verifier still decides, and a
+/// first-position miss skips the weight pass entirely (greedy d0 pre-check,
+/// sampled pre-judge), so a wrong proposal costs microseconds, never a pass.
+/// Returns false when no window is within one substitution.
+bool gapped_draft(const std::vector<int>& history, int* draft, int need) {
   const int length = static_cast<int>(history.size());
+  if (need < 1 || need > 6) {
+    return false;
+  }
   for (int end = length - 2; end >= 1; --end) {
-    if (length - 1 - end < 5) {
+    if (length - 1 - end < need) {
       continue;
     }
-    for (int span = 5; span >= 2; --span) {
-      if (span > end + 1 || length < span + 5) {
+    for (int span = 6; span >= 2; --span) {
+      if (span > end + 1 || length < span + need) {
         continue;
       }
       int mismatches = 0;
@@ -1645,7 +1656,7 @@ bool gapped_draft(const std::vector<int>& history, int* draft) {
       if (mismatches != 1) {
         continue;
       }
-      for (int index = 0; index < 5; ++index) {
+      for (int index = 0; index < need; ++index) {
         draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
       }
       return true;
@@ -1655,38 +1666,54 @@ bool gapped_draft(const std::vector<int>& history, int* draft) {
 }
 
 /// Drafts the continuation of the latest earlier match of the last one to
-/// five tokens. Returns five tokens or nothing. Longer spans are tried
+/// six tokens. Returns `need` tokens or nothing. Longer spans are tried
 /// first: a longer context match accepts at a higher rate, and the fallback
 /// to shorter spans keeps every proposal the old 3..1 range would have made.
 /// When no exact span matches, a bigram chain proposes from single-token
 /// statistics instead of abstaining; when the chain also abstains (novel
 /// tail), one-substitution windows get the last word.
-bool prompt_lookup_draft(const std::vector<int>& history, int* draft) {
+/// `need` is 6 on the greedy path (the verifier's whole batch, no padding)
+/// and 5 on the sampled path (historical shape, zero behavioral delta).
+/// Greedy tries the deep draft first and falls back to the historical
+/// five-deep form, so every proposal the old code made is preserved.
+bool prompt_lookup_draft(const std::vector<int>& history, int* draft, int need) {
+  if (need < 1 || need > 6) {
+    return false;
+  }
   const int length = static_cast<int>(history.size());
-  for (int span = 5; span >= 1; --span) {
-    if (length < span + 5) {
-      continue;
+  // Deep draft first; the historical five-deep form is the fallback, so a
+  // short history that cannot supply six continuations behaves exactly as
+  // before. The sampled path (need 5) runs a single identical pass.
+  for (int pass = 0; pass < 2 && (pass == 0 || need > 5); ++pass) {
+    const int want = (pass == 0) ? need : 5;
+    for (int span = 6; span >= 1; --span) {
+      if (length < span + want) {
+        continue;
+      }
+      const auto suffix_begin = history.begin() + (length - span);
+      const auto suffix_end = history.end();
+      for (int end = length - 2; end >= span - 1; --end) {
+        if (length - 1 - end < want) {
+          continue;
+        }
+        if (!std::equal(suffix_begin, suffix_end,
+                        history.begin() + (end - span + 1))) {
+          continue;
+        }
+        for (int index = 0; index < want; ++index) {
+          draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
+        }
+        return true;
+      }
     }
-    const auto suffix_begin = history.begin() + (length - span);
-    const auto suffix_end = history.end();
-    for (int end = length - 2; end >= span - 1; --end) {
-      if (length - 1 - end < 5) {
-        continue;
-      }
-      if (!std::equal(suffix_begin, suffix_end,
-                      history.begin() + (end - span + 1))) {
-        continue;
-      }
-      for (int index = 0; index < 5; ++index) {
-        draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
-      }
+    if (bigram_chain_draft(history, draft, want)) {
+      return true;
+    }
+    if (gapped_draft(history, draft, want)) {
       return true;
     }
   }
-  if (bigram_chain_draft(history, draft)) {
-    return true;
-  }
-  return gapped_draft(history, draft);
+  return false;
 }
 
 int run_generate(int argc, char** argv) {

@@ -3684,3 +3684,37 @@ path excluded). Zero behavior change for single-prefill callers;
 continuous slots and multi-turn loops benefit automatically. Fresh
 build green, suite green, story + reasoning ids identical to every
 prior run. Verdict: kept.
+
+## 71. Six-deep greedy draft with five-deep fallback (2026-11-04)
+
+The verifier runs a six-row batch but the greedy drafter only proposed
+five, padding the last row with a zero token. The greedy path now drafts
+six (`apps/cli/main.cpp`: `prompt_lookup_draft` takes `need`, greedy
+passes 6, the whole batch carries drafts); the historical five-deep form
+(exact spans, bigram chain, gapped windows) is the fallback inside the
+same function, so a short history that cannot supply six continuations
+behaves exactly as before. The sampled path keeps `need` 5: proposals
+and verify rows byte-identical to before, accept loop untouched. The
+penalized path penalizes all six rows including the bonus (row 5 was
+unpenalized before, but unreachable with five drafts), so the bonus keeps
+exact single-token penalty semantics. No numerics change anywhere the
+model reads: drafter-only, verifier-gated, no fidelity run owed.
+
+Llama-3.2-3B Q4_K_M, `--threads 6`, `--prefetch`, periodic 40-token
+history, 15 timed tokens, interleaved best-of-3, old vs new binaries:
+
+| round | base acceptance | new acceptance | base best | new best | ids |
+|---|---|---|---|---|---|
+| R1 no-penalty | 5.00/step 3/3 | 6.00/step 3/3 | 7.23 | 8.85 (+22%) | identical |
+| R2 no-penalty (reversed) | 5.00/step 3/3 | 6.00/step 3/3 | 8.77 | 10.52 (+20%) | identical |
+| R3 prod no-penalty | 5.00/step 3/3 | 6.00/step 3/3 | 5.93 | 5.60 (-6%, one collapse arm) | identical |
+| penalty 1.1/w4 x2 | 5.00/step 2/2 | 6.00/step 2/2 | -- | -- | identical |
+
+Acceptance is deterministic: 6.00 vs 5.00 in all 13 new-binary runs, 5.00
+in all 13 base runs — +20% tokens per verify, +17.6% tokens per
+verify+forward pair (20 vs 17 emitted per 3 steps). Wall-clock converts
+when the box is quiet (R1/R2: +20-22%); R3 ran loaded and the pairs are
+drift-dominated, reported as-is. Story abstains 0 steps on both with the
+historical ids (`11 304 ... 11 1070`); reasoning + creative texts
+identical; 11-token periodic history identical (1.00/step both). Tests
+141/141 on the shipping binary. Verdict: kept.
