@@ -175,9 +175,16 @@ using DequantBatchFn = void (*)(const DequantBatchArgs& args,
                                 const GemvConfig& config);
 
 void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
-                             const GemvConfig& config);
+                              const GemvConfig& config);
 void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
                                const GemvConfig& config);
+
+/// Integer Q4_K/Q6_K x Q8_K batch prototype (bench-only, behind
+/// `bench batch --kernel kq8`; see measurement-log §57). Same banding
+/// as gemv_dequant_batch_avx2; activations are quantized to Q8_K once
+/// per call and every dot runs the integer maddubs path.
+void gemv_dequant_batch_kq8_avx2(const DequantBatchArgs& args,
+                                 const GemvConfig& config);
 
 /// One query head's attention against its key/value cache.
 ///

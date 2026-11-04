@@ -422,8 +422,369 @@ TGE_TEST(q4k_avx2_nibble_halves_are_distinct) {
                                 values.data(), kBlockElements);
 
   // The low nibble is zero, so the first half evaluates to -m1 and the second
-  // to 15*d2 - m2. They differ unless the two halves were read from the wrong
-  // byte range or swapped.
+  // to 15*d2 - m2. They differ unless the two halves were taken from the wrong
+  // byte range, or swapped.
   TGE_CHECK(values[0] != values[32]);
   TGE_CHECK(values[32] > values[0]);
+}
+
+void expect_kq8_matches(tge::cpu::QuantKind kind,
+                          const std::uint8_t* matrix, int rows, int cols,
+                          int tokens, std::uint32_t seed, int input_mode) {
+  // input_mode: 0 = zeros (exact-zero tripwire), 1 = uniform random
+  // (quantization price), 2 = constant 0.5 (transcription proof: the Q8
+  // quantizer is near-exact on constants, so any residual above 1e-3 is a
+  // porting bug, not activation-quantization price).
+  std::vector<float> input(static_cast<std::size_t>(tokens) * cols);
+  std::vector<float> reference(static_cast<std::size_t>(tokens) * rows, 0.0F);
+  std::vector<float> integer(static_cast<std::size_t>(tokens) * rows, 0.0F);
+
+  if (input_mode == 1) {
+    std::uint32_t state = seed | 1u;
+    for (float& value : input) {
+      state = state * 1664525u + 1013904223u;
+      value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+    }
+  } else if (input_mode == 2) {
+    std::fill(input.begin(), input.end(), 0.5F);
+  }
+
+  tge::cpu::DequantBatchArgs args;
+  args.data = matrix;
+  args.kind = kind;
+  args.rows = rows;
+  args.cols = cols;
+  args.input = input.data();
+  args.tokens = tokens;
+
+  // Oracle: the shipped float batch path (TGE-verified bit-exact vs its own
+  // AVX2 twin). The integer path must track it up to the Q8-activation
+  // quantization price — any transcription bug lands on top of the price.
+  args.out = reference.data();
+  tge::cpu::gemv_dequant_batch_scalar(args, tge::cpu::GemvConfig{1});
+
+  args.out = integer.data();
+  tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+  tge::cpu::gemv_dequant_batch_kq8_avx2(
+      args, tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0), &pool});
+
+  // Three-way triangulation lives in its own test below
+  // (dequant_batch_kq8_avx2_matches_generic), defined after the kq8ref
+  // namespace.
+
+  if (input_mode == 0) {
+    // Zero activations quantize to d == 0, so every dot is exactly 0
+    // regardless of the weight bytes: a hard tripwire for pointer and
+    // layout transcription errors.
+    for (const float value : integer) {
+      if (value != 0.0F) {
+        std::fprintf(stderr,
+                     "    kq8 zero-input kind=%d rows=%d cols=%d tokens=%d "
+                     "value=%g\n",
+                     static_cast<int>(kind), rows, cols, tokens,
+                     static_cast<double>(value));
+        tgetest::fail("kq8 zero input exactly zero", __FILE__, __LINE__);
+      }
+    }
+    return;
+  }
+
+  const float worst = tge::ops::max_abs_diff(
+      reference.data(), integer.data(),
+      static_cast<std::int64_t>(reference.size()));
+  // The test matrices are random bytes, so reference magnitudes are
+  // arbitrary (scales/d are unconstrained); only a relative price is
+  // meaningful. Measured activation-quantization price on these adversarial
+  // inputs is <= ~1% (generic scalar vs float oracle); the 5% gate locks
+  // that price with margin while failing gross transcription slips (the
+  // k4-shuffle-table corruption measured 20-80x; Q4K AVX2 vs independent
+  // generic scalar is gated separately at 1e-3).
+  float reference_peak = 0.0F;
+  for (const float value : reference) {
+    const float magnitude = value < 0.0F ? -value : value;
+    if (magnitude > reference_peak) {
+      reference_peak = magnitude;
+    }
+  }
+  const float relative =
+      reference_peak > 0.0F ? worst / reference_peak : 0.0F;
+  // Constant inputs quantize near-exactly, so the gate is tight: any
+  // residual above it is transcription, not price. Random inputs carry the
+  // activation-quantization price (large on adversarial random weights —
+  // see §57), gated loosely to lock it while catching gross slips.
+  const float relative_tolerance = input_mode == 2 ? 1e-3F : 0.05F;
+  if (!(relative <= relative_tolerance)) {
+    std::fprintf(stderr,
+                 "    kq8 batch kind=%d rows=%d cols=%d tokens=%d "
+                 "worst=%g refpeak=%g relative=%g tolerance=%g\n",
+                 static_cast<int>(kind), rows, cols, tokens,
+                  static_cast<double>(worst), static_cast<double>(reference_peak),
+                  static_cast<double>(relative),
+                  static_cast<double>(relative_tolerance));
+    tgetest::fail("kq8 batch matches float oracle", __FILE__, __LINE__);
+  }
+}
+
+namespace kq8ref {
+// Test-local Q4_K/Q8_K block layouts (field order identical to ggml at
+// cd8427d and to the prototype TU; transient only).
+struct Q4KBlock {
+  std::uint16_t d_bits = 0;
+  std::uint16_t dmin_bits = 0;
+  std::uint8_t scales[12] = {};
+  std::uint8_t qs[128] = {};
+};
+struct Q8KBlockR {
+  float d = 0.0F;
+  std::int8_t qs[256] = {};
+  std::int16_t bsums[16] = {};
+};
+static_assert(sizeof(Q4KBlock) == 144);
+static_assert(sizeof(Q8KBlockR) == 292);
+
+// Scalar port of ggml_vec_dot_q4_K_q8_K_generic
+// (ggml/src/ggml-cpu/quants.c at cd8427d). Independent oracle for the AVX2
+// transcription: same math, no shuffles, no FMA (plain order left to the
+// compiler is fine here — the comparison tolerance absorbs ulps).
+float dot_q4k_q8k_generic(const Q4KBlock* x, const Q8KBlockR* y, int blocks) {
+  static const std::uint32_t kmask1 = 0x3F3F3F3F;
+  static const std::uint32_t kmask2 = 0x0F0F0F0F;
+  static const std::uint32_t kmask3 = 0x03030303;
+
+  std::uint32_t utmp[4] = {};
+  const std::uint8_t* scales = reinterpret_cast<const std::uint8_t*>(&utmp[0]);
+  const std::uint8_t* mins = reinterpret_cast<const std::uint8_t*>(&utmp[2]);
+
+  std::int8_t aux8[256] = {};
+  std::int16_t aux16[8] = {};
+  float sums[8] = {};
+  std::int32_t aux32[8] = {};
+
+  float sumf = 0.0F;
+  for (int i = 0; i < blocks; ++i) {
+    const std::uint8_t* q4 = x[i].qs;
+    const std::int8_t* q8 = y[i].qs;
+    std::memset(aux32, 0, sizeof(aux32));
+    std::int8_t* a = aux8;
+    for (int j = 0; j < 4; ++j) {
+      for (int l = 0; l < 32; ++l) {
+        a[l] = static_cast<std::int8_t>(q4[l] & 0x0F);
+      }
+      a += 32;
+      for (int l = 0; l < 32; ++l) {
+        a[l] = static_cast<std::int8_t>(q4[l] >> 4);
+      }
+      a += 32;
+      q4 += 32;
+    }
+    std::memcpy(utmp, x[i].scales, 12);
+    utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+    const std::uint32_t uaux = utmp[1] & kmask1;
+    utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+    utmp[2] = uaux;
+    utmp[0] &= kmask1;
+
+    int sumi = 0;
+    for (int j = 0; j < 16; ++j) {
+      sumi += y[i].bsums[j] * mins[j / 2];
+    }
+    a = aux8;
+    int is = 0;
+    for (int j = 0; j < 8; ++j) {
+      const std::int32_t scale = scales[is++];
+      for (int rep = 0; rep < 4; ++rep) {
+        for (int l = 0; l < 8; ++l) {
+          aux16[l] = static_cast<std::int16_t>(q8[l] * a[l]);
+        }
+        for (int l = 0; l < 8; ++l) {
+          aux32[l] += scale * aux16[l];
+        }
+        q8 += 8;
+        a += 8;
+      }
+    }
+    const float d =
+        tge::cpu::half_to_float(x[i].d_bits) * y[i].d;
+    for (int l = 0; l < 8; ++l) {
+      sums[l] += d * static_cast<float>(aux32[l]);
+    }
+    const float dmin =
+        tge::cpu::half_to_float(x[i].dmin_bits) * y[i].d;
+    sumf -= dmin * static_cast<float>(sumi);
+  }
+  for (int l = 0; l < 8; ++l) {
+    sumf += sums[l];
+  }
+  return sumf;
+}
+
+// Test-local copy of the prototype's scalar activation quantizer (same
+// semantics; determinism across the two copies is itself a check).
+inline int kq8ref_nearest_int(float fval) {
+  float shifted = fval + 12582912.0F;
+  int bits = 0;
+  std::memcpy(&bits, &shifted, sizeof(bits));
+  return (bits & 0x007FFFFF) - 0x00400000;
+}
+
+inline void quantize(const float* x, Q8KBlockR* y, int count) {
+  const int blocks = count / 256;
+  for (int i = 0; i < blocks; ++i) {
+    std::memset(&y[i], 0, sizeof(y[i]));
+    float max = 0.0F;
+    float amax = 0.0F;
+    for (int j = 0; j < 256; ++j) {
+      const float ax = x[j] < 0.0F ? -x[j] : x[j];
+      if (ax > amax) {
+        amax = ax;
+        max = x[j];
+      }
+    }
+    if (amax == 0.0F) {
+      x += 256;
+      continue;
+    }
+    const float iscale = -127.0F / max;
+    for (int j = 0; j < 256; ++j) {
+      const int v = kq8ref_nearest_int(iscale * x[j]);
+      y[i].qs[j] = static_cast<std::int8_t>(v < 127 ? v : 127);
+    }
+    for (int j = 0; j < 16; ++j) {
+      int sum = 0;
+      for (int k = 0; k < 16; ++k) {
+        sum += y[i].qs[j * 16 + k];
+      }
+      y[i].bsums[j] = static_cast<std::int16_t>(sum);
+    }
+    y[i].d = 1.0F / iscale;
+    x += 256;
+  }
+}
+}  // namespace kq8ref
+
+// Three-way triangulation for the Q4_K integer path: the generic scalar
+// port of ggml's own dot shares the quantizer input with the AVX2 path but
+// not its intrinsics. generic==AVX2 plus both-off-float means a
+// formula/premise gap; generic-off-AVX2 means a transcription bug.
+TGE_TEST(dequant_batch_kq8_avx2_matches_generic) {
+  constexpr int kRows = 3;
+  for (const int cols : {1024, 8192}) {
+    const int blocks = cols / 256;
+    const std::vector<std::uint8_t> q4k =
+        make_q4_k_matrix(kRows * cols / kBlockElements, 0xB4710201u);
+    for (const int tokens : {1, 7}) {
+      // Random inputs (uniform) and constant inputs (0.5).
+      for (int mode = 1; mode <= 2; ++mode) {
+        std::vector<float> input(static_cast<std::size_t>(tokens) * cols);
+        if (mode == 1) {
+          std::uint32_t state = 0x11111111u;
+          for (float& value : input) {
+            state = state * 1664525u + 1013904223u;
+            value =
+                (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+          }
+        } else {
+          std::fill(input.begin(), input.end(), 0.5F);
+        }
+
+        tge::cpu::DequantBatchArgs args;
+        args.data = q4k.data();
+        args.kind = tge::cpu::QuantKind::Q4_K;
+        args.rows = kRows;
+        args.cols = cols;
+        args.input = input.data();
+        args.tokens = tokens;
+        std::vector<float> reference(
+            static_cast<std::size_t>(tokens) * kRows, 0.0F);
+        std::vector<float> integer(
+            static_cast<std::size_t>(tokens) * kRows, 0.0F);
+        args.out = reference.data();
+        tge::cpu::gemv_dequant_batch_scalar(args, tge::cpu::GemvConfig{1});
+        args.out = integer.data();
+        tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+        tge::cpu::gemv_dequant_batch_kq8_avx2(
+            args, tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0),
+                                       &pool});
+
+        std::vector<kq8ref::Q8KBlockR> wdata(
+            static_cast<std::size_t>(tokens) *
+            static_cast<std::size_t>(blocks));
+        for (int token = 0; token < tokens; ++token) {
+          kq8ref::quantize(
+              input.data() + static_cast<std::size_t>(token) * cols,
+              wdata.data() + static_cast<std::size_t>(token) * blocks, cols);
+        }
+        float worst_avx = 0.0F;
+        float worst_price = 0.0F;
+        float peak = 0.0F;
+        for (int row = 0; row < kRows; ++row) {
+          const auto* weights = reinterpret_cast<const kq8ref::Q4KBlock*>(
+              q4k.data() + static_cast<std::size_t>(row) *
+                               static_cast<std::size_t>(cols) / 256 * 144);
+          for (int token = 0; token < tokens; ++token) {
+            const float generic = kq8ref::dot_q4k_q8k_generic(
+                weights,
+                wdata.data() + static_cast<std::size_t>(token) * blocks,
+                blocks);
+            const float avx =
+                integer[static_cast<std::size_t>(token) * kRows + row];
+            const float ref =
+                reference[static_cast<std::size_t>(token) * kRows + row];
+            const float da =
+                generic - avx < 0.0F ? avx - generic : generic - avx;
+            const float dp =
+                generic - ref < 0.0F ? ref - generic : generic - ref;
+            if (da > worst_avx) {
+              worst_avx = da;
+            }
+            if (dp > worst_price) {
+              worst_price = dp;
+            }
+            const float m = ref < 0.0F ? -ref : ref;
+            if (m > peak) {
+              peak = m;
+            }
+          }
+        }
+        const float rel_avx = peak > 0.0F ? worst_avx / peak : 0.0F;
+        const float rel_price = peak > 0.0F ? worst_price / peak : 0.0F;
+        if (!(rel_avx <= 1e-3F)) {
+          std::fprintf(stderr,
+                       "    kq8 tri cols=%d tokens=%d mode=%d peak=%g "
+                       "avx-vs-generic=%g generic-vs-float=%g\n",
+                       cols, tokens, mode, static_cast<double>(peak),
+                       static_cast<double>(rel_avx),
+                       static_cast<double>(rel_price));
+          tgetest::fail("kq8 avx2 matches generic scalar", __FILE__,
+                        __LINE__);
+        }
+      }
+    }
+  }
+}
+
+TGE_TEST(dequant_batch_kq8_matches_float_oracle) {
+  // Same matrix as the shipped batch differential. bsums tails at cols 3328
+  // and the tokens == 1 integer path are both covered.
+  constexpr int kRows = 3;
+  for (const int cols : {1024, 3072, 3328, 8192}) {
+    for (const int tokens : {1, 7, 64}) {
+      const std::vector<std::uint8_t> q4k =
+          make_q4_k_matrix(kRows * cols / kBlockElements, 0xB4710201u);
+      expect_kq8_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows, cols,
+                         tokens, 0x11111111u, 1);
+      expect_kq8_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows, cols,
+                         tokens, 0u, 0);
+      expect_kq8_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows, cols,
+                         tokens, 0u, 2);
+      const std::vector<std::uint8_t> q6k =
+          make_q6_k_matrix(kRows * cols / kBlockElements, 0xB4710601u);
+      expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
+                         tokens, 0x66666666u, 1);
+      expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
+                         tokens, 0u, 0);
+      expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
+                         tokens, 0u, 2);
+    }
+  }
 }
