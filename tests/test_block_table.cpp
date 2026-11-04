@@ -2,6 +2,7 @@
 
 #include "harness.hpp"
 #include "tge/models/block_table.hpp"
+#include "tge/models/kv_block_layout.hpp"
 
 namespace {
 
@@ -89,6 +90,45 @@ TGE_TEST(block_table_bad_ids_throw) {
   threw = false;
   try {
     table.release(0);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+}
+
+TGE_TEST(kv_layout_k_round_trip_identity) {
+  const int rows = 4, dim = 8;
+  std::vector<float> src(static_cast<std::size_t>(rows * dim));
+  for (std::size_t i = 0; i < src.size(); ++i) src[i] = static_cast<float>(i) * 0.25F + 1.0F;
+  auto col = tge::models::reorder_k_block_to_column_major(src.data(), rows, dim);
+  TGE_CHECK(col.size() == src.size());
+  // Column-major spot check: col[d * rows + r] == src[r * dim + d].
+  TGE_CHECK(col[static_cast<std::size_t>(1 * rows + 2)] == src[static_cast<std::size_t>(2 * dim + 1)]);
+  auto back = tge::models::reorder_k_block_to_row_major(col.data(), rows, dim);
+  TGE_CHECK(back.size() == src.size());
+  for (std::size_t i = 0; i < src.size(); ++i) TGE_CHECK(back[i] == src[i]);
+}
+
+TGE_TEST(kv_layout_v_row_major_identity) {
+  const int rows = 3, dim = 5;
+  std::vector<float> src(static_cast<std::size_t>(rows * dim), 2.5F);
+  src[0] = -1.0F;
+  auto out = tge::models::reorder_v_block_row_major(src.data(), rows, dim);
+  TGE_CHECK(out.size() == src.size());
+  for (std::size_t i = 0; i < src.size(); ++i) TGE_CHECK(out[i] == src[i]);
+}
+
+TGE_TEST(kv_layout_gather_blocks_order) {
+  const int dim = 2;
+  std::vector<std::vector<float>> blocks = {{1.0F, 2.0F}, {3.0F, 4.0F}, {5.0F, 6.0F}};
+  const int table[] = {2, 0};
+  auto out = tge::models::gather_blocks_row_major(blocks, table, 2, dim);
+  TGE_CHECK(out.size() == 4);
+  TGE_CHECK(out[0] == 5.0F && out[1] == 6.0F && out[2] == 1.0F && out[3] == 2.0F);
+  bool threw = false;
+  const int bad[] = {9};
+  try {
+    tge::models::gather_blocks_row_major(blocks, bad, 1, dim);
   } catch (const std::runtime_error&) {
     threw = true;
   }

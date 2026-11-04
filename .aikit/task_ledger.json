@@ -5,23 +5,12 @@
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793814009.450271,
+    "updated_at": 1793814100.1235003,
     "owner": "kilo:impl",
     "started_by": "kilo:impl",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-TOK",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2]+[3/3] Llama tokenizer parity done - checklists: passed; 24/24 corpus identical incl digits; templated end-to-end near-tie-consistent; Qwen suite green; 78/78 tests",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793632839.6866298,
-      "timestamp_str": "2026-11-02 18:20:39",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-LLAMA-TOK",
       "phase": "completed",
@@ -275,6 +264,17 @@
       "status": "in_progress",
       "timestamp": 1793814009.450271,
       "timestamp_str": "2026-11-04 20:40:09",
+      "agent": "kilo:impl"
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[3/5] Wave 1 step 2 done - checklists: passed; KV layout helpers plus 3 tests, no wiring, 135/135, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793814100.1235003,
+      "timestamp_str": "2026-11-04 20:41:40",
       "agent": "kilo:impl"
     }
   ]

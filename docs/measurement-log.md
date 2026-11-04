@@ -3606,3 +3606,13 @@ Suite: 132/132 pass (6 new block_table OK).
 `python aikit.py check aegean-tge` 4/4 passed.
 Live bench skipped per no-run constraint; falsifier gates for the wiring
 step remain: 8x32 >=58.3 t/s, identical ids, KL<=1e-9. Verdict: kept.
+
+## 66. KV block layout helpers plus 3 unit tests, no engine wiring (2026-11-04)
+
+Wave 1 step 2 for IDEA-1585: `include/tge/models/kv_block_layout.hpp`
+(K column-major / V row-major reorder, block gather; exact round-trip,
+fail-loud) plus 3 tests in `tests/test_block_table.cpp`.
+Cache untouched; no behavior delta by construction.
+Suite: 135/135 pass (3 new kv_layout OK).
+`python aikit.py check aegean-tge` 4/4 passed.
+Live bench skipped per no-run constraint. Verdict: kept.
