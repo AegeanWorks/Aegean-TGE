@@ -294,7 +294,8 @@ class Qwen2 {
   void matvec(const Matrix& weight, const float* input, float* output,
               const cpu::Q8Quantized* quantized = nullptr) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
-                    int tokens, const cpu::Q8Quantized* quantized = nullptr) const;
+                    int tokens, const cpu::Q8Quantized* quantized = nullptr,
+                    bool float_only = false) const;
   /// Final vocabulary projection for one decoded token: the CPU rms_norm
   /// into h_ stays at the call site; this tries the single-sync GPU GEMV
   /// (one H2D + one D2H) when the static winners hold and the backend is

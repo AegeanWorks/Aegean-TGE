@@ -865,7 +865,8 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
 
 void Qwen2::batch_matvec(const Matrix& weight, const float* input,
                          float* output, int tokens,
-                         const cpu::Q8Quantized* quantized) const {
+                         const cpu::Q8Quantized* quantized,
+                         bool float_only) const {
   if (tokens <= 0) {
     return;
   }
@@ -940,7 +941,10 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     // path (quantizer costs more than it saves, measured 0.8x), and the
     // scalar oracle keeps the exact path (fidelity must price kq8, never
     // assume it) — same `clean` idiom as the GPU/vNNI gates.
-    if (kq8_ && !scalar_kernels_ && tokens > 1 &&
+    // forward_batch forces float: mixed decode/prompt batches must use
+    // occupancy-invariant math, else identical requests diverge on
+    // near-tie flips (continuous-batch LEAK, 2026-11-04).
+    if (kq8_ && !scalar_kernels_ && !float_only && tokens > 1 &&
         (kind == cpu::QuantKind::Q4_K || kind == cpu::QuantKind::Q6_K)) {
       cpu::gemv_dequant_batch_kq8_avx2(args, config);
     } else {
@@ -1472,11 +1476,11 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
               : cpu::Q8Quantized{};
     const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
     batch_matvec(layer.wq, batch_h_.data(), batch_q_.data(), count,
-                 q_attn_in_ptr);
+                 q_attn_in_ptr, true);
     batch_matvec(layer.wk, batch_h_.data(), batch_k_.data(), count,
-                 q_attn_in_ptr);
+                 q_attn_in_ptr, true);
     batch_matvec(layer.wv, batch_h_.data(), batch_v_.data(), count,
-                 q_attn_in_ptr);
+                 q_attn_in_ptr, true);
 
     for (int token = 0; token < count; ++token) {
       const int position = positions[token];
@@ -1566,7 +1570,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
         vnni_ ? quantize_activations(batch_attn_.data(), count, dim)
               : cpu::Q8Quantized{};
     batch_matvec(layer.wo, batch_attn_.data(), batch_h_.data(), count,
-                 vnni_ ? &q_attn_out : nullptr);
+                 vnni_ ? &q_attn_out : nullptr, true);
     for (int token = 0; token < count; ++token) {
       float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
       const float* residual =
@@ -1585,9 +1589,9 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
         vnni_ ? quantize_activations(batch_h_.data(), count, dim)
               : cpu::Q8Quantized{};
     batch_matvec(layer.w_gate, batch_h_.data(), batch_gate_.data(), count,
-                 vnni_ ? &q_ffn : nullptr);
+                 vnni_ ? &q_ffn : nullptr, true);
     batch_matvec(layer.w_up, batch_h_.data(), batch_up_.data(), count,
-                 vnni_ ? &q_ffn : nullptr);
+                 vnni_ ? &q_ffn : nullptr, true);
     const std::size_t activation_elements =
         static_cast<std::size_t>(count) * static_cast<std::size_t>(ffn);
     silu_gated(batch_gate_.data(), batch_up_.data(),
@@ -1597,7 +1601,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
         vnni_ ? quantize_activations(batch_gate_.data(), count, ffn)
               : cpu::Q8Quantized{};
     batch_matvec(layer.w_down, batch_gate_.data(), batch_h_.data(), count,
-                 vnni_ ? &q_down : nullptr);
+                 vnni_ ? &q_down : nullptr, true);
     for (int token = 0; token < count; ++token) {
       float* x = batch_x_.data() + static_cast<std::size_t>(token) * dim;
       const float* residual =
@@ -1617,7 +1621,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
       vnni_ ? quantize_activations(batch_h_.data(), count, dim)
             : cpu::Q8Quantized{};
   batch_matvec(output_, batch_h_.data(), logits_batch_.data(), count,
-               vnni_ ? &q_out : nullptr);
+               vnni_ ? &q_out : nullptr, true);
   return logits_batch_.data();
 }
 
