@@ -77,11 +77,16 @@ int resolve_thread_count(int requested) {
 int resolve_decode_threads() {
   static const int threads = [] {
     const CpuInfo info = detect();
-    if (info.topology.performance_cores > 0) {
-      return static_cast<int>(info.topology.performance_cores);
-    }
+    // H3 (2026-11-04): decode is unpinned by default (§28ab), so one worker
+    // per physical core beats one per P-core: story decode threads-10 best
+    // 6.72 t/s vs threads-6 best 4.79 t/s (+40%, 3/3 interleaved pairs,
+    // ids identical, Llama-3B Q4_K_M). Physical cores first; P-cores stay
+    // the fallback for topologies without a physical count.
     if (info.topology.physical_cores > 0) {
       return static_cast<int>(info.topology.physical_cores);
+    }
+    if (info.topology.performance_cores > 0) {
+      return static_cast<int>(info.topology.performance_cores);
     }
     return core::default_thread_count();
   }();
