@@ -1153,6 +1153,11 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
 
 int command_plan(const std::string& path, int context, int sessions,
                  double bandwidth_gbs) {
+  if (context <= 0 || sessions <= 0 || bandwidth_gbs <= 0.0) {
+    std::fprintf(stderr,
+                 "plan: --context, --sessions and --bandwidth must be positive\n");
+    return 2;
+  }
   std::string error;
   try {
     const auto start = Clock::now();

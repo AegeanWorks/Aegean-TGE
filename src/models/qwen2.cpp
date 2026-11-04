@@ -331,7 +331,13 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     const PlacementDecision decision =
         place(plan, static_cast<std::int64_t>(memory::MemoryBudget{}.snapshot().usable),
               model->context_, 1);
-    if (decision.max_context > 0 && decision.max_context < model->context_) {
+    if (!decision.weights_fit) {
+      throw std::runtime_error("plan: " + decision.reason);
+    }
+    if (decision.max_context == 0) {
+      throw std::runtime_error("plan: " + decision.reason);
+    }
+    if (decision.max_context < model->context_) {
       model->context_ = decision.max_context;
     }
 
