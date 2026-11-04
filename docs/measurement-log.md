@@ -3636,3 +3636,51 @@ gguf prefetch untouched) plus `tests/test_io_advice.cpp` (2 cases).
 Suite: 141/141 pass (2 new OK). `python aikit.py check aegean-tge`
 4/4 passed. Wiring (advise_range wrapper + bounded KV prefetcher) gated
 on >=30% RSS cut at parity. Verdict: kept.
+
+## 69. Decode default to physical cores (H3, kept: +40% story, ids identical)
+
+`resolve_decode_threads()` preferred P-cores (6) on hybrid Windows; the
+decode pools are unpinned since §28ab, so one worker per physical core
+(10 here) beats one per P-core. Same-window interleaved A/B, Llama-3B
+Q4_K_M, warm page cache:
+
+| story decode, 15 tok | threads 6 | threads 10 unpinned |
+|---|---|---|
+| run 1 / 2 / 3 | 4.32 / 4.13 / 4.79 t/s | 4.97 / 6.41 / 6.72 t/s |
+| best | 4.79 | 6.72 (**+40%**) |
+
+| 241-tok prefill, threads 6 fixed | prefill-threads 6 | default (16) |
+|---|---|---|
+| best of 3 | 20.8 t/s | 37.8 t/s (**+82%**) |
+
+3/3 pairs favor 10 on decode and 3/3 favor 16 on prefill; story and
+reasoning ids byte-identical 6 vs 10 (placement only, no arithmetic, so
+no fidelity owed). Post-change default-vs-explicit-6 re-check: 3.58 vs
+2.88 and 4.13 vs 1.01 (second 6-arm hit a load spike). Caveats: box
+loaded (absolutes 1-7 vs the 8.6-9.6 baseline), single session, so the
+direction is 5/5 consistent but the magnitude will move on a quiet box.
+Prefill needed no code (default was already all-logical). Tests green,
+`src/core/dispatch.cpp` only (8+/3-). Verdict: kept as the default with
+the per-machine caveat.
+
+## 70. Shared-prefix skip in prefill_run (H1, kept: ~50% 2nd-turn prefill)
+
+Spike first (throwaway worktree, env-guarded hook + `spike-h1` driver,
+reverted by deleting the worktree): 241-token prompt, 120 shared
+prefix tokens, Llama-3B Q4_K_M, threads 10, best-of-3 warm cache — hit
+(reuse resident prefix rows, compute suffix only) vs miss (full
+recompute): 19.18 vs 41.46 s (54%), 5.45 vs 10.37 s (47%), 18.80 vs
+35.96 s (48%), final-logits memcmp identical 3/3. The ~50% matches the
+prefix fraction (120/241) exactly: prefix compute eliminated, suffix
+at full speed. Thinking set (reasoning + story ids) identical hook
+on vs off.
+
+Production (`670bcd9`, `src/models/qwen2.cpp` +40 lines, no other
+files): always-on per-sequence last-call record in `prefill_run`;
+on a generate-path call extending the same sequence/start with
+identical leading tokens and a non-empty suffix, `consumed` starts at
+the match length (guarded `count > recorded`, verifier `all_logits`
+path excluded). Zero behavior change for single-prefill callers;
+continuous slots and multi-turn loops benefit automatically. Fresh
+build green, suite green, story + reasoning ids identical to every
+prior run. Verdict: kept.
