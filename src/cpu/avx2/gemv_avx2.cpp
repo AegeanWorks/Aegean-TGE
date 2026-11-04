@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <stdexcept>
 
 #include <immintrin.h>
 
@@ -60,6 +61,12 @@ inline float dot_row(const float* row, const float* vector, int cols) {
 void gemv_avx2(const GemvArgs& args, const GemvConfig& config) {
   if (args.rows <= 0 || args.cols <= 0) {
     return;
+  }
+  if (args.matrix == nullptr || args.vector == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_avx2: null matrix/vector/out");
+  }
+  if (args.ldm < args.cols) {
+    throw std::invalid_argument("gemv_avx2: ldm < cols");
   }
 
   const int threads = resolve_thread_count(config.threads);

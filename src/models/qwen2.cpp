@@ -261,6 +261,10 @@ Qwen2Config read_config(const gguf::File& file) {
     throw std::runtime_error(
         "attention head count is not a multiple of the KV head count");
   }
+  if (config.embedding_length % config.head_count != 0) {
+    throw std::runtime_error(
+        "embedding length is not a multiple of the head count");
+  }
 
   // A file that rotates only part of each head (a `rope.dimension_count`
   // below the head width) would silently mis-rotate under the full-head
@@ -707,6 +711,10 @@ Qwen2::Matrix Qwen2::matrix(const char* name) const {
 
   Matrix result;
   result.data = file_.tensor_data(*info);
+  if (info->shape[0] == 0 || info->shape[0] > 2147483647ULL ||
+      info->shape[1] == 0 || info->shape[1] > 2147483647ULL) {
+    throw std::runtime_error(std::string("tensor shape out of range: ") + name);
+  }
   result.cols = static_cast<int>(info->shape[0]);
   result.rows = static_cast<int>(info->shape[1]);
   result.type = info->type;
@@ -734,6 +742,10 @@ Qwen2::Matrix Qwen2::matrix_slice(const char* name, int row_begin,
   }
   if (info->shape.size() != 2) {
     throw std::runtime_error(std::string("tensor is not a matrix: ") + name);
+  }
+  if (info->shape[0] == 0 || info->shape[0] > 2147483647ULL ||
+      info->shape[1] == 0 || info->shape[1] > 2147483647ULL) {
+    throw std::runtime_error(std::string("tensor shape out of range: ") + name);
   }
   const int total_rows = static_cast<int>(info->shape[1]);
   if (row_begin < 0 || rows <= 0 || row_begin + rows > total_rows) {
@@ -779,7 +791,8 @@ const float* Qwen2::vector(const char* name, int expected) const {
   if (info->type != gguf::TensorType::F32) {
     throw std::runtime_error(std::string("expected F32 for ") + name);
   }
-  if (static_cast<int>(info->elements) != expected) {
+  if (expected < 0 ||
+      info->elements != static_cast<std::uint64_t>(expected)) {
     throw std::runtime_error(std::string("wrong length for ") + name);
   }
   return reinterpret_cast<const float*>(file_.tensor_data(*info));

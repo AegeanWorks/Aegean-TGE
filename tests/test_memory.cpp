@@ -138,3 +138,15 @@ TGE_TEST(plan_place_shrink_counts_sessions) {
       tge::models::place(plan, 95, 10, 1);
   TGE_CHECK(single.max_context == 9);
 }
+
+TGE_TEST(budget_release_beyond_reserved_throws) {
+  // Over-release used to clamp to zero and hide double-free accounting.
+  tge::memory::MemoryBudget budget;
+  bool threw = false;
+  try {
+    budget.release(tge::memory::Pool::Scratch, 1);
+  } catch (...) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+}

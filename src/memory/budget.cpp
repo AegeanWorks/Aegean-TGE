@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
 
 #include "tge/memory/system_ram.hpp"
 
@@ -96,7 +97,10 @@ bool MemoryBudget::try_reserve(Pool pool, std::uint64_t bytes) {
 void MemoryBudget::release(Pool pool, std::uint64_t bytes) {
   std::lock_guard<std::mutex> lock(mutex_);
   PoolState& state = state_.pools[static_cast<int>(pool)];
-  state.used = bytes >= state.used ? 0 : state.used - bytes;
+  if (bytes > state.used) {
+    throw std::invalid_argument("budget: release exceeds reserved bytes");
+  }
+  state.used -= bytes;
 }
 
 std::uint64_t MemoryBudget::available(Pool pool) const {

@@ -42,6 +42,14 @@ class Cursor {
   std::string read_string() {
     const std::uint64_t length = read<std::uint64_t>();
     require(length);
+    // Keys and string values are short metadata (names, tokenizer pieces);
+    // a corrupt length up to the file size would otherwise allocate
+    // hundreds of MB before failing. 1 MiB is orders of magnitude above
+    // any honest string seen so far.
+    constexpr std::uint64_t kMaxStringBytes = 1048576;
+    if (length > kMaxStringBytes) {
+      throw std::runtime_error("gguf: string length unreasonable");
+    }
     std::string text(reinterpret_cast<const char*>(position_),
                      static_cast<std::size_t>(length));
     position_ += length;

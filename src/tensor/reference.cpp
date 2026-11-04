@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 
 namespace tge::ops {
 
@@ -15,9 +16,8 @@ void gemm_ref(const cpu::GemmArgs& args, const cpu::GemmConfig& /*config*/) {
     const float* a_row = args.a + static_cast<std::size_t>(row) * args.lda;
     for (int depth = 0; depth < args.k; ++depth) {
       const float scale = a_row[depth];
-      if (scale == 0.0F) {
-        continue;
-      }
+      // No zero-skip: 0*NaN and 0*inf must stay NaN, matching the AVX2
+      // fmadd path. Skipping would return 0 and diverge from the oracle.
       const float* b_row = args.b + static_cast<std::size_t>(depth) * args.ldb;
       for (int col = 0; col < args.n; ++col) {
         c_row[col] += scale * b_row[col];
@@ -27,6 +27,12 @@ void gemm_ref(const cpu::GemmArgs& args, const cpu::GemmConfig& /*config*/) {
 }
 
 void gemv_ref(const cpu::GemvArgs& args, const cpu::GemvConfig& /*config*/) {
+  if (args.matrix == nullptr || args.vector == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_ref: null matrix/vector/out");
+  }
+  if (args.ldm < args.cols) {
+    throw std::invalid_argument("gemv_ref: ldm < cols");
+  }
   for (int row = 0; row < args.rows; ++row) {
     const float* matrix_row =
         args.matrix + static_cast<std::size_t>(row) * args.ldm;

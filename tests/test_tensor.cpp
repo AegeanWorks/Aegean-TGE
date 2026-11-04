@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "harness.hpp"
@@ -213,4 +214,55 @@ TGE_TEST(streaming_kernels_agree_with_scalar) {
   }
   TGE_CHECK_NEAR(
       tge::cpu::sum_stream_avx2(source.data(), count), expected, 1e-1);
+}
+
+TGE_TEST(gemm_ref_zero_times_nan_stays_nan) {
+  // The AVX2 path uses fmadd unconditionally; a zero-skip would return 0
+  // where 0*NaN must stay NaN and diverge the oracle.
+  float a[1] = {0.0F};
+  float b[1] = {std::numeric_limits<float>::quiet_NaN()};
+  float c[1] = {1.0F};
+  tge::cpu::GemmArgs args;
+  args.m = 1;
+  args.n = 1;
+  args.k = 1;
+  args.a = a;
+  args.lda = 1;
+  args.b = b;
+  args.ldb = 1;
+  args.c = c;
+  args.ldc = 1;
+  tge::ops::gemm_ref(args, tge::cpu::GemmConfig{1});
+  TGE_CHECK(c[0] != c[0]);
+}
+
+TGE_TEST(gemv_rejects_null_and_short_stride) {
+  float matrix[4] = {1.0F, 2.0F, 3.0F, 4.0F};
+  float vector[2] = {1.0F, 1.0F};
+  float out[2] = {0.0F, 0.0F};
+  tge::cpu::GemvArgs args;
+  args.rows = 2;
+  args.cols = 2;
+  args.matrix = matrix;
+  args.ldm = 2;
+  args.vector = vector;
+  args.out = out;
+  bool null_threw = false;
+  try {
+    tge::cpu::GemvArgs bad = args;
+    bad.matrix = nullptr;
+    tge::ops::gemv_ref(bad, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    null_threw = true;
+  }
+  TGE_CHECK(null_threw);
+  bool stride_threw = false;
+  try {
+    tge::cpu::GemvArgs bad = args;
+    bad.ldm = 1;
+    tge::ops::gemv_ref(bad, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    stride_threw = true;
+  }
+  TGE_CHECK(stride_threw);
 }
