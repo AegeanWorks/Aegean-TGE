@@ -57,6 +57,7 @@ add_library(tge_core STATIC
   src/models/plan.cpp
   src/gpu/noop.cpp
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemm_epilogue_avx2.cpp
   src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/q8_gemv_avx2.cpp
@@ -82,6 +83,7 @@ target_include_directories(tge_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
 
 tge_set_isa_flags(AVX2
   src/cpu/avx2/gemm_avx2.cpp
+  src/cpu/avx2/gemm_epilogue_avx2.cpp
   src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
   src/cpu/avx2/q8_gemv_avx2.cpp
@@ -188,6 +190,7 @@ if(TGE_BUILD_TESTS)
     tests/run_tests.cpp
     tests/test_dequant.cpp
     tests/test_cpu.cpp
+    tests/test_gemm_epilogue.cpp
     tests/test_gguf.cpp
     tests/test_memory.cpp
     tests/test_q8.cpp

@@ -26,6 +26,12 @@ struct GemmArgs {
   int ldb = 0;
   float* c = nullptr;
   int ldc = 0;
+  // Fused clamp epilogue (IDEA-1539, default off): when true, the store
+  // path clamps to [vmin, vmax]. Additive only; existing callers keep the
+  // exact current behavior.
+  bool do_clamp = false;
+  float vmin = 0.0F;
+  float vmax = 0.0F;
 };
 
 struct GemmConfig {

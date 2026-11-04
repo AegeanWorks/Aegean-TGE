@@ -3616,3 +3616,14 @@ Cache untouched; no behavior delta by construction.
 Suite: 135/135 pass (3 new kv_layout OK).
 `python aikit.py check aegean-tge` 4/4 passed.
 Live bench skipped per no-run constraint. Verdict: kept.
+
+## 67. GEMM clamp epilogue helpers plus 4 unit tests, kernel unwired (2026-11-04)
+
+Wave 2 step 1 for IDEA-1539: `GemmArgs` gains `do_clamp/vmin/vmax`
+(default off, behavior identical); new `gemm_epilogue.hpp` plus AVX2 TU
+`src/cpu/avx2/gemm_epilogue_avx2.cpp` (min/max path plus scalar tail);
+`tests/test_gemm_epilogue.cpp` (4 cases: defaults, bounds, AVX2==scalar
+over 67 elems incl tail, wide-range identity). Microkernel store path
+untouched; wiring gated on cubed bench within-run win.
+Suite: 139/139 pass (4 new OK). `python aikit.py check aegean-tge`
+4/4 passed. Verdict: kept.

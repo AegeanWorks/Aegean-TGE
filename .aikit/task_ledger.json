@@ -5,22 +5,12 @@
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793814100.1235003,
+    "updated_at": 1793814199.171523,
     "owner": "kilo:impl",
     "started_by": "kilo:impl",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-TOK",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-LLAMA-TOK' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793632887.1174698,
-      "timestamp_str": "2026-11-02 18:21:27",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-LLAMA-BENCH",
       "phase": "phase 2",
@@ -275,6 +265,17 @@
       "status": "in_progress",
       "timestamp": 1793814100.1235003,
       "timestamp_str": "2026-11-04 20:41:40",
+      "agent": "kilo:impl"
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[4/5] Wave 2 step 1 done - checklists: passed; GEMM clamp helpers plus 4 tests, kernel unwired, 139/139, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793814199.171523,
+      "timestamp_str": "2026-11-04 20:43:19",
       "agent": "kilo:impl"
     }
   ]
