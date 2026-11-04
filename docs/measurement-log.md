@@ -3594,3 +3594,15 @@ numbers claimed. Baseline: `python aikit.py check aegean-tge` 4/4
 passed before and after (test 15.4s, hygiene, guidelines, secrets).
 Live bench skipped per no-run constraint; existing log sections
 19/50/71/75 are the baseline. Verdict: kept (docs).
+
+## 65. BlockTable foundation header plus 6 unit tests, no engine wiring (2026-11-04)
+
+Design-only port for IDEA-1517/1585 Wave 1 step 1:
+`include/tge/models/block_table.hpp` (BlockTable: allocate/share/release
+refcount, slot_for arithmetic, FNV-1a prefix hash, prefix cache) plus
+`tests/test_block_table.cpp` (6 cases) wired in `CMakeLists.txt`.
+`Qwen2` cache untouched; no behavior delta by construction.
+Suite: 132/132 pass (6 new block_table OK).
+`python aikit.py check aegean-tge` 4/4 passed.
+Live bench skipped per no-run constraint; falsifier gates for the wiring
+step remain: 8x32 >=58.3 t/s, identical ids, KL<=1e-9. Verdict: kept.
