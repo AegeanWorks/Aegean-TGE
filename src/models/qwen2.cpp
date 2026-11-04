@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #include "tge/core/dispatch.hpp"
 #include "tge/core/thread_pool.hpp"
@@ -1742,6 +1743,45 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
   }
 
   int consumed = 0;
+  // Shared-prefix fast path (H1): when this generate-path call extends the
+  // previous prefill_run on the same sequence/start with identical leading
+  // tokens, the matching prefix KV rows are already resident, so skip
+  // their chunks. Byte-identical by construction (same tokens, same
+  // positions, resident rows recomputed nowhere), which the spike proved
+  // with 3/3 final-logits memcmp; the verifier path (all_logits) is
+  // excluded. Cost when nothing repeats is one integer scan per call.
+  {
+    struct PrefixRecord {
+      int sequence = -1;
+      int start = -1;
+      std::vector<int> tokens;
+    };
+    static thread_local std::vector<PrefixRecord> prefix_records;
+    if (all_logits == nullptr && sequence >= 0) {
+      const std::size_t slot = static_cast<std::size_t>(sequence);
+      if (prefix_records.size() <= slot) {
+        prefix_records.resize(slot + 1);
+      }
+      PrefixRecord& record = prefix_records[slot];
+      if (record.sequence == sequence && record.start == start_position &&
+          !record.tokens.empty() &&
+          count > static_cast<int>(record.tokens.size())) {
+        bool hit = true;
+        for (std::size_t i = 0; i < record.tokens.size(); ++i) {
+          if (tokens[i] != record.tokens[i]) {
+            hit = false;
+            break;
+          }
+        }
+        if (hit) {
+          consumed = static_cast<int>(record.tokens.size());
+        }
+      }
+      record.sequence = sequence;
+      record.start = start_position;
+      record.tokens.assign(tokens, tokens + count);
+    }
+  }
   int last_rows = 0;
   while (consumed < count) {
     const int chunk = std::min(capacity, count - consumed);
