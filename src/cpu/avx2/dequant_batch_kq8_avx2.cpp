@@ -62,7 +62,10 @@ inline int nearest_int(float fval) {
 void quantize_row_q8k(const float* x, Q8KBlock* y, int count) {
   const int blocks = count / 256;
   for (int i = 0; i < blocks; ++i) {
-    std::memset(&y[i], 0, sizeof(y[i]));
+    // Value-init, not memset: the struct is non-trivial for the
+    // -Wclass-memaccess gate (default member initializers), and the
+    // static_assert above proves there is no padding to miss.
+    y[i] = Q8KBlock{};
     float max = 0.0F;
     float amax = 0.0F;
     for (int j = 0; j < 256; ++j) {
@@ -374,6 +377,72 @@ void gemv_dequant_batch_kq8_avx2(const DequantBatchArgs& args,
                               blocks);
         args.out[static_cast<std::size_t>(token) * rows + index] = dot;
       }
+      row += row_bytes;
+    }
+  });
+}
+
+// Single-row integer Q4_K/Q6_K x Q8_K decode prototype behind
+// `bench batch --kernel kq8d` (see measurement-log §58). Same dots and
+// scalar quantizer as the batch entry above, but decode-appropriate
+// scaffolding: the activation row is quantized once into a thread-local
+// scratch buffer (never heap-allocated per call — see q8_batch_vnni.cpp
+// on why per-matvec allocation showed up), and output is written
+// directly with no token loop. Contract is tokens == 1; anything else
+// falls back to the batch entry, non-K-quants to the float path.
+void gemv_dequant_kq8_row_avx2(const DequantBatchArgs& args,
+                               const GemvConfig& config) {
+  if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
+    return;
+  }
+  if (args.tokens != 1 ||
+      (args.kind != QuantKind::Q4_K && args.kind != QuantKind::Q6_K) ||
+      args.cols % 256 != 0) {
+    if (args.tokens == 1 && (args.kind == QuantKind::Q4_K ||
+                             args.kind == QuantKind::Q6_K) &&
+        args.cols % 256 != 0) {
+      gemv_dequant_batch_avx2(args, config);
+    } else {
+      gemv_dequant_batch_kq8_avx2(args, config);
+    }
+    return;
+  }
+
+  const std::size_t row_bytes = quant_row_bytes(args.kind, args.cols);
+  const int rows = args.rows;
+  const int cols = args.cols;
+  const int blocks = cols / 256;
+
+  thread_local std::vector<Q8KBlock> quantized;
+  if (quantized.size() < static_cast<std::size_t>(blocks)) {
+    quantized.resize(static_cast<std::size_t>(blocks));
+  }
+  quantize_row_q8k(args.input, quantized.data(), cols);
+
+  const int threads = resolve_thread_count(config.threads);
+  core::ThreadPool& pool =
+      config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
+
+  int band_rows = rows / (threads * 4);
+  if (band_rows < 1) {
+    band_rows = 1;
+  }
+  const int bands = (rows + band_rows - 1) / band_rows;
+  const bool is_q4k = args.kind == QuantKind::Q4_K;
+  const Q8KBlock* q8 = quantized.data();
+
+  pool.parallel_for(bands, 1, [&](int band) {
+    const int begin = band * band_rows;
+    const int end = std::min(rows, begin + band_rows);
+    const std::uint8_t* row =
+        args.data + static_cast<std::size_t>(begin) * row_bytes;
+
+    for (int index = begin; index < end; ++index) {
+      args.out[index] =
+          is_q4k ? dot_q4k_q8k(reinterpret_cast<const Q4KBlock*>(row), q8,
+                               blocks)
+                 : dot_q6k_q8k(reinterpret_cast<const Q6KBlock*>(row), q8,
+                               blocks);
       row += row_bytes;
     }
   });

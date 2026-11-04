@@ -186,6 +186,13 @@ void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
 void gemv_dequant_batch_kq8_avx2(const DequantBatchArgs& args,
                                  const GemvConfig& config);
 
+// Single-row integer Q4_K/Q6_K x Q8_K decode prototype (bench-only, behind
+// `bench batch --kernel kq8d`). Same dots and scalar quantizer as the batch
+// entry, but the activation row lives in a thread-local buffer (never
+// heap-allocated per call) and output needs no token loop.
+void gemv_dequant_kq8_row_avx2(const DequantBatchArgs& args,
+                               const GemvConfig& config);
+
 /// One query head's attention against its key/value cache.
 ///
 /// The kernel vectorises the query-key dot products, the softmax exponential
