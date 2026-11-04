@@ -59,6 +59,49 @@ TGE_TEST(q4k_avx2_matches_scalar_exactly) {
                         scalar.size() * sizeof(float)) == 0);
 }
 
+TGE_TEST(dequant_rejects_partial_block) {
+  // Regression: cols%block tails were silently dropped (scalar and AVX2
+  // truncated identically, so differentials passed while both were wrong
+  // vs model math). Partial rows must fail loudly instead.
+  const std::vector<std::uint8_t> q4k = make_q4_k_matrix(1, 0xDEADBEEFu);
+  std::vector<float> out(256, 0.0F);
+  auto throws = [&](tge::cpu::QuantKind kind, int cols) {
+    bool threw_scalar = false;
+    try {
+      tge::cpu::dequantize_row(kind, q4k.data(), out.data(), cols);
+    } catch (...) {
+      threw_scalar = true;
+    }
+    bool threw_avx2 = false;
+    try {
+      tge::cpu::dequantize_row_avx2(kind, q4k.data(), out.data(), cols);
+    } catch (...) {
+      threw_avx2 = true;
+    }
+    return threw_scalar && threw_avx2;
+  };
+  TGE_CHECK(throws(tge::cpu::QuantKind::Q4_K, 255));
+  TGE_CHECK(throws(tge::cpu::QuantKind::Q4_K, 300));
+  TGE_CHECK(throws(tge::cpu::QuantKind::Q6_K, 100));
+  // quant_row_bytes agrees: no zero-stride rows, no wrapped sizes.
+  bool threw_bytes = false;
+  try {
+    (void)tge::cpu::quant_row_bytes(tge::cpu::QuantKind::Q4_K, 128);
+  } catch (...) {
+    threw_bytes = true;
+  }
+  TGE_CHECK(threw_bytes);
+  // Unknown kinds must not fall through to the Q8_0 path.
+  bool threw_kind = false;
+  try {
+    tge::cpu::dequantize_row(static_cast<tge::cpu::QuantKind>(99),
+                             q4k.data(), out.data(), 32);
+  } catch (...) {
+    threw_kind = true;
+  }
+  TGE_CHECK(threw_kind);
+}
+
 namespace {
 
 constexpr std::size_t kQ6_KBlockBytes = 210;
@@ -630,7 +673,8 @@ inline int kq8ref_nearest_int(float fval) {
 inline void quantize(const float* x, Q8KBlockR* y, int count) {
   const int blocks = count / 256;
   for (int i = 0; i < blocks; ++i) {
-    std::memset(&y[i], 0, sizeof(y[i]));
+    // Value-init, not memset: same reason as the prototype TU (see above).
+    y[i] = Q8KBlockR{};
     float max = 0.0F;
     float amax = 0.0F;
     for (int j = 0; j < 256; ++j) {
@@ -783,8 +827,115 @@ TGE_TEST(dequant_batch_kq8_matches_float_oracle) {
                          tokens, 0x66666666u, 1);
       expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
                          tokens, 0u, 0);
-      expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
-                         tokens, 0u, 2);
+    expect_kq8_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows, cols,
+                       tokens, 0u, 2);
     }
+  }
+}
+
+void expect_kq8_row_matches(tge::cpu::QuantKind kind,
+                            const std::uint8_t* matrix, int rows, int cols,
+                            std::uint32_t seed, int input_mode) {
+  // input_mode mirrors expect_kq8_matches: 0 = zeros (exact), 1 = uniform
+  // random (price-bounded), 2 = constant 0.5 (tight gate).
+  std::vector<float> input(static_cast<std::size_t>(cols));
+  std::vector<float> reference(static_cast<std::size_t>(rows), 0.0F);
+  std::vector<float> integer(static_cast<std::size_t>(rows), 0.0F);
+
+  if (input_mode == 1) {
+    std::uint32_t state = seed | 1u;
+    for (float& value : input) {
+      state = state * 1664525u + 1013904223u;
+      value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+    }
+  } else if (input_mode == 2) {
+    std::fill(input.begin(), input.end(), 0.5F);
+  }
+
+  tge::cpu::DequantBatchArgs args;
+  args.data = matrix;
+  args.kind = kind;
+  args.rows = rows;
+  args.cols = cols;
+  args.input = input.data();
+  args.tokens = 1;
+  args.out = reference.data();
+  tge::cpu::gemv_dequant_batch_scalar(args, tge::cpu::GemvConfig{1});
+  args.out = integer.data();
+  tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+  tge::cpu::gemv_dequant_kq8_row_avx2(
+      args, tge::cpu::GemvConfig{tge::cpu::resolve_thread_count(0), &pool});
+
+  if (input_mode == 0) {
+    for (const float value : integer) {
+      if (value != 0.0F) {
+        std::fprintf(stderr,
+                     "    kq8d zero-input kind=%d rows=%d cols=%d value=%g\n",
+                     static_cast<int>(kind), rows, cols,
+                     static_cast<double>(value));
+        tgetest::fail("kq8d zero input exactly zero", __FILE__, __LINE__);
+      }
+    }
+    return;
+  }
+
+  float worst = 0.0F;
+  float peak = 0.0F;
+  for (std::size_t i = 0; i < reference.size(); ++i) {
+    const float gap =
+        reference[i] > integer[i] ? reference[i] - integer[i] : integer[i] - reference[i];
+    if (gap > worst) {
+      worst = gap;
+    }
+    const float magnitude = reference[i] < 0.0F ? -reference[i] : reference[i];
+    if (magnitude > peak) {
+      peak = magnitude;
+    }
+  }
+  const float relative = peak > 0.0F ? worst / peak : 0.0F;
+  const float tolerance = input_mode == 2 ? 1e-3F : 0.05F;
+  if (!(relative <= tolerance)) {
+    std::fprintf(stderr,
+                 "    kq8d batch kind=%d rows=%d cols=%d "
+                 "worst=%g refpeak=%g relative=%g tolerance=%g\n",
+                 static_cast<int>(kind), rows, cols,
+                 static_cast<double>(worst), static_cast<double>(peak),
+                 static_cast<double>(relative), static_cast<double>(tolerance));
+    tgetest::fail("kq8d row matches float oracle", __FILE__, __LINE__);
+  }
+}
+
+TGE_TEST(dequant_batch_kq8_row_matches_float_oracle) {
+  // Decode-entry differential: single-token rows over decode shapes,
+  // including the 128256-wide vocab projection shape.
+  constexpr int kRows = 3;
+  for (const int cols : {1024, 3072, 8192}) {
+    const std::vector<std::uint8_t> q4k =
+        make_q4_k_matrix(kRows * cols / kBlockElements, 0xB4710201u);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows,
+                           cols, 0x11111111u, 1);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows,
+                           cols, 0u, 0);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q4_K, q4k.data(), kRows,
+                           cols, 0u, 2);
+    const std::vector<std::uint8_t> q6k =
+        make_q6_k_matrix(kRows * cols / kBlockElements, 0xB4710601u);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows,
+                           cols, 0x66666666u, 1);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows,
+                           cols, 0u, 0);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q6_K, q6k.data(), kRows,
+                           cols, 0u, 2);
+  }
+  // Wide-vocab shape spot check (single row count keeps it cheap).
+  {
+    const int vrows = 2048;
+    const int vcols = 3072;
+    const std::vector<std::uint8_t> q4v =
+        make_q4_k_matrix(vrows * vcols / kBlockElements, 0xB4710201u);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q4_K, q4v.data(), vrows,
+                           vcols, 0x11111111u, 1);
+    expect_kq8_row_matches(tge::cpu::QuantKind::Q4_K, q4v.data(), vrows,
+                           vcols, 0u, 0);
   }
 }

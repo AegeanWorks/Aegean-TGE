@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
@@ -168,13 +169,25 @@ ThreadPool::~ThreadPool() {
 void ThreadPool::claim_chunks(const std::function<void(int)>& body, int count,
                               int grain) {
   for (;;) {
+    if (failed_.load(std::memory_order_relaxed)) {
+      return;  // Another thread already banked a failure; drain, don't pile on.
+    }
     const int start = next_.fetch_add(grain, std::memory_order_relaxed);
     if (start >= count) {
       return;
     }
     const int end = std::min(start + grain, count);
     for (int index = start; index < end; ++index) {
-      body(index);
+      try {
+        body(index);
+      } catch (...) {
+        std::lock_guard<std::mutex> lock(exception_mutex_);
+        if (exception_ == nullptr) {
+          exception_ = std::current_exception();
+        }
+        failed_.store(true, std::memory_order_relaxed);
+        return;
+      }
     }
   }
 }
@@ -185,6 +198,21 @@ void ThreadPool::parallel_for(int count, int grain,
     return;
   }
   grain = std::max(1, grain);
+  bool expected = false;
+  if (!active_.compare_exchange_strong(expected, true,
+                                       std::memory_order_acq_rel)) {
+    throw std::runtime_error("thread_pool: concurrent parallel_for on one pool");
+  }
+  struct ActiveGuard {
+    ThreadPool* pool;
+    ~ActiveGuard() { pool->active_.store(false, std::memory_order_release); }
+  };
+  ActiveGuard guard{this};
+  {
+    std::lock_guard<std::mutex> lock(exception_mutex_);
+    exception_ = nullptr;
+  }
+  failed_.store(false, std::memory_order_relaxed);
   if (size_ == 1 || count <= grain) {
     for (int index = 0; index < count; ++index) {
       body(index);
@@ -231,6 +259,14 @@ void ThreadPool::parallel_for(int count, int grain,
     break;
   }
   body_ = nullptr;
+  std::exception_ptr failure;
+  {
+    std::lock_guard<std::mutex> lock(exception_mutex_);
+    failure = exception_;
+  }
+  if (failure != nullptr) {
+    std::rethrow_exception(failure);
+  }
 }
 
 void ThreadPool::worker() {

@@ -1,0 +1,16 @@
+// No-op compute probe: writes 1u from invocation 0 into a storage buffer.
+// Proves the glslc -> SPIR-V -> descriptor -> dispatch -> fence -> readback
+// path end to end. The host pre-zeroes the buffer; any readback other than
+// exactly 1u is a backend defect, never a numeric tolerance question.
+#version 450
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) buffer Buf {
+  uint result;
+} buf;
+
+void main() {
+  if (gl_GlobalInvocationID.x == 0u) {
+    buf.result = 1u;
+  }
+}

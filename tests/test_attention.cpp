@@ -475,3 +475,71 @@ TGE_TEST(sparse_gather_matches_subset_reference) {
     TGE_CHECK_NEAR(out[axis], expected, 1e-4);
   }
 }
+
+TGE_TEST(attention_rejects_bad_shapes) {
+  // Regression: stride<head_dim read overlapping rows, half+q8 was
+  // ambiguous, and q8 with a ragged width read the wrong scale row —
+  // all silently. Both ISAs must fail loudly instead.
+  const int head_dim = 64;
+  const int stride = 64;
+  const int span = 4;
+  const std::vector<float> query = make_values(head_dim, 1u);
+  const std::vector<float> keys = make_values(span * stride, 2u);
+  const std::vector<float> values = make_values(span * stride, 3u);
+  std::vector<float> scores(static_cast<std::size_t>(span));
+  std::vector<float> out(static_cast<std::size_t>(head_dim));
+  auto valid = [&]() {
+    tge::cpu::AttentionArgs args;
+    args.query = query.data();
+    args.keys = keys.data();
+    args.values = values.data();
+    args.kv_stride = stride;
+    args.span = span;
+    args.head_dim = head_dim;
+    args.scores = scores.data();
+    args.out = out.data();
+    return args;
+  };
+  auto throws_both = [&](tge::cpu::AttentionArgs args) {
+    bool threw_scalar = false;
+    try {
+      tge::cpu::attention_head_scalar(args);
+    } catch (...) {
+      threw_scalar = true;
+    }
+    bool threw_avx2 = false;
+    try {
+      tge::cpu::attention_head_avx2(args);
+    } catch (...) {
+      threw_avx2 = true;
+    }
+    return threw_scalar && threw_avx2;
+  };
+  {  // span 0: softmax over nothing (1/0) is not a defined result.
+    auto args = valid();
+    args.span = 0;
+    TGE_CHECK(throws_both(args));
+  }
+  {  // stride below head_dim: rows overlap.
+    auto args = valid();
+    args.kv_stride = head_dim - 1;
+    TGE_CHECK(throws_both(args));
+  }
+  {  // null query.
+    auto args = valid();
+    args.query = nullptr;
+    TGE_CHECK(throws_both(args));
+  }
+  {  // half and q8 together: which buffer wins is undefined.
+    auto args = valid();
+    args.half = true;
+    args.q8 = true;
+    TGE_CHECK(throws_both(args));
+  }
+  {  // q8 with a ragged width: scale blocks misalign.
+    auto args = valid();
+    args.q8 = true;
+    args.head_dim = 48;
+    TGE_CHECK(throws_both(args));
+  }
+}

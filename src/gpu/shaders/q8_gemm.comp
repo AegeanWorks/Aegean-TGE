@@ -1,0 +1,99 @@
+// Q8_0 batch matrix product: one thread per (token, row).
+//
+// Same block format and dequantization as q8_gemv.comp (fp16 scale FIRST,
+// then 32 int8 quants; 32-bit-only reads; per-block dot-then-scale). The
+// batch dimension is the Y axis of a 2D dispatch: an 8x8 workgroup covers
+// 8 rows x 8 tokens, so weights stream once per 8 tokens through L2 while
+// each thread keeps its own row accumulator. For prefill chunks
+// (tokens <= 64) every weight byte is read tokens times from VRAM - the
+// same reuse the CPU path gets from DRAM, at ~11x the bandwidth.
+//
+// Input/output are dense row-major f32: in[token * cols + c],
+// out[token * rows + r]. The host fidelity harness prices the batch
+// numerics against the scalar oracle.
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) readonly buffer Weights {
+  uint wdata[];
+};
+layout(set = 0, binding = 1) readonly buffer Input {
+  float xdata[];
+};
+layout(set = 0, binding = 2) writeonly buffer Output {
+  float values[];
+};
+
+layout(push_constant) uniform Params {
+  uint rows;
+  uint row_stride_bytes;
+  uint blocks_per_row;
+  uint cols;
+  uint tokens;
+} pc;
+
+uint read_u32(uint addr) {
+  uint lo = addr >> 2u;
+  uint sh = addr & 3u;
+  uint a = wdata[lo];
+  if (sh == 0u) {
+    return a;
+  }
+  uint b = wdata[lo + 1u];
+  return (a >> (sh * 8u)) | (b << (32u - sh * 8u));
+}
+
+float f16_to_f32(uint h) {
+  uint s = (h >> 15u) & 1u;
+  uint e = (h >> 10u) & 0x1Fu;
+  uint m = h & 0x3FFu;
+  uint bits;
+  if (e == 0u) {
+    if (m == 0u) {
+      bits = s << 31u;
+    } else {
+      uint ee = 127u - 14u;
+      uint mm = m;
+      while ((mm & 0x400u) == 0u) {
+        mm <<= 1u;
+        ee -= 1u;
+      }
+      bits = (s << 31u) | (ee << 23u) | ((mm & 0x3FFu) << 13u);
+    }
+  } else if (e == 31u) {
+    bits = (s << 31u) | (0xFFu << 23u) | (m << 13u);
+  } else {
+    bits = (s << 31u) | ((e + 112u) << 23u) | (m << 13u);
+  }
+  return uintBitsToFloat(bits);
+}
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  uint token = gl_GlobalInvocationID.y;
+  if (row >= pc.rows || token >= pc.tokens) {
+    return;
+  }
+  float sum = 0.0;
+  uint base = row * pc.row_stride_bytes;
+  uint xrow = token * pc.cols;
+  for (uint b = 0u; b < pc.blocks_per_row; ++b) {
+    uint baddr = base + b * 34u;
+    float scale = f16_to_f32(read_u32(baddr) & 0xFFFFu);
+    uint xbase = xrow + b * 32u;
+    float block = 0.0;
+    for (uint j = 0u; j < 8u; ++j) {
+      uint word = read_u32(baddr + 2u + j * 4u);
+      for (uint k = 0u; k < 4u; ++k) {
+        float q = float(int((word >> (k * 8u)) & 0xFFu));
+        if (q >= 128.0) {
+          q -= 256.0;
+        }
+        block += q * xdata[xbase + j * 4u + k];
+      }
+    }
+    sum += block * scale;
+  }
+  values[token * pc.rows + row] = sum;
+}

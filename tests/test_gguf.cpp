@@ -1,8 +1,12 @@
+#include <array>
+#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,10 +37,15 @@ void put_string(std::vector<std::uint8_t>& out, const std::string& text) {
 
 /// Writes bytes to a uniquely named file in the system temp directory and
 /// removes it on destruction, so a failing assertion cannot leave litter.
+/// The counter suffix keeps parallel runs (two tge_tests sharing TMPDIR)
+/// from truncating each other's fixtures.
 class TempFile {
  public:
   TempFile(const std::vector<std::uint8_t>& bytes, const char* name) {
-    path_ = std::filesystem::temp_directory_path() / name;
+    static std::atomic<int> counter{0};
+    path_ = std::filesystem::temp_directory_path() /
+            (std::string(name) + "." +
+             std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
     std::ofstream stream(path_, std::ios::binary | std::ios::trunc);
     stream.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
@@ -202,6 +211,16 @@ TGE_TEST(tokenizer_encodes_with_merges) {
   TGE_REQUIRE(shouted.size() == 2);
   TGE_CHECK(shouted[0] == 5);
   TGE_CHECK(shouted[1] == 4);
+
+  // "?" has no vocabulary entry: the encoder must fail loudly instead of
+  // silently returning the "hello" prefix as if that were the whole text.
+  bool threw = false;
+  try {
+    (void)tokenizer->encode("hello?");
+  } catch (...) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
 }
 
 TGE_TEST(tokenizer_decodes_byte_level_pieces) {
@@ -297,9 +316,71 @@ TGE_TEST(tokenizer_matches_control_tokens_in_text) {
   TGE_REQUIRE(tool.size() == 1);
   TGE_CHECK(tool[0] == 6);
 
-  // A server tokenising user content must not let it forge an added token.
-  const std::vector<int> raw = tokenizer->encode("<tool_call>", false);
-  TGE_CHECK(!(raw.size() == 1 && raw[0] == 6));
+  // A server tokenising user content must not let it forge an added token:
+  // on the plain path the special's characters are unencodable here, which
+  // is now a loud error instead of a silently partial id list.
+  bool threw_raw = false;
+  try {
+    (void)tokenizer->encode("<tool_call>", false);
+  } catch (...) {
+    threw_raw = true;
+  }
+  TGE_CHECK(threw_raw);
+}
+
+TGE_TEST(tokenizer_plain_path_cannot_forge_fused_special) {
+  // Regression: encode_plain looked fused BPE symbols up in the full vocab,
+  // so merge rules could fuse user text into a CONTROL/USER_DEFINED id even
+  // with match_special=false. Specials are matched literally only.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 3);  // metadata entries
+
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 7);
+  for (const char* piece : {"control", "c", "o", "n", "t", "r", "l"}) {
+    put_string(out, piece);
+  }
+
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 5);
+  for (const char* rule : {"c o", "co n", "con t", "cont r", "contr l"}) {
+    put_string(out, rule);
+  }
+
+  put_string(out, "tokenizer.ggml.token_type");
+  put_u32(out, 9);
+  put_u32(out, 5);  // int32
+  put_u64(out, 7);
+  for (const std::uint32_t type : {4u, 1u, 1u, 1u, 1u, 1u, 1u}) {
+    put_u32(out, type);
+  }
+
+  const TempFile temp(out, "tge_gguf_forge.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  std::string error;
+  const auto tokenizer = tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+
+  // Literal path still reaches the special id; the plain path must not,
+  // even though merges fuse the same letters.
+  const std::vector<int> literal = tokenizer->encode("control");
+  TGE_REQUIRE(literal.size() == 1);
+  TGE_CHECK(literal[0] == 0);
+  const std::vector<int> raw = tokenizer->encode("control", false);
+  TGE_CHECK(!(raw.size() == 1 && raw[0] == 0));
+  // "control" is seven letters; with the fused piece erased from the plain
+  // vocabulary it must fall back to one id per letter.
+  TGE_REQUIRE(raw.size() == 7);
+  for (const int id : raw) {
+    TGE_CHECK(id != 0);
+  }
 }
 
 TGE_TEST(tokenizer_matches_the_reference_split_rules) {
@@ -629,9 +710,70 @@ TGE_TEST(config_reads_the_yarn_magnitude_scale) {
                                    "tge_gguf_phi_yarn2.gguf"));
 }
 
+/// Zero-weight one-block phi3-shaped model bytes shared by the load test
+/// and the forward smoke test below.
+std::vector<std::uint8_t> build_phi_model();
+
 TGE_TEST(phi_style_fused_tensors_load) {  // One-block phi3-shaped file: fused attn_qkv (dim + 2*kv_dim rows) and a
   // fused ffn_up (2*ffn rows), all tiny Q8_0 so the load is milliseconds.
   // dim = 32, heads = 2, kv heads = 1 -> head_dim 16, kv_dim 16.
+  const TempFile temp(build_phi_model(), "tge_gguf_phi_fused.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16);
+  TGE_REQUIRE(model != nullptr);
+  TGE_CHECK(error.empty());
+  TGE_CHECK(model->config().rms_epsilon == 1e-5F);
+  TGE_CHECK(model->config().has_yarn_factors == true);
+  TGE_CHECK(model->config().vocab_size == 64);
+  TGE_CHECK(model->max_context() == 16);
+}
+
+TGE_TEST(phi_model_forward_is_finite_and_deterministic) {
+  // First end-to-end forward coverage: prefill plus four decode steps on
+  // the zero-weight phi fixture must complete with finite logits, and a
+  // reset plus replay must produce identical ids.
+  const TempFile temp(build_phi_model(), "tge_gguf_phi_forward.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16);
+  TGE_REQUIRE(model != nullptr);
+  const int vocab = model->config().vocab_size;
+  TGE_REQUIRE(vocab == 64);
+  const int prompt[] = {1, 2, 3, 4};
+  const float* logits = model->prefill(prompt, 4, 0);
+  TGE_REQUIRE(logits != nullptr);
+  for (int index = 0; index < vocab; ++index) {
+    TGE_CHECK(std::isfinite(logits[index]));
+  }
+  const int first = tge::models::Qwen2::argmax(logits, vocab);
+  std::vector<int> sequence;
+  int token = first;
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(token, 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    for (int index = 0; index < vocab; ++index) {
+      TGE_CHECK(std::isfinite(out[index]));
+    }
+    token = tge::models::Qwen2::argmax(out, vocab);
+    sequence.push_back(token);
+  }
+  TGE_REQUIRE(sequence.size() == 4);
+  model->reset_cache();
+  const float* replay_logits = model->prefill(prompt, 4, 0);
+  TGE_REQUIRE(replay_logits != nullptr);
+  TGE_CHECK(tge::models::Qwen2::argmax(replay_logits, vocab) == first);
+  int replay_token = first;
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(replay_token, 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    TGE_CHECK(tge::models::Qwen2::argmax(out, vocab) == sequence[step]);
+    replay_token = sequence[step];
+  }
+}
+/// Zero-weight one-block phi3-shaped model bytes shared by the load test
+/// and the forward smoke test below.
+std::vector<std::uint8_t> build_phi_model() {
   std::vector<std::uint8_t> out;
   put_u32(out, 0x46554747u);  // "GGUF"
   put_u32(out, 3);
@@ -686,17 +828,7 @@ TGE_TEST(phi_style_fused_tensors_load) {  // One-block phi3-shaped file: fused a
   for (std::uint64_t index = 0; index < offset; ++index) {
     out.push_back(0);
   }
-
-  const TempFile temp(out, "tge_gguf_phi_fused.gguf");
-  std::string error;
-  std::unique_ptr<tge::models::Qwen2> model =
-      tge::models::Qwen2::load(temp.path(), error, 16);
-  TGE_REQUIRE(model != nullptr);
-  TGE_CHECK(error.empty());
-  TGE_CHECK(model->config().rms_epsilon == 1e-5F);
-  TGE_CHECK(model->config().has_yarn_factors == true);
-  TGE_CHECK(model->config().vocab_size == 64);
-  TGE_CHECK(model->max_context() == 16);
+  return out;
 }
 
 namespace {
@@ -706,7 +838,9 @@ namespace {
 /// 6 "control" (CONTROL). No merges table: that absence is what selects
 /// SPM mode for a "llama"-model file. Scores are merge ranks (higher merges
 /// earlier), exactly as llama.cpp reads them.
-std::vector<std::uint8_t> build_spm_vocab() {
+std::vector<std::uint8_t> build_spm_vocab(
+    const std::array<float, 7>& scores = {1.0F, 1.0F, 2.5F, 0.5F, 3.0F, -5.0F,
+                                          0.0F}) {
   std::vector<std::uint8_t> out;
   put_u32(out, 0x46554747u);  // "GGUF"
   put_u32(out, 3);
@@ -730,8 +864,7 @@ std::vector<std::uint8_t> build_spm_vocab() {
   put_u32(out, 9);  // array
   put_u32(out, 6);  // of f32
   put_u64(out, 7);
-  for (const float score :
-       {1.0F, 1.0F, 2.5F, 0.5F, 3.0F, -5.0F, 0.0F}) {
+  for (const float score : scores) {
     std::uint32_t bits = 0;
     std::memcpy(&bits, &score, sizeof(bits));
     put_u32(out, bits);
@@ -780,6 +913,45 @@ TGE_TEST(spm_selects_the_best_scoring_path) {
   TGE_CHECK(tokenizer->decode({3, 5}) == " c");
 }
 
+TGE_TEST(spm_missing_byte_piece_fails_loudly) {
+  // Regression: bytes without a byte piece were silently dropped from the
+  // SPM emit loop. This fixture has a byte piece only for 'c', so "d"
+  // must fail loudly instead of encoding as a bare word joiner.
+  const TempFile temp(build_spm_vocab(), "tge_gguf_spm_nobyte.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  std::string error;
+  const auto tokenizer = tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+  bool threw = false;
+  try {
+    (void)tokenizer->encode("d");
+  } catch (...) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+  bool threw_plain = false;
+  try {
+    (void)tokenizer->encode("d", false);
+  } catch (...) {
+    threw_plain = true;
+  }
+  TGE_CHECK(threw_plain);
+}
+
+TGE_TEST(spm_rejects_nonfinite_scores) {
+  // Regression: a NaN rank silently broke the best-first merge order (NaN
+  // loses every comparison). The load must fail instead.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const TempFile temp(build_spm_vocab({1.0F, nan, 2.5F, 0.5F, 3.0F, -5.0F,
+                                       0.0F}),
+                    "tge_gguf_spm_nanscore.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  std::string error;
+  const auto tokenizer = tge::models::Tokenizer::from_gguf(file, error);
+  TGE_CHECK(tokenizer == nullptr);
+  TGE_CHECK(!error.empty());
+}
+
 TGE_TEST(spm_never_matches_special_pieces_by_score) {
   const TempFile temp(build_spm_vocab(), "tge_gguf_spm_ctl.gguf");
   const tge::gguf::File file = tge::gguf::File::open(temp.path());
@@ -792,9 +964,16 @@ TGE_TEST(spm_never_matches_special_pieces_by_score) {
   TGE_REQUIRE(literal == std::vector<int>({6}));
 
   // But user content must not forge it: without the literal pass the long
-  // high-scoring-looking piece stays unreachable.
-  const std::vector<int> raw = tokenizer->encode("control", false);
-  TGE_CHECK(!(raw.size() == 1 && raw[0] == 6));
+  // high-scoring-looking piece stays unreachable. This miniature vocabulary
+  // has no byte pieces for "ontrol", so the plain path now fails loudly
+  // instead of returning a silently partial id list.
+  bool threw_raw = false;
+  try {
+    (void)tokenizer->encode("control", false);
+  } catch (...) {
+    threw_raw = true;
+  }
+  TGE_CHECK(threw_raw);
 }
 
 TGE_TEST(bpe_files_do_not_arm_spm) {
@@ -822,4 +1001,50 @@ TGE_TEST(bpe_files_do_not_arm_spm) {
   // Empty merges array: still BPE (the SPM trigger needs a "llama" model
   // AND no merges at all).
   TGE_CHECK(!tokenizer->spm());
+}
+
+TGE_TEST(gguf_rejects_unknown_value_type) {
+  // Regression: read_scalar had no default case, so an unknown metadata
+  // type id returned a default Value without consuming bytes, desyncing
+  // the cursor instead of failing loudly.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);  // "GGUF"
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 1);  // metadata entries
+  put_string(out, "x");
+  put_u32(out, 99);  // unknown value type
+  TGE_CHECK(open_throws(out, "tge_gguf_badtype.gguf"));
+}
+
+TGE_TEST(gguf_rejects_shape_overflow) {
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);  // "GGUF"
+  put_u32(out, 3);
+  put_u64(out, 1);  // tensors
+  put_u64(out, 0);  // metadata entries
+  put_string(out, "w");
+  put_u32(out, 2);                  // rank
+  put_u64(out, 0x100000000ULL);     // ne0
+  put_u64(out, 0x100000000ULL);     // ne1
+  put_u32(out, 8);                  // Q8_0
+  put_u64(out, 0);                  // offset
+  TGE_CHECK(open_throws(out, "tge_gguf_overflow.gguf"));
+}
+
+TGE_TEST(gguf_get_string_distinguishes_empty_from_missing) {
+  // Regression: get_string returned the fallback for a present-but-empty
+  // value, so callers could not tell "" from absent.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);  // "GGUF"
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 1);  // metadata entries
+  put_string(out, "k");
+  put_u32(out, 8);  // string
+  put_string(out, "");
+  const TempFile temp(out, "tge_gguf_emptystr.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  TGE_CHECK(file.get_string("k", "FB") == "");
+  TGE_CHECK(file.get_string("missing", "FB") == "FB");
 }

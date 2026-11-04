@@ -3,12 +3,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 namespace tge::cpu {
 
 void gemv_q8_0_scalar(const Q8GemvArgs& args, const GemvConfig& /*config*/) {
   if (args.rows <= 0 || args.cols <= 0) {
     return;
+  }
+  if (args.cols % kQ8BlockElements != 0) {
+    // A truncated prefix would dot the wrong weights while looking exact;
+    // every supported shape is a whole number of 32-element blocks.
+    throw std::invalid_argument("gemv_q8_0: cols not a whole block");
   }
   const int blocks = args.cols / kQ8BlockElements;
   const std::size_t row_bytes =

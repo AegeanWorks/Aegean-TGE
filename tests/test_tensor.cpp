@@ -103,6 +103,26 @@ TGE_TEST(gemm_handles_degenerate_shapes) {
   expect_gemm_matches_reference(5, 15, 1, 1);
 }
 
+TGE_TEST(gemm_k_zero_zeroes_c_like_reference) {
+  for (const auto fn :
+       {tge::cpu::gemm_avx2, tge::cpu::gemm_avx2_unblocked,
+        tge::cpu::gemm_avx2_unpacked}) {
+    std::vector<float> a(1, 1.0F);
+    std::vector<float> b(1, 1.0F);
+    std::vector<float> reference(16, 0xFF);
+    std::vector<float> optimized(16, 0xFF);
+    tge::cpu::GemmArgs ref{2, 2, 0, a.data(), 1, b.data(), 2, reference.data(),
+                           2};
+    tge::ops::gemm_ref(ref, tge::cpu::GemmConfig{1});
+    tge::cpu::GemmArgs got{2, 2, 0, a.data(), 1, b.data(), 2, optimized.data(),
+                           2};
+    fn(got, tge::cpu::GemmConfig{1});
+    TGE_CHECK_NEAR(
+        tge::ops::max_abs_diff(reference.data(), optimized.data(), 4), 0.0F,
+        0.0F);
+  }
+}
+
 TGE_TEST(gemm_matches_reference_off_tile_edges) {
   expect_gemm_matches_reference(7, 17, 3, 1);
   expect_gemm_matches_reference(13, 29, 31, 1);

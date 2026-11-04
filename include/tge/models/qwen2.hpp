@@ -167,10 +167,17 @@ class Qwen2 {
   /// Production paths leave it off.
   void set_scalar_kernels(bool enabled) { scalar_kernels_ = enabled; }
 
-  /// Use the AVX-VNNI Q8_0 batch kernel, quantizing each distinct activation
-  /// once per layer and reusing it across the matrices that share it.
-  void set_vnni(bool enabled) { vnni_ = enabled; }
-  bool vnni() const { return vnni_; }
+    /// Use the AVX-VNNI Q8_0 batch kernel, quantizing each distinct activation
+    /// once per layer and reusing it across the matrices that share it.
+    void set_vnni(bool enabled) { vnni_ = enabled; }
+    bool vnni() const { return vnni_; }
+
+    /// Use the integer Q4_K/Q6_K x Q8_K batch kernel (per-row Q8 activation
+    /// quant + maddubs dots) for prefill-size batches. Decode (tokens == 1)
+    /// always keeps the float path. Benchmark-only until the fidelity price
+    /// lands; see measurement-log §54.
+    void set_kq8(bool enabled) { kq8_ = enabled; }
+    bool kq8() const { return kq8_; }
 
   /// True when the KV cache is stored as IEEE half.
   bool kv_half() const { return kv_half_; }
@@ -179,6 +186,25 @@ class Qwen2 {
   /// values). Halves the half-cache footprint; the fidelity harness prices
   /// the quantization the same way it prices `--kv f16`.
   bool kv_q8() const { return kv_q8_; }
+
+  /// GPU offload request (`--gpu`, default off). True only *wishes* for the
+  /// GPU: dispatch additionally requires the backend ready (`gpu::use_gpu`)
+  /// and the static winners (`wants_gpu_*` below). Without an SDK build the
+  /// backend reports Unavailable and the request is a silent no-op.
+  void set_use_gpu(bool enabled) { use_gpu_requested_ = enabled; }
+  bool use_gpu_requested() const { return use_gpu_requested_; }
+
+  /// Placement wishes. Backend readiness is NOT included; the dispatcher
+  /// conjoins `gpu::use_gpu()` at the call site, so these stay unit-testable
+  /// without a GPU. Batch: tokens >= 8 on Q8_0/F32 with clean flags (no
+  /// VNNI activations, no scalar-oracle arm, schedule not forced Scalar).
+  /// GQA: grouped schedule already holds for the span, dense path only (no
+  /// sparse subset, no scalar arm). Everything else keeps the CPU kernels.
+  bool wants_gpu_batch(int tokens, gguf::TensorType type) const;
+  bool wants_gpu_gqa(int span) const;
+  /// Decode-output wish: the single-token 151936-wide projection. Same
+  /// conjunctions as batch minus the token floor.
+  bool wants_gpu_output(gguf::TensorType type) const;
 
   /// Independent KV slots the model can decode at once.
   int sequence_count() const { return sequence_count_; }
@@ -227,6 +253,10 @@ class Qwen2 {
   std::uint64_t phase_matvec_ns() const { return phase_matvec_ns_; }
   std::uint64_t phase_attn_ns() const { return phase_attn_ns_; }
   std::uint64_t phase_norm_ns() const { return phase_norm_ns_; }
+  /// GPU offload time (submit + transfers) and bytes moved, accumulated
+  /// since the last reset. Zero whenever the CPU path served the token.
+  std::uint64_t phase_gpu_ns() const { return phase_gpu_ns_; }
+  std::uint64_t phase_gpu_bytes() const { return phase_gpu_bytes_; }
 
  private:
   struct Matrix {
@@ -265,6 +295,12 @@ class Qwen2 {
               const cpu::Q8Quantized* quantized = nullptr) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
                     int tokens, const cpu::Q8Quantized* quantized = nullptr) const;
+  /// Final vocabulary projection for one decoded token: the CPU rms_norm
+  /// into h_ stays at the call site; this tries the single-sync GPU GEMV
+  /// (one H2D + one D2H) when the static winners hold and the backend is
+  /// ready, and runs the exact existing CPU matvec otherwise. F32 weights
+  /// stay CPU until their GPU twin lands; only Q8_0 rides the device today.
+  const float* output_logits(float* hidden);
   void dequant_row(const Matrix& weight, int row, float* output) const;
 
   /// Quantizes one activation batch for the VNNI kernels. The scratch is owned
@@ -322,15 +358,19 @@ class Qwen2 {
   int sequence_count_ = 1;
   AttentionMode attention_mode_ = AttentionMode::Auto;
   SparseConfig sparse_;
-  bool scalar_kernels_ = false;
-  bool vnni_ = false;
+    bool scalar_kernels_ = false;
+    bool vnni_ = false;
+    bool kq8_ = true;
   bool kv_half_ = false;
   bool kv_q8_ = false;
+  bool use_gpu_requested_ = false;
   mutable std::unique_ptr<core::ThreadPool> decode_pool_;
   mutable std::unique_ptr<core::ThreadPool> prefill_pool_;
   mutable std::uint64_t phase_matvec_ns_ = 0;
   mutable std::uint64_t phase_attn_ns_ = 0;
   mutable std::uint64_t phase_norm_ns_ = 0;
+  mutable std::uint64_t phase_gpu_ns_ = 0;
+  mutable std::uint64_t phase_gpu_bytes_ = 0;
 
   Matrix token_embd_;
   Matrix output_;

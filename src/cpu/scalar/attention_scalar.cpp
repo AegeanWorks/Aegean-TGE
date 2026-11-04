@@ -3,10 +3,50 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 
 namespace tge::cpu {
+namespace {
+
+void validate_attention_args(const AttentionArgs& args) {
+  if (args.head_dim <= 0 || args.span <= 0) {
+    throw std::invalid_argument("attention: non-positive head_dim/span");
+  }
+  if (args.kv_stride < args.head_dim) {
+    // Rows would overlap: token t's row is read from [t*stride, t*stride + D).
+    throw std::invalid_argument("attention: kv_stride < head_dim");
+  }
+  if (args.query == nullptr || args.scores == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("attention: null query/scores/out");
+  }
+  if (args.half && args.q8) {
+    throw std::invalid_argument("attention: half and q8 both set");
+  }
+  if (args.q8) {
+    // Scale blocks parallel the values one per 32; a ragged width silently
+    // reads the wrong scale row.
+    if (args.head_dim % 32 != 0 || args.kv_stride % 32 != 0) {
+      throw std::invalid_argument("attention: q8 needs 32-element blocks");
+    }
+    if (args.keys_q8 == nullptr || args.values_q8 == nullptr ||
+        args.keys_q8_scales == nullptr || args.values_q8_scales == nullptr) {
+      throw std::invalid_argument("attention: null q8 buffers");
+    }
+  } else if (args.half) {
+    if (args.keys_half == nullptr || args.values_half == nullptr) {
+      throw std::invalid_argument("attention: null half buffers");
+    }
+  } else {
+    if (args.keys == nullptr || args.values == nullptr) {
+      throw std::invalid_argument("attention: null float buffers");
+    }
+  }
+}
+
+}  // namespace
 
 void attention_head_scalar(const AttentionArgs& args) {
+  validate_attention_args(args);
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
   const int span = args.span;

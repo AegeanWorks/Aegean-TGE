@@ -75,7 +75,7 @@ PlacementDecision place(const ModelPlan& plan, std::int64_t usable_bytes,
   decision.usable_bytes = usable_bytes;
   decision.headroom_after_weights =
       usable_bytes - plan.parameter_bytes;
-  decision.weights_fit = decision.headroom_after_weights > 0;
+  decision.weights_fit = decision.headroom_after_weights >= 0;
 
   if (!decision.weights_fit) {
     decision.reason =
@@ -105,7 +105,7 @@ PlacementDecision place(const ModelPlan& plan, std::int64_t usable_bytes,
 
   // Shrink the thing the caller asked for first, then the session count.
   const int by_sessions = static_cast<int>(decision.headroom_after_weights /
-                                           (per_session * wanted));
+                                           per_session);
   const std::int64_t per_session_budget =
       decision.headroom_after_weights / wanted;
   const int by_context =

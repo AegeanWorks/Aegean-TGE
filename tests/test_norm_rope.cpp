@@ -113,3 +113,30 @@ TGE_TEST(silu_gated_avx2_matches_scalar) {
     }
   }
 }
+
+TGE_TEST(rope_interleaved_odd_dim_leaves_tail_alone) {
+  // Regression: scalar loop used `index < head_dim` and touched
+  // vector[index + 1] on the last odd lane (heap OOB); AVX2 guards
+  // with `index + 1 < head_dim`. Scalar must match AVX2: leave the
+  // trailing lane untouched and never write past the row.
+  const int heads = 1;
+  const int head_dim = 65;
+  std::vector<float> cos_dup(static_cast<std::size_t>(head_dim), 1.0F);
+  std::vector<float> sin_dup(static_cast<std::size_t>(head_dim), 0.0F);
+  std::vector<float> values(static_cast<std::size_t>(heads * head_dim) + 1,
+                            0.5F);
+  const float sentinel = values.back();
+  const float tail_before = values[64];
+  tge::cpu::apply_rope_interleaved_scalar(values.data(), heads, head_dim, 0,
+                                          cos_dup.data(), sin_dup.data());
+  TGE_CHECK(values[64] == tail_before);
+  TGE_CHECK(values.back() == sentinel);
+  // AVX2 parity on the same odd shape.
+  std::vector<float> vector_values(values.size(), 0.5F);
+  tge::cpu::apply_rope_interleaved_avx2(vector_values.data(), heads, head_dim,
+                                        0, cos_dup.data(), sin_dup.data());
+  for (int index = 0; index < head_dim; ++index) {
+    TGE_CHECK_NEAR(vector_values[static_cast<std::size_t>(index)],
+                   values[static_cast<std::size_t>(index)], 1e-5);
+  }
+}

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 namespace tge::cpu {
 namespace {
@@ -234,6 +235,29 @@ void dequantize_q6_k(const std::uint8_t* source, float* destination, int cols) {
 }  // namespace
 
 std::size_t quant_row_bytes(QuantKind kind, int cols) {
+  int block = 0;
+  switch (kind) {
+    case QuantKind::Q8_0:
+      block = kQ8BlockElements;
+      break;
+    case QuantKind::Q4_K:
+    case QuantKind::Q5_K:
+    case QuantKind::Q6_K:
+      block = kKBlockElements;
+      break;
+    case QuantKind::Q4_0:
+    case QuantKind::Q5_0:
+    case QuantKind::Q5_1:
+      block = kLegacyBlockElements;
+      break;
+    default:
+      throw std::invalid_argument("quant_row_bytes: unknown QuantKind");
+  }
+  if (cols <= 0 || cols % block != 0) {
+    // A truncated prefix would decode the wrong dot product while the
+    // end-of-file bounds check still passes; fail loudly instead.
+    throw std::invalid_argument("quant_row_bytes: cols not a whole block");
+  }
   switch (kind) {
     case QuantKind::Q8_0:
       return static_cast<std::size_t>(cols / kQ8BlockElements) * kQ8BlockBytes;
@@ -258,6 +282,34 @@ std::size_t quant_row_bytes(QuantKind kind, int cols) {
 
 void dequantize_row(QuantKind kind, const std::uint8_t* source,
                     float* destination, int cols) {
+  int block = 0;
+  switch (kind) {
+    case QuantKind::Q4_K:
+    case QuantKind::Q5_K:
+    case QuantKind::Q6_K:
+      block = kKBlockElements;
+      break;
+    case QuantKind::Q4_0:
+    case QuantKind::Q5_0:
+    case QuantKind::Q5_1:
+      block = kLegacyBlockElements;
+      break;
+    case QuantKind::Q8_0:
+      // Same width as the legacy blocks today, but a different format
+      // family: track kQ8BlockElements so a legacy change cannot
+      // silently resize Q8_0 rows.
+      block = kQ8BlockElements;
+      break;
+    default:
+      // Without this, an invalid kind silently decodes as Q8_0 below.
+      throw std::invalid_argument("dequantize_row: unknown QuantKind");
+  }
+  if (source == nullptr || destination == nullptr) {
+    throw std::invalid_argument("dequantize_row: null buffer");
+  }
+  if (cols <= 0 || cols % block != 0) {
+    throw std::invalid_argument("dequantize_row: cols not a whole block");
+  }
   switch (kind) {
     case QuantKind::Q4_K:
       dequantize_q4_k(source, destination, cols);
@@ -282,13 +334,13 @@ void dequantize_row(QuantKind kind, const std::uint8_t* source,
   }
   // Q8_0 has a fused kernel; this path exists only so the switch is total.
   const int blocks = cols / kQ8BlockElements;
-  for (int block = 0; block < blocks; ++block) {
-    const std::uint8_t* entry = source + block * kQ8BlockBytes;
+  for (int block_index = 0; block_index < blocks; ++block_index) {
+    const std::uint8_t* entry = source + block_index * kQ8BlockBytes;
     std::uint16_t scale_bits = 0;
     std::memcpy(&scale_bits, entry, sizeof(scale_bits));
     const float scale = half_to_float(scale_bits);
     const auto* values = reinterpret_cast<const std::int8_t*>(entry + 2);
-    float* out = destination + block * kQ8BlockElements;
+    float* out = destination + block_index * kQ8BlockElements;
     for (int index = 0; index < kQ8BlockElements; ++index) {
       out[index] = static_cast<float>(values[index]) * scale;
     }

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 #include <immintrin.h>
 
@@ -397,6 +398,22 @@ void dequantize_q5_k_avx2(const std::uint8_t* source, float* destination,
 
 void dequantize_row_avx2(QuantKind kind, const std::uint8_t* source,
                          float* destination, int cols) {
+  const bool k_quant = kind == QuantKind::Q4_K || kind == QuantKind::Q6_K ||
+                       kind == QuantKind::Q5_K;
+  const bool legacy = kind == QuantKind::Q4_0 || kind == QuantKind::Q5_0 ||
+                      kind == QuantKind::Q5_1 || kind == QuantKind::Q8_0;
+  if (!k_quant && !legacy) {
+    // Matches the scalar fallback below, which throws on unknown kinds
+    // instead of decoding them as Q8_0.
+    throw std::invalid_argument("dequantize_row: unknown QuantKind");
+  }
+  const int block = k_quant ? kKBlockElements : kQ8BlockElements;
+  if (source == nullptr || destination == nullptr) {
+    throw std::invalid_argument("dequantize_row: null buffer");
+  }
+  if (cols <= 0 || cols % block != 0) {
+    throw std::invalid_argument("dequantize_row: cols not a whole block");
+  }
   if (kind == QuantKind::Q4_K) {
     dequantize_q4_k_avx2(source, destination, cols);
     return;

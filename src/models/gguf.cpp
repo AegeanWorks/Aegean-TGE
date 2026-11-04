@@ -128,6 +128,8 @@ Value read_scalar(Cursor& cursor, ValueType type) {
       break;
     case ValueType::Array:
       throw std::runtime_error("gguf: nested arrays are not valid");
+    default:
+      throw std::runtime_error("gguf: unknown value type");
   }
   return value;
 }
@@ -158,8 +160,9 @@ std::uint64_t element_min_bytes(ValueType type) {
       return 8;
     case ValueType::Array:
       return 12;  // element type tag plus a length field
+    default:
+      throw std::runtime_error("gguf: unknown value type");
   }
-  return 1;
 }
 
 Value read_value(Cursor& cursor, bool load_large_arrays = true) {
@@ -507,6 +510,9 @@ File File::open(const std::string& path, bool load_large_arrays) {
       if (extent == 0) {
         throw std::runtime_error("gguf: zero-sized tensor " + info.name);
       }
+      if (info.elements > UINT64_MAX / extent) {
+        throw std::runtime_error("gguf: tensor shape overflows: " + info.name);
+      }
       info.elements *= extent;
     }
     const std::uint32_t block = type_block_size(info.type);
@@ -559,7 +565,7 @@ double File::get_f64(const std::string& key, double fallback) const {
 std::string File::get_string(const std::string& key,
                              const std::string& fallback) const {
   const Value* value = find(key);
-  if (value == nullptr || value->string_value.empty()) {
+  if (value == nullptr) {
     return fallback;
   }
   return value->string_value;

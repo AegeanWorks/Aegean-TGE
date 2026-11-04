@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 #include <immintrin.h>
 
@@ -62,6 +63,9 @@ inline float dot_row_q8(const std::uint8_t* row, const float* vector,
 void gemv_q8_0_avx2(const Q8GemvArgs& args, const GemvConfig& config) {
   if (args.rows <= 0 || args.cols <= 0) {
     return;
+  }
+  if (args.cols % kQ8BlockElements != 0) {
+    throw std::invalid_argument("gemv_q8_0: cols not a whole block");
   }
 
   const int threads = resolve_thread_count(config.threads);

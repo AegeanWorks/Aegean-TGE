@@ -63,7 +63,14 @@ void scalar_region(int row_begin, int row_end, int col_begin, int col_end,
 }  // namespace
 
 void gemm_avx2_unpacked(const GemmArgs& args, const GemmConfig& /*config*/) {
-  if (args.m <= 0 || args.n <= 0 || args.k <= 0) {
+  if (args.m <= 0 || args.n <= 0) {
+    return;
+  }
+  if (args.k <= 0) {
+    for (int row = 0; row < args.m; ++row) {
+      std::memset(args.c + static_cast<std::size_t>(row) * args.ldc, 0,
+                  sizeof(float) * static_cast<std::size_t>(args.n));
+    }
     return;
   }
 

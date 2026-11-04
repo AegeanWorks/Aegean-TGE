@@ -17,6 +17,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 option(TGE_BUILD_TESTS "Build the correctness test suite" ON)
+option(TGE_ENABLE_VULKAN "Vulkan GPU backend (needs SDK headers + glslc)" ON)
 
 if(MSVC)
   add_compile_options(/W4 /permissive- /EHsc /utf-8 /Zc:__cplusplus)
@@ -54,6 +55,7 @@ add_library(tge_core STATIC
   src/models/sampling.cpp
   src/models/tokenizer.cpp
   src/models/plan.cpp
+  src/gpu/noop.cpp
   src/cpu/avx2/gemm_avx2.cpp
   src/cpu/avx2/gemm_unpacked.cpp
   src/cpu/avx2/gemv_avx2.cpp
@@ -61,6 +63,7 @@ add_library(tge_core STATIC
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/q8_batch_vnni.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
+  src/cpu/avx2/dequant_batch_kq8_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/attention_avx2.cpp
   src/cpu/avx2/norm_rope_avx2.cpp
@@ -84,6 +87,7 @@ tge_set_isa_flags(AVX2
   src/cpu/avx2/q8_gemv_avx2.cpp
   src/cpu/avx2/q8_batch_avx2.cpp
   src/cpu/avx2/dequant_batch_avx2.cpp
+  src/cpu/avx2/dequant_batch_kq8_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/attention_avx2.cpp
   src/cpu/avx2/norm_rope_avx2.cpp
@@ -102,6 +106,64 @@ endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(tge_core PUBLIC Threads::Threads)
+
+# Portable GPU backend: the Vulkan SDK (headers + glslc) is optional. Without
+# it the engine builds and runs CPU-only; src/gpu/noop.cpp reports
+# Unavailable and every eligibility check keeps the CPU kernels.
+if(TGE_ENABLE_VULKAN)
+  find_package(Vulkan QUIET)
+endif()
+if(Vulkan_FOUND)
+  target_sources(tge_core PRIVATE src/gpu/vulkan_context.cpp)
+  target_link_libraries(tge_core PUBLIC Vulkan::Vulkan)
+  target_compile_definitions(tge_core PUBLIC TGE_HAS_VULKAN=1)
+
+  # Shader pipeline: glslc compiles each .comp to SPIR-V, then bin2h.cmake
+  # embeds it as an aligned byte array so the binary stays single-file.
+  # The SDK installer does not put Bin on PATH, so look there explicitly.
+  find_program(TGE_GLSLC glslc
+    PATHS "$ENV{VULKAN_SDK}/Bin" "C:/VulkanSDK/1.4.363.0/Bin"
+    NO_DEFAULT_PATH)
+  find_program(TGE_GLSLC glslc)
+  if(NOT TGE_GLSLC)
+    message(FATAL_ERROR "TGE_ENABLE_VULKAN is on and Vulkan was found, but "
+                        "glslc is missing; install the SDK Bin tools or set "
+                        "TGE_ENABLE_VULKAN=OFF")
+  endif()
+  set(TGE_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/tge/gpu")
+  file(MAKE_DIRECTORY "${TGE_SPV_DIR}")
+  set(TGE_GPU_SHADERS "")
+  foreach(shader noop q8_gemv q8_gemm)
+    # Embedded symbol is k + CamelCase + Spv (kNoopSpv, kQ8GemvSpv).
+    string(REPLACE "_" ";" name_parts "${shader}")
+    set(capped "")
+    foreach(part IN LISTS name_parts)
+      string(SUBSTRING "${part}" 0 1 first_letter)
+      string(TOUPPER "${first_letter}" FIRST_LETTER)
+      string(SUBSTRING "${part}" 1 -1 shader_rest)
+      set(capped "${capped}${FIRST_LETTER}${shader_rest}")
+    endforeach()
+    set(spv_var "k${capped}Spv")
+    set(comp "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/${shader}.comp")
+    set(spv "${TGE_SPV_DIR}/${shader}.spv")
+    # Flat in the generated root: the TU includes it bare and tge_core gets
+    # the generated root on its private include path.
+    set(header "${CMAKE_CURRENT_BINARY_DIR}/generated/tge_gpu_${shader}_spv.h")
+    add_custom_command(
+      OUTPUT "${spv}" "${header}"
+      COMMAND "${TGE_GLSLC}" -fshader-stage=comp -O -o "${spv}" "${comp}"
+      COMMAND "${CMAKE_COMMAND}" -DINPUT="${spv}" -DOUTPUT="${header}"
+              -DVAR=${spv_var} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2h.cmake"
+      DEPENDS "${comp}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2h.cmake"
+      COMMENT "Compiling + embedding GPU shader ${shader}.comp")
+    list(APPEND TGE_GPU_SHADERS "${spv}" "${header}")
+  endforeach()
+  add_custom_target(tge_gpu_shaders ALL DEPENDS ${TGE_GPU_SHADERS})
+  add_dependencies(tge_core tge_gpu_shaders)
+  target_include_directories(tge_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+else()
+  target_compile_definitions(tge_core PUBLIC TGE_HAS_VULKAN=0)
+endif()
 
 # MinGW's ar can leave the archive index stale when only some members change;
 # refresh it so the linker sees every kernel symbol after an incremental build.
@@ -134,6 +196,7 @@ if(TGE_BUILD_TESTS)
     tests/test_thread_pool.cpp
     tests/test_attention.cpp
     tests/test_norm_rope.cpp
+    tests/test_gpu_fallback.cpp
   )
   target_link_libraries(tge_tests PRIVATE tge_core)
   add_test(NAME tge_tests COMMAND tge_tests)

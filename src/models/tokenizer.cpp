@@ -1,10 +1,12 @@
 #include "tge/models/tokenizer.hpp"
-
 #include <algorithm>
+
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <map>
 #include <queue>
+#include <stdexcept>
 #include <utility>
 
 namespace tge::models {
@@ -351,6 +353,14 @@ bool Tokenizer::enable_spm(Tokenizer* tokenizer, const gguf::File& file,
   for (const gguf::Value& element : scores->elements) {
     tokenizer->scores_.push_back(static_cast<float>(element.as_f64()));
   }
+  for (const float score : tokenizer->scores_) {
+    // A NaN/inf rank silently breaks the best-first merge order (NaN loses
+    // every comparison); the file is corrupt, fail the load instead.
+    if (!std::isfinite(score)) {
+      error = "SPM vocabulary has a non-finite tokenizer.ggml.scores entry";
+      return false;
+    }
+  }
   tokenizer->byte_token_.fill(-1);
   for (std::size_t index = 0; index < tokenizer->pieces_.size(); ++index) {
     const int byte = byte_piece_value(tokenizer->pieces_[index]);
@@ -449,6 +459,13 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
         tokenizer->control_tokens_.emplace_back(
             tokenizer->pieces_[index], static_cast<int>(index));
       }
+    }
+    // BPE twin of the SPM erasure in enable_spm: specials are matched
+    // literally via control_tokens_, never via merges. Leaving them in
+    // vocab_ lets merge rules fuse user text into a CONTROL/USER_DEFINED
+    // id even with match_special=false, forging turn boundaries/tool calls.
+    for (const auto& control : tokenizer->control_tokens_) {
+      tokenizer->vocab_.erase(control.first);
     }
   }
   std::sort(tokenizer->control_tokens_.begin(),
@@ -621,14 +638,19 @@ std::vector<int> Tokenizer::encode_plain(const std::string& text) const {
         continue;
       }
       // Unknown multi-byte symbol: fall back to its individual characters.
+      // A character with no vocabulary entry is a corrupt-vocabulary error,
+      // not skippable text: dropping it silently rewrites the user's prompt.
+      // (Full Qwen/Llama vocabs cover every byte, so this fires only on
+      // truncated fixtures.)
       std::size_t position = 0;
       while (position < symbol.size()) {
         const std::size_t begin = position;
         next_codepoint(symbol, position);
         const auto single = vocab_.find(symbol.substr(begin, position - begin));
-        if (single != vocab_.end()) {
-          ids.push_back(single->second);
+        if (single == vocab_.end()) {
+          throw std::invalid_argument("encode_plain: text has no vocabulary entry");
         }
+        ids.push_back(single->second);
       }
     }
   }
@@ -774,9 +796,13 @@ std::vector<int> Tokenizer::encode_spm(const std::string& text) const {
           for (std::size_t offset = 0; offset < part.length; ++offset) {
             const int byte_id = byte_token_[static_cast<unsigned char>(
                 normalized[part.start + offset])];
-            if (byte_id >= 0) {
-              ids.push_back(byte_id);
+            // Same contract as the BPE path: an unencodable byte is a
+            // corrupt vocabulary, not skippable text.
+            if (byte_id < 0) {
+              throw std::invalid_argument(
+                  "encode_spm: byte has no vocabulary entry");
             }
+            ids.push_back(byte_id);
           }
           continue;
         }

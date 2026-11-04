@@ -22,6 +22,7 @@
 #include "tge/core/cpu.hpp"
 #include "tge/core/dispatch.hpp"
 #include "tge/core/thread_pool.hpp"
+#include "tge/gpu/backend.hpp"
 #include "tge/memory/allocator.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/memory/system_ram.hpp"
@@ -64,7 +65,9 @@ void print_usage() {
       "  bench batch [opts]   one prefill matrix-vector kernel, in isolation\n"
       "        --rows N --cols N --tokens N --repeat N\n"
       "        --format F       q8|q40|q4k|q5k|q6k|q50|q51 weight format (default q8)\n"
-      "        --kernel K       vnni to route Q8 through the VNNI kernel\n"
+      "        --kernel K       vnni to route Q8 through the VNNI kernel,\n"
+      "                       kq8 for the K-quant x Q8-activation integer prefill kernel,\n"
+      "                       kq8d for its single-row decode variant (tokens=1)\n"
       "  gguf <path>          inspect a GGUF model file\n"
       "  plan [opts]          memory budget and decode ceiling, before loading\n"
       "        --model PATH --context N --sessions N --bandwidth GB/s\n"
@@ -101,14 +104,20 @@ void print_usage() {
       "        --speculative    prompt-lookup speculation: greedy +-penalty,\n"
       "                         temperature-only sampling (other cuts fall back)\n"
       "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
+      "        --kernel kq8     integer Q4_K/Q6_K x Q8_K prefill kernels (default on)\n"
+      "        --kernel float   float dequant prefill kernels (default off)\n"
       "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --gpu M          auto|off|on GPU offload (default auto)\n"
       "        --prefetch       fault weights before first token, report ms\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
       "  fidelity [opts]      full-scalar oracle vs selected kernels, teacher-forced\n"
       "        --model PATH --corpus PATH\n"
       "        --vnni           compare against the VNNI batch kernels\n"
+      "        --kernel kq8     compare against the integer Q4_K/Q6_K x Q8_K prefill kernel (default on)\n"
+      "        --kernel float   compare against the float dequant prefill kernels (default off)\n"
       "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --gpu M          auto|off|on GPU offload (default auto)\n"
       "        --sparse         price the static sparse subset on the candidate\n"
       "        --sparse-window N  most-recent kept positions (default 512)\n"
       "        --sparse-stride N  every N-th middle position kept (default 4)\n"
@@ -465,9 +474,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      int context_limit, bool print_text,
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
-                     bool speculative, bool vnni, bool kv_half, bool kv_q8,
-                     bool prefetch, int prefill_threads, bool pin_threads,
-                     tge::models::SparseConfig sparse) {
+                    bool speculative, bool vnni, bool kq8, bool kv_half, bool kv_q8,
+                    bool prefetch, int prefill_threads, bool pin_threads,
+                    tge::models::SparseConfig sparse,
+                    const std::string& gpu_mode) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -483,6 +493,14 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   }
   if (kv_half && kv_q8) {
     std::fprintf(stderr, "generate: --kv takes one of f32|f16|i8\n");
+    return 2;
+  }
+  // `--gpu on` requires a ready backend; fail here, before the load, instead
+  // of silently benchmarking the CPU.
+  if (gpu_mode == "on" &&
+      tge::gpu::init() != tge::gpu::GpuStatus::Ready) {
+    std::fprintf(stderr, "generate: --gpu on needs a ready GPU backend (%s)\n",
+                 tge::gpu::info().name);
     return 2;
   }
 
@@ -533,6 +551,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     model->set_attention_mode(tge::models::AttentionMode::Head);
   }
   model->set_vnni(vnni);
+  model->set_kq8(kq8);
   if (sparse.enabled) {
     if (kv_half || kv_q8) {
       std::fprintf(stderr,
@@ -548,6 +567,14 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     std::printf("sparse   : sink %d, window %d, stride %d\n", sparse.sink,
                 sparse.window, sparse.stride);
   }
+  // GPU request: auto tries the backend and silently keeps the CPU kernels
+  // when it is unavailable; off forces the proven path.
+  const tge::gpu::GpuStatus gpu_status = tge::gpu::init();
+  model->set_use_gpu(gpu_mode != "off");
+  std::printf("gpu        : %s (%s)\n", gpu_mode.c_str(),
+              gpu_status == tge::gpu::GpuStatus::Ready
+                  ? "ready, CPU fallback armed"
+                  : tge::gpu::info().name);
 
   const tge::models::Qwen2Config& config = model->config();
 
@@ -626,6 +653,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     const double nx_ms = static_cast<double>(model->phase_norm_ns()) / 1e6;
     std::printf("phases   : prefill matvec %.1f ms, attn %.1f ms, norm %.1f ms\n",
                 mv_ms, at_ms, nx_ms);
+    if (model->phase_gpu_bytes() > 0) {
+      std::printf("gpu      : prefill offload %.1f ms, %llu bytes moved\n",
+                  static_cast<double>(model->phase_gpu_ns()) / 1e6,
+                  static_cast<unsigned long long>(
+                      model->phase_gpu_bytes()));
+    }
   }
   model->reset_phase_timers();
 
@@ -946,6 +979,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                 mv_ms, ph_total > 0.0 ? mv_ms / ph_total * 100.0 : 0.0, at_ms,
                 ph_total > 0.0 ? at_ms / ph_total * 100.0 : 0.0, nx_ms,
                 ph_total > 0.0 ? nx_ms / ph_total * 100.0 : 0.0);
+    if (model->phase_gpu_bytes() > 0) {
+      std::printf("gpu      : output offload %.1f ms, %llu bytes moved\n",
+                  static_cast<double>(model->phase_gpu_ns()) / 1e6,
+                  static_cast<unsigned long long>(
+                      model->phase_gpu_bytes()));
+    }
   }
   if (spec_steps > 0) {
     std::printf(
@@ -977,7 +1016,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
 }
 
 int command_batch_bench(int rows, int cols, int tokens, int repeat,
-                        bool use_vnni, int k_format) {
+                        bool use_vnni, bool use_kq8, bool use_kq8d,
+                        int k_format) {
   if (rows <= 0 || cols <= 0 || tokens <= 0 || repeat <= 0) {
     std::fprintf(stderr, "bench batch: all dimensions must be positive\n");
     return 2;
@@ -1053,9 +1093,13 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
     args.input = input.f32();
     args.tokens = tokens;
     args.out = output.f32();
+    const tge::cpu::DequantBatchFn kernel =
+        use_kq8d ? &tge::cpu::gemv_dequant_kq8_row_avx2
+        : use_kq8 ? &tge::cpu::gemv_dequant_batch_kq8_avx2
+                  : set.gemv_dequant_batch;
     for (int iteration = 0; iteration < repeat; ++iteration) {
       const auto start = Clock::now();
-      set.gemv_dequant_batch(args, config);
+      kernel(args, config);
       const auto finish = Clock::now();
       const double seconds =
           std::chrono::duration<double>(finish - start).count();
@@ -1073,6 +1117,11 @@ int command_batch_bench(int rows, int cols, int tokens, int repeat,
                                  : "_k",
                 rows, cols, tokens,
                 static_cast<double>(matrix_bytes) / (1024.0 * 1024.0), repeat);
+    if (use_kq8) {
+      std::printf("  kernel kq8 (integer Q4_K/Q6_K x Q8_K)\n");
+    } else if (use_kq8d) {
+      std::printf("  kernel kq8d (integer Q4_K/Q6_K x Q8_K, single row)\n");
+    }
     std::printf("  %.3f ms  %.2f GFLOPS  %.2f GB/s\n", best * 1e3,
                 flops / best / 1e9,
                 static_cast<double>(matrix_bytes) / best / 1e9);
@@ -1448,6 +1497,22 @@ int command_info(bool json) {
   std::printf("  threads       : %d logical, %d for decode\n",
               tge::cpu::resolve_thread_count(0),
               tge::cpu::resolve_decode_threads());
+
+  const tge::gpu::GpuStatus gpu_status = tge::gpu::init();
+  std::printf("\nGPU\n");
+  std::printf("  status        : %s\n",
+              gpu_status == tge::gpu::GpuStatus::Ready
+                  ? "ready"
+                  : (gpu_status == tge::gpu::GpuStatus::Disabled
+                         ? "disabled (backend off)"
+                         : "unavailable (CPU fallback)"));
+  std::printf("  device        : %s\n", tge::gpu::info().name);
+  if (gpu_status == tge::gpu::GpuStatus::Ready) {
+    const tge::gpu::NoopResult noop = tge::gpu::run_noop();
+    std::printf("  roundtrip     : %s (submit %.1f us, readback %u)\n",
+                noop.ok ? "ok" : "FAILED",
+                static_cast<double>(noop.submit_ns) / 1e3, noop.readback);
+  }
   return 0;
 }
 
@@ -1634,12 +1699,14 @@ int run_generate(int argc, char** argv) {
   tge::models::AttentionMode attention_mode = tge::models::AttentionMode::Auto;
   bool speculative = false;
   bool vnni = false;
+  bool kq8 = true;
   bool kv_half = false;
   bool kv_q8 = false;
   bool prefetch = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
   tge::models::SparseConfig sparse;
+  std::string gpu_mode = "auto";
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--print-ids") == 0) {
@@ -1735,6 +1802,24 @@ int run_generate(int argc, char** argv) {
         std::fprintf(stderr, "generate: --kv takes f32|f16|i8\n");
         return 2;
       }
+    } else if (std::strcmp(flag, "--gpu") == 0) {
+      if (std::strcmp(value, "auto") == 0 ||
+          std::strcmp(value, "off") == 0 ||
+          std::strcmp(value, "on") == 0) {
+        gpu_mode = value;
+      } else {
+        std::fprintf(stderr, "generate: --gpu takes auto|off|on\n");
+        return 2;
+      }
+    } else if (std::strcmp(flag, "--kernel") == 0) {
+      if (std::strcmp(value, "kq8") == 0) {
+        kq8 = true;
+      } else if (std::strcmp(value, "float") == 0) {
+        kq8 = false;
+      } else {
+        std::fprintf(stderr, "generate: --kernel takes kq8|float\n");
+        return 2;
+      }
     } else if (std::strcmp(flag, "--top-k") == 0) {
       ok = parse_int(value, sampling.top_k);
     } else if (std::strcmp(flag, "--temp") == 0) {
@@ -1770,9 +1855,9 @@ int run_generate(int argc, char** argv) {
   }
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
-                          vocabulary, attention_mode, speculative, vnni,
+                          vocabulary, attention_mode, speculative, vnni, kq8,
                           kv_half, kv_q8, prefetch, prefill_threads,
-                          pin_threads != 0, sparse);
+                          pin_threads != 0, sparse, gpu_mode);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -1883,8 +1968,9 @@ int run_mem_bench(int argc, char** argv, int first) {
 
 int command_fidelity(const std::string& path, const std::string& corpus_path,
                      int context, int max_tokens, int threads, bool vnni,
-                     bool kv_half, bool kv_q8,
-                     tge::models::SparseConfig sparse) {
+                     bool kq8, bool kv_half, bool kv_q8,
+                     tge::models::SparseConfig sparse,
+                     const std::string& gpu_mode) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   if (vnni && !cpu.features.avx_vnni) {
     std::fprintf(stderr, "fidelity: --vnni needs AVX-VNNI on this CPU\n");
@@ -1896,6 +1982,12 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   }
   if (kv_half && kv_q8) {
     std::fprintf(stderr, "fidelity: --kv takes one of f32|f16|i8\n");
+    return 2;
+  }
+  if (gpu_mode == "on" &&
+      tge::gpu::init() != tge::gpu::GpuStatus::Ready) {
+    std::fprintf(stderr, "fidelity: --gpu on needs a ready GPU backend (%s)\n",
+                 tge::gpu::info().name);
     return 2;
   }
   std::ifstream corpus_stream(corpus_path, std::ios::binary);
@@ -1937,6 +2029,10 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   // The test model runs every kernel as production would.
   reference->set_scalar_kernels(true);
   candidate->set_vnni(vnni);
+  candidate->set_kq8(kq8);
+  // The candidate may request the GPU; the reference never does, so any KL
+  // prices the GPU numerics against the exact scalar oracle.
+  candidate->set_use_gpu(gpu_mode != "off");
   if (sparse.enabled) {
     if (kv_half || kv_q8) {
       std::fprintf(stderr,
@@ -2085,9 +2181,11 @@ int run_fidelity(int argc, char** argv) {
   int max_tokens = 0;
   int threads = 0;
   bool vnni = false;
+  bool kq8 = true;
   bool kv_half = false;
   bool kv_q8 = false;
   tge::models::SparseConfig sparse;
+  std::string gpu_mode = "auto";
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--vnni") == 0) {
@@ -2119,6 +2217,22 @@ int run_fidelity(int argc, char** argv) {
       }
       continue;
     }
+    if (std::strcmp(argv[index], "--gpu") == 0) {
+      if (index + 1 >= argc) {
+        std::fprintf(stderr, "fidelity: '--gpu' needs a value\n");
+        return 2;
+      }
+      const char* gpu_value = argv[++index];
+      if (std::strcmp(gpu_value, "auto") == 0 ||
+          std::strcmp(gpu_value, "off") == 0 ||
+          std::strcmp(gpu_value, "on") == 0) {
+        gpu_mode = gpu_value;
+      } else {
+        std::fprintf(stderr, "fidelity: --gpu takes auto|off|on\n");
+        return 2;
+      }
+      continue;
+    }
     if (index + 1 >= argc) {
       std::fprintf(stderr, "fidelity: '%s' needs a value\n", argv[index]);
       return 2;
@@ -2136,6 +2250,15 @@ int run_fidelity(int argc, char** argv) {
       ok = parse_int(value, max_tokens);
     } else if (std::strcmp(flag, "--threads") == 0) {
       ok = parse_int(value, threads);
+    } else if (std::strcmp(flag, "--kernel") == 0) {
+      if (std::strcmp(value, "kq8") == 0) {
+        kq8 = true;
+      } else if (std::strcmp(value, "float") == 0) {
+        kq8 = false;
+      } else {
+        std::fprintf(stderr, "fidelity: --kernel takes kq8|float\n");
+        return 2;
+      }
     } else if (std::strcmp(flag, "--sparse-window") == 0) {
       ok = parse_int(value, sparse.window);
     } else if (std::strcmp(flag, "--sparse-stride") == 0) {
@@ -2165,7 +2288,7 @@ int run_fidelity(int argc, char** argv) {
     return 2;
   }
   return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
-                          vnni, kv_half, kv_q8, sparse);
+                          vnni, kq8, kv_half, kv_q8, sparse, gpu_mode);
 }
 
 }  // namespace
@@ -2257,8 +2380,8 @@ int main(int argc, char** argv) {
     int context = 0;
     int prompt_tokens = 1;
     int prefill_threads = 0;
-    bool vnni = false;
-    bool kv_half = false;
+  bool vnni = false;
+  bool kv_half = false;
     bool kv_q8 = false;
     for (int index = 3; index < argc; ++index) {
       if (std::strcmp(argv[index], "--vnni") == 0) {
@@ -2402,6 +2525,8 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[2], "batch") == 0) {
       int rows = 4864, cols = 896, tokens = 64, repeat = 5;
       bool use_vnni = false;
+        bool use_kq8 = false;
+        bool use_kq8d = false;
       int k_format = 0;
       for (int index = 3; index < argc; index += 2) {
         const char* flag = argv[index];
@@ -2411,7 +2536,11 @@ int main(int argc, char** argv) {
         else if (std::strcmp(flag, "--cols") == 0) ok = parse_int(value, cols);
         else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
         else if (std::strcmp(flag, "--repeat") == 0) ok = parse_int(value, repeat);
-        else if (std::strcmp(flag, "--kernel") == 0) use_vnni = std::strcmp(value, "vnni") == 0;
+        else if (std::strcmp(flag, "--kernel") == 0) {
+          use_vnni = std::strcmp(value, "vnni") == 0;
+          use_kq8 = std::strcmp(value, "kq8") == 0;
+          use_kq8d = std::strcmp(value, "kq8d") == 0;
+        }
         else if (std::strcmp(flag, "--format") == 0) {
           if (std::strcmp(value, "q4k") == 0) {
             k_format = 4;
@@ -2432,7 +2561,8 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "bench batch: unknown option '%s'\n", flag); return 2; }
         if (!ok) { std::fprintf(stderr, "bench batch: invalid value\n"); return 2; }
       }
-      return command_batch_bench(rows, cols, tokens, repeat, use_vnni, k_format);
+      return command_batch_bench(rows, cols, tokens, repeat, use_vnni,
+                                 use_kq8, use_kq8d, k_format);
     }
     if (argc >= 3 && std::strcmp(argv[2], "mem") == 0) {
       return run_mem_bench(argc, argv, 3);

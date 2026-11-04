@@ -1,9 +1,11 @@
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "harness.hpp"
 #include "tge/cpu/kernels.hpp"
+#include "tge/models/qwen2.hpp"
 #include "tge/models/sampling.hpp"
 
 namespace {
@@ -317,4 +319,113 @@ TGE_TEST(sampled_no_cut_matches_expected_histogram) {
     TGE_CHECK_NEAR(static_cast<double>(counts[index]) / draws,
                    probabilities[index], 0.01);
   }
+}
+
+TGE_TEST(qwen2_argmax_rejects_null_and_empty) {
+  // Regression: argmax dereferenced values[0] with no null/count guard.
+  bool threw_null = false;
+  try {
+    (void)tge::models::Qwen2::argmax(nullptr, 4);
+  } catch (...) {
+    threw_null = true;
+  }
+  TGE_CHECK(threw_null);
+  const float values[3] = {0.1F, 0.9F, 0.5F};
+  bool threw_empty = false;
+  try {
+    (void)tge::models::Qwen2::argmax(values, 0);
+  } catch (...) {
+    threw_empty = true;
+  }
+  TGE_CHECK(threw_empty);
+  TGE_CHECK(tge::models::Qwen2::argmax(values, 3) == 1);
+}
+
+TGE_TEST(sampling_rejects_invalid_params) {
+  // Regression: NaN/out-of-range sampling params degraded silently into
+  // biased draws (NaN temperature, top_k=-1 disabling vs error, top_p=1.5
+  // disabling vs error, min_p=2.0 greedy fallback, penalty<=0 no-op).
+  const float logits[4] = {0.5F, 3.25F, -1.0F, 2.0F};
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  auto throws = [&](tge::models::SamplingParams params) {
+    Scratch scratch;
+    try {
+      draw(scratch, logits, 4, params);
+    } catch (const std::invalid_argument&) {
+      return true;
+    } catch (...) {
+      return true;
+    }
+    return false;
+  };
+  tge::models::SamplingParams params;
+  params.top_k = -1;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.top_p = 1.5F;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.top_p = -0.5F;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.top_p = nan;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.min_p = 2.0F;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.min_p = nan;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.temperature = nan;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.repeat_penalty = 0.0F;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.repeat_penalty = -2.0F;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.repeat_penalty = nan;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.repeat_penalty = inf;
+  TGE_CHECK(throws(params));
+  params = tge::models::SamplingParams{};
+  params.penalty_window = -1;
+  TGE_CHECK(throws(params));
+  // Null logits with positive count must throw, not read garbage.
+  {
+    Scratch scratch;
+    bool threw = false;
+    try {
+      tge::models::sample_token(nullptr, 4, tge::models::SamplingParams{},
+                                nullptr, 0, scratch.scores, scratch.order,
+                                scratch.state);
+    } catch (...) {
+      threw = true;
+    }
+    TGE_CHECK(threw);
+  }
+  // Documented "off" sentinels still pass validation.
+  {
+    Scratch scratch;
+    TGE_CHECK(draw(scratch, logits, 4, tge::models::SamplingParams{}) == 1);
+  }
+}
+
+TGE_TEST(sampling_seed_zero_is_not_degenerate) {
+  // Regression: xorshift32 with state 0 returns 0 forever, so --seed 0
+  // sampled token 0 at every stochastic step.
+  const float probabilities[4] = {0.25F, 0.25F, 0.25F, 0.25F};
+  std::uint32_t state = 0;
+  bool saw_nonzero = false;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    if (tge::models::categorical_sample(probabilities, 4, state) != 0) {
+      saw_nonzero = true;
+      break;
+    }
+  }
+  TGE_CHECK(saw_nonzero);
 }

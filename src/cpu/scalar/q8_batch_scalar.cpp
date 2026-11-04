@@ -2,12 +2,16 @@
 
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 
 namespace tge::cpu {
 
 void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& /*config*/) {
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
     return;
+  }
+  if (args.cols % kQ8BlockElements != 0) {
+    throw std::invalid_argument("gemv_q8_batch: cols not a whole block");
   }
 
   const int blocks = args.cols / kQ8BlockElements;

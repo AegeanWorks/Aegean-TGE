@@ -83,7 +83,7 @@ void apply_rope_interleaved_scalar(float* values, int heads, int head_dim,
   // slot of the pair reads the same value.
   for (int head = 0; head < heads; ++head) {
     float* vector = values + static_cast<std::size_t>(head) * head_dim;
-    for (int index = 0; index < head_dim; index += 2) {
+    for (int index = 0; index + 1 < head_dim; index += 2) {
       const float cosine = cos_table[index];
       const float sine = sin_table[index];
       const float even = vector[index];

@@ -1,7 +1,9 @@
 # Hardware Support
 
 `tge info` prints this report for any machine. The values below were measured on
-the development system with `tge info` on 2026-11-01.
+the development system with `tge info` on 2026-11-01; the RAM, ISA-best and GPU
+rows were re-measured on 2026-11-04 (RAM grew 16 -> 32 GiB, the Vulkan SDK is
+now installed, best ISA reports `avx-vnni`).
 
 ## Development machine (measured)
 
@@ -12,7 +14,7 @@ the development system with `tge info` on 2026-11-01.
 | Caches | L1D 416 KiB, L2 2048 KiB, L3 20480 KiB | `RelationCache` |
 | NUMA | 1 node | `RelationNumaNode` |
 | Instructions | sse2, sse3, ssse3, sse4.1, sse4.2, avx, avx2, fma, **avx-vnni** | CPUID + XCR0 |
-| RAM | 16.00 GiB installed, 15.86 GiB visible | `GlobalMemoryStatusEx` |
+| RAM | 32.00 GiB installed, 31.86 GiB visible (2026-11-04; was 16 GiB on 2026-11-01) | `GlobalMemoryStatusEx` |
 | GPU | AMD Radeon RX 9060 XT, driver 26.3.1 (LLPC) | `vulkaninfo` |
 | VRAM | 15.67 GiB device-local heap + 7.93 GiB host-visible heap | Vulkan memory heaps |
 | OS | Windows 11 Pro 10.0.26200 | `Win32_OperatingSystem` |
@@ -21,7 +23,10 @@ the development system with `tge info` on 2026-11-01.
 
 - **AVX-512 is not available.** The report is correct: consumer Raptor Lake fuses
   AVX-512 off. AVX2/FMA and AVX-VNNI are the ceiling on this machine.
-- **AVX-VNNI is available.** It is currently detected but not used. It is the
+- **AVX-VNNI is available and wired.** `tge info` reports best ISA `avx-vnni`.
+  The VNNI Q8-batch kernel is selected with `bench --kernel vnni`,
+  `generate --vnni` or `fidelity --vnni` (with a CPU gate that errors
+  cleanly without AVX-VNNI); default dispatch stays AVX2. It is the
   natural next kernel after the AVX2 one, because Raptor Lake benefits from
   `vpdpbusd` for quantized dot products.
 - **The specification named an i5-10400F; the machine has an i5-14400F.** This is
@@ -44,22 +49,23 @@ The engine targets this ladder, dispatched at runtime:
 | Scalar C++ reference | implemented |
 | SSE2 | detected, kernels not written |
 | AVX + FMA | detected, kernels not written |
-| AVX2 + FMA | implemented (GEMM) |
-| AVX-VNNI | detected, kernels not written |
+| AVX2 + FMA | implemented (GEMM, GEMV, Q8, dequant, attention, norms, sampling exp) |
+| AVX-VNNI | detected; VNNI Q8-batch kernel behind `--vnni` (default dispatch stays AVX2) |
 | AVX-512 / VNNI | not present on target hardware |
 | AMX | not present on target hardware |
 
-Nothing above AVX2 can be tested on this machine, and untested code is not
-claimed as working.
+VNNI is exercised on this machine (`best ISA: avx-vnni`); untested code above
+AVX-VNNI is not claimed as working.
 
 ## GPU backends
 
 | Backend | Status |
 |---|---|
-| Vulkan Compute | loader and AMD ICD present; **no SDK** (headers, `glslc`) |
+| Vulkan Compute | SDK present (headers + `glslc`); backend builds, `tge info` reports `ready` with a passing submit/readback roundtrip (2026-11-04) |
 | AMD HIP | **not installed**; no `HIP_PATH`, no ROCm directory |
 
-Neither backend exists in code. `gfx1200` support in a HIP SDK must be verified
+The Vulkan backend exists in code (`src/gpu/vulkan_context.cpp`, embedded
+shaders); HIP does not. `gfx1200` support in a HIP SDK must be verified
 before any HIP work is scheduled, because the RX 9060 XT is new enough that
 toolkit support cannot be assumed.
 

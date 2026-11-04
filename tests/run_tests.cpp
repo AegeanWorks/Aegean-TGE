@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <exception>
 
 #include "harness.hpp"
 
@@ -10,7 +11,18 @@ int main() {
     std::printf("[ RUN  ] %s\n", test_case.name);
     // Flush before running: a hanging case must name itself in the log.
     std::fflush(stdout);
-    test_case.fn();
+    try {
+      test_case.fn();
+    } catch (const std::exception& error) {
+      // One bad case must not hide the other ninety: report and continue.
+      std::fprintf(stderr, "    THREW %s\n         at %s\n", error.what(),
+                   test_case.name);
+      ++tgetest::failure_count();
+    } catch (...) {
+      std::fprintf(stderr, "    THREW unknown exception\n         at %s\n",
+                   test_case.name);
+      ++tgetest::failure_count();
+    }
     if (tgetest::failure_count() == before) {
       std::printf("[  OK  ] %s\n", test_case.name);
     } else {

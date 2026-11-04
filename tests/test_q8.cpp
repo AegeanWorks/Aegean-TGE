@@ -138,6 +138,58 @@ TGE_TEST(q8_batch_matches_scalar_reference) {
   expect_q8_batch_matches(64, 896, 16, 15u);
 }
 
+TGE_TEST(q8_rejects_partial_block) {
+  // Regression: cols%32 tails were silently dropped while the prefix
+  // benchmarked as exact. Both ISAs must fail loudly instead.
+  const std::vector<std::uint8_t> matrix = make_q8_matrix(2, 32, 1u);
+  std::vector<float> vector(48, 0.5F);
+  std::vector<float> out(2, 0.0F);
+  tge::cpu::Q8GemvArgs args;
+  args.data = matrix.data();
+  args.rows = 2;
+  args.cols = 48;
+  args.vector = vector.data();
+  args.out = out.data();
+  bool threw_scalar = false;
+  try {
+    tge::cpu::gemv_q8_0_scalar(args, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    threw_scalar = true;
+  }
+  TGE_CHECK(threw_scalar);
+  bool threw_dispatched = false;
+  try {
+    tge::kernels().gemv_q8(args, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    threw_dispatched = true;
+  }
+  TGE_CHECK(threw_dispatched);
+
+  tge::cpu::Q8BatchArgs bargs;
+  std::vector<float> input(48, 0.5F);
+  std::vector<float> bout(2, 0.0F);
+  bargs.data = matrix.data();
+  bargs.rows = 2;
+  bargs.cols = 48;
+  bargs.input = input.data();
+  bargs.tokens = 1;
+  bargs.out = bout.data();
+  bool threw_bscalar = false;
+  try {
+    tge::cpu::gemv_q8_batch_scalar(bargs, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    threw_bscalar = true;
+  }
+  TGE_CHECK(threw_bscalar);
+  bool threw_bdispatched = false;
+  try {
+    tge::kernels().gemv_q8_batch(bargs, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    threw_bdispatched = true;
+  }
+  TGE_CHECK(threw_bdispatched);
+}
+
 TGE_TEST(half_conversion_matches_known_values) {
   TGE_CHECK_NEAR(tge::cpu::half_to_float(0x0000), 0.0F, 1e-9);
   TGE_CHECK_NEAR(tge::cpu::half_to_float(0x3C00), 1.0F, 1e-6);

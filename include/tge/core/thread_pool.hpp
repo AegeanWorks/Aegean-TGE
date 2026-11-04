@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -52,6 +53,18 @@ class ThreadPool {
   std::atomic<std::size_t> completed_{0};
   std::atomic<std::uint64_t> generation_{0};
   std::atomic<bool> stop_{false};
+
+  /// Single-flight guard: parallel_for publishes into the shared slots
+  /// above, so a concurrent or nested call would corrupt the in-flight
+  /// call. The second caller gets an exception instead of silent
+  /// corruption (the "Calls are serialized" contract, now enforced).
+  std::atomic<bool> active_{false};
+  /// First failure banked by any thread; rethrown by the caller after
+  /// the join so a throwing body neither terminates the process nor
+  /// leaves the pool unusable.
+  std::mutex exception_mutex_;
+  std::exception_ptr exception_;
+  std::atomic<bool> failed_{false};
 
   /// Workers parked on `wake_`, and whether the caller is parked on
   /// `finished_`. The publisher only pays for a condition-variable notify when

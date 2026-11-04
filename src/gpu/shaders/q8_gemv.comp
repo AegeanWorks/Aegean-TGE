@@ -1,0 +1,96 @@
+// Q8_0 matrix-vector product: one thread per output row.
+//
+// Weight layout is exactly the host Q8_0 row: 32-element blocks, each block
+// an fp16 scale FIRST (2 bytes) then 32 int8 quants (34 bytes, so blocks
+// are NOT 4-byte aligned - all weight reads go through read_u32, which
+// assembles a word from any byte address). No 8/16-bit storage or
+// arithmetic extensions: bytes are extracted with shifts and the fp16 scale
+// is converted with plain integer math, so this compiles to any Vulkan 1.x
+// implementation. The extra ALU is noise next to the 144 MB weight stream
+// (memory-bound either way).
+//
+// Accumulation is fp32 per block (dot, then scale - matching the host
+// scalar kernel); the fidelity harness prices any residual difference
+// against the scalar oracle.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer Weights {
+  uint wdata[];
+};
+layout(set = 0, binding = 1) readonly buffer Input {
+  float xdata[];
+};
+layout(set = 0, binding = 2) writeonly buffer Output {
+  float values[];
+};
+
+layout(push_constant) uniform Params {
+  uint rows;
+  uint row_stride_bytes;
+  uint blocks_per_row;
+} pc;
+
+uint read_u32(uint addr) {
+  uint lo = addr >> 2u;
+  uint sh = addr & 3u;
+  uint a = wdata[lo];
+  if (sh == 0u) {
+    return a;
+  }
+  uint b = wdata[lo + 1u];
+  return (a >> (sh * 8u)) | (b << (32u - sh * 8u));
+}
+
+float f16_to_f32(uint h) {
+  uint s = (h >> 15u) & 1u;
+  uint e = (h >> 10u) & 0x1Fu;
+  uint m = h & 0x3FFu;
+  uint bits;
+  if (e == 0u) {
+    if (m == 0u) {
+      bits = s << 31u;
+    } else {
+      uint ee = 127u - 14u;
+      uint mm = m;
+      while ((mm & 0x400u) == 0u) {
+        mm <<= 1u;
+        ee -= 1u;
+      }
+      bits = (s << 31u) | (ee << 23u) | ((mm & 0x3FFu) << 13u);
+    }
+  } else if (e == 31u) {
+    bits = (s << 31u) | (0xFFu << 23u) | (m << 13u);
+  } else {
+    bits = (s << 31u) | ((e + 112u) << 23u) | (m << 13u);
+  }
+  return uintBitsToFloat(bits);
+}
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  if (row >= pc.rows) {
+    return;
+  }
+  float sum = 0.0;
+  uint base = row * pc.row_stride_bytes;
+  for (uint b = 0u; b < pc.blocks_per_row; ++b) {
+    uint baddr = base + b * 34u;
+    float scale = f16_to_f32(read_u32(baddr) & 0xFFFFu);
+    uint xbase = b * 32u;
+    float block = 0.0;
+    for (uint j = 0u; j < 8u; ++j) {
+      uint word = read_u32(baddr + 2u + j * 4u);
+      for (uint k = 0u; k < 4u; ++k) {
+        float q = float(int((word >> (k * 8u)) & 0xFFu));
+        if (q >= 128.0) {
+          q -= 256.0;
+        }
+        block += q * xdata[xbase + j * 4u + k];
+      }
+    }
+    sum += block * scale;
+  }
+  values[row] = sum;
+}

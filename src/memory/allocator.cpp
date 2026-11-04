@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 #if defined(_WIN32)
@@ -14,6 +15,13 @@ namespace tge::memory {
 std::size_t normalize_alignment(std::size_t requested) {
   if (requested <= kCacheLine) {
     return kCacheLine;
+  }
+  // Cap absurd requests: shifting past 2^30 would only serve a
+  // multi-GB alignment that _aligned_malloc/posix_memalign cannot
+  // honour, and shifting past 2^63 wraps to 0 and hangs below.
+  constexpr std::size_t kMaxAlignment = std::size_t{1} << 30;
+  if (requested > kMaxAlignment) {
+    throw std::invalid_argument("normalize_alignment: request too large");
   }
   std::size_t alignment = kCacheLine;
   while (alignment < requested) {

@@ -118,7 +118,14 @@ void pack_b(int kc, int nc, const float* b, int ldb, float* packed) {
 /// an unblocked instance can be measured against the production one.
 template <int kMc, int kKc, int kNc>
 void gemm_packed(const GemmArgs& args, const GemmConfig& config) {
-  if (args.m <= 0 || args.n <= 0 || args.k <= 0) {
+  if (args.m <= 0 || args.n <= 0) {
+    return;
+  }
+  if (args.k <= 0) {
+    for (int row = 0; row < args.m; ++row) {
+      std::memset(args.c + static_cast<std::size_t>(row) * args.ldc, 0,
+                  sizeof(float) * static_cast<std::size_t>(args.n));
+    }
     return;
   }
 

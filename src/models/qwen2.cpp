@@ -11,6 +11,7 @@
 
 #include "tge/core/dispatch.hpp"
 #include "tge/core/thread_pool.hpp"
+#include "tge/gpu/backend.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/models/plan.hpp"
 
@@ -631,6 +632,60 @@ void Qwen2::set_pin_threads(bool pin) {
   decode_pool_.reset();
 }
 
+bool Qwen2::wants_gpu_batch(int tokens, gguf::TensorType type) const {
+  const bool supported = type == gguf::TensorType::Q8_0 ||
+                         type == gguf::TensorType::F32;
+  const bool clean = !vnni_ && !scalar_kernels_ &&
+                     attention_mode_ != AttentionMode::Scalar;
+  return gpu::eligible_batch(use_gpu_requested_, tokens, supported, clean);
+}
+
+bool Qwen2::wants_gpu_gqa(int span) const {
+  const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+  // uses_gqa() already encodes the grouped schedule floor (span >= 256 with
+  // threads > 1); the sparse subset keeps its exact gather path and the
+  // scalar arm keeps the oracle, so neither ever offloads.
+  const bool follows = uses_gqa(span - 1);
+  const bool dense = !uses_sparse(span - 1) && !scalar_kernels_ &&
+                     attention_mode_ != AttentionMode::Scalar;
+  return gpu::eligible_gqa(use_gpu_requested_, span, threads, follows, dense);
+}
+
+bool Qwen2::wants_gpu_output(gguf::TensorType type) const {
+  const bool supported = type == gguf::TensorType::Q8_0 ||
+                         type == gguf::TensorType::F32;
+  const bool clean = !vnni_ && !scalar_kernels_ &&
+                     attention_mode_ != AttentionMode::Scalar;
+  return gpu::eligible_decode_output(use_gpu_requested_, supported, clean);
+}
+
+const float* Qwen2::output_logits(float* hidden) {
+  const int dim = config_.embedding_length;
+  // Q8_0 rides the device today; the F32 twin is unwritten, so F32 weights
+  // keep the CPU path even when the wish holds.
+  if (output_.type == gguf::TensorType::Q8_0 &&
+      wants_gpu_output(output_.type) && gpu::use_gpu()) {
+    const std::size_t row_bytes =
+        static_cast<std::size_t>(dim / cpu::kQ8BlockElements) *
+        cpu::kQ8BlockBytes;
+    gpu::GemvQ8Result dispatched = gpu::gemv_q8(
+        output_.data, static_cast<std::size_t>(output_.rows) * row_bytes,
+        output_.rows, dim, row_bytes, hidden, logits_.data());
+    if (dispatched.ok) {
+      phase_gpu_ns_ +=
+          dispatched.alloc_ns + dispatched.h2d_ns + dispatched.submit_ns +
+          dispatched.d2h_ns;
+      phase_gpu_bytes_ += gpu::hidden_bytes(dim) +
+                          gpu::logits_bytes(config_.vocab_size);
+      return logits_.data();
+    }
+  }
+  const cpu::Q8Quantized q_out =
+      vnni_ ? quantize_activations(hidden, 1, dim) : cpu::Q8Quantized{};
+  matvec(output_, hidden, logits_.data(), vnni_ ? &q_out : nullptr);
+  return logits_.data();
+}
+
 Qwen2::Matrix Qwen2::matrix(const char* name) const {
   const gguf::TensorInfo* info = file_.tensor(name);
   if (info == nullptr) {
@@ -801,6 +856,30 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
   const int workers = prefill_threads();
   const cpu::GemvConfig config{workers, &prefill_pool()};
 
+  // Batch offload: one H2D (activations) + one dispatch + one D2H per mat.
+  // Q8_0 rides the device today (F32 twin unwritten, K-quants stay CPU by
+  // construction of wants_gpu_batch); any backend hiccup falls through to
+  // the exact CPU kernels below.
+  if (weight.type == gguf::TensorType::Q8_0 &&
+      wants_gpu_batch(tokens, weight.type) && gpu::use_gpu()) {
+    const std::size_t row_bytes =
+        static_cast<std::size_t>(weight.cols / cpu::kQ8BlockElements) *
+        cpu::kQ8BlockBytes;
+    gpu::GemmQ8Result dispatched = gpu::gemm_q8(
+        weight.data, static_cast<std::size_t>(weight.rows) * row_bytes,
+        weight.rows, weight.cols, row_bytes, input, output, tokens);
+    if (dispatched.ok) {
+      phase_gpu_ns_ +=
+          dispatched.alloc_ns + dispatched.h2d_ns + dispatched.submit_ns +
+          dispatched.d2h_ns;
+      phase_gpu_bytes_ +=
+          static_cast<std::uint64_t>(tokens) *
+              (gpu::hidden_bytes(weight.cols) +
+               gpu::logits_bytes(weight.rows));
+      return;
+    }
+  }
+
   if (weight.type == gguf::TensorType::Q8_0) {
     if (vnni_ && quantized != nullptr && quantized->values != nullptr &&
         quantized->scales != nullptr) {
@@ -838,7 +917,16 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     args.input = input;
     args.tokens = tokens;
     args.out = output;
-    kernels().gemv_dequant_batch(args, config);
+    // Integer path for prefill-size batches: tokens == 1 keeps the float
+    // path (quantizer costs more than it saves, measured 0.8x), and the
+    // scalar oracle keeps the exact path (fidelity must price kq8, never
+    // assume it) — same `clean` idiom as the GPU/vNNI gates.
+    if (kq8_ && !scalar_kernels_ && tokens > 1 &&
+        (kind == cpu::QuantKind::Q4_K || kind == cpu::QuantKind::Q6_K)) {
+      cpu::gemv_dequant_batch_kq8_avx2(args, config);
+    } else {
+      kernels().gemv_dequant_batch(args, config);
+    }
     phase_matvec_ns_ += clock_ns() - t0;
     return;
   }
@@ -922,6 +1010,8 @@ void Qwen2::reset_phase_timers() const {
   phase_matvec_ns_ = 0;
   phase_attn_ns_ = 0;
   phase_norm_ns_ = 0;
+  phase_gpu_ns_ = 0;
+  phase_gpu_bytes_ = 0;
 }
 
 void Qwen2::rms_norm(float* out, const float* in, const float* weight) const {
@@ -1598,10 +1688,7 @@ const float* Qwen2::forward(int token, int position) {
   }
 
   rms_norm(h_.data(), x_.data(), output_norm_);
-  const cpu::Q8Quantized q_out =
-      vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
-  matvec(output_, h_.data(), logits_.data(), vnni_ ? &q_out : nullptr);
-  return logits_.data();
+  return output_logits(h_.data());
 }
 
 const float* Qwen2::prefill(const int* tokens, int count, int start_position,
@@ -1783,10 +1870,7 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
   std::memcpy(x_.data(), batch_x_.data() + last,
               sizeof(float) * static_cast<std::size_t>(dim));
   rms_norm(h_.data(), x_.data(), output_norm_);
-  const cpu::Q8Quantized q_out =
-      vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
-  matvec(output_, h_.data(), logits_.data(), vnni_ ? &q_out : nullptr);
-  return logits_.data();
+  return output_logits(h_.data());
 }
 
 int Qwen2::verify_draft(const int* tokens, int count, int start_position,
@@ -1837,6 +1921,9 @@ void Qwen2::reset_cache() {
 }
 
 int Qwen2::argmax(const float* values, int count) {
+  if (values == nullptr || count <= 0) {
+    throw std::invalid_argument("argmax: null values or empty count");
+  }
   int best = 0;
   float best_value = values[0];
   for (int index = 1; index < count; ++index) {

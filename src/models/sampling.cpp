@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <numeric>
+#include <stdexcept>
 #include <unordered_set>
 
 #include "tge/core/dispatch.hpp"
@@ -14,6 +15,12 @@ namespace {
 
 float next_random(std::uint32_t& state) {
   // xorshift32: adequate for sampling, and deterministic when seeded.
+  if (state == 0) {
+    // xorshift32 degenerates at 0 (every draw is exactly 0), so a
+    // --seed 0 run would sample token 0 at every stochastic step.
+    // Mix once to keep a reproducible but non-trivial stream.
+    state = 0x9E3779B9u;
+  }
   state ^= state << 13;
   state ^= state >> 17;
   state ^= state << 5;
@@ -85,6 +92,40 @@ int categorical_sample(const float* probabilities, int count,
   return count - 1;
 }
 
+void validate_sampling_params(const SamplingParams& params,
+                              const int* history, int history_size) {
+  // Loud errors for meaningless inputs that used to degrade silently into
+  // biased draws. The documented "off" sentinels (top_k/top_p/min_p at
+  // defaults, penalty 1.0, window 0) all pass.
+  if (std::isnan(params.temperature)) {
+    throw std::invalid_argument("sample_token: NaN temperature");
+  }
+  if (params.top_k < 0) {
+    throw std::invalid_argument("sample_token: negative top_k");
+  }
+  if (std::isnan(params.top_p) || params.top_p < 0.0F ||
+      params.top_p > 1.0F) {
+    throw std::invalid_argument("sample_token: top_p outside [0, 1]");
+  }
+  if (std::isnan(params.min_p) || params.min_p < 0.0F ||
+      params.min_p > 1.0F) {
+    throw std::invalid_argument("sample_token: min_p outside [0, 1]");
+  }
+  if (!(params.repeat_penalty > 0.0F) ||
+      !std::isfinite(params.repeat_penalty)) {
+    throw std::invalid_argument("sample_token: repeat_penalty must be finite > 0");
+  }
+  if (params.penalty_window < 0) {
+    throw std::invalid_argument("sample_token: negative penalty_window");
+  }
+  if (history_size < 0) {
+    throw std::invalid_argument("sample_token: negative history_size");
+  }
+  if (history_size > 0 && history == nullptr) {
+    throw std::invalid_argument("sample_token: null history with size > 0");
+  }
+}
+
 SpeculativeVerdict speculative_accept(const float* probabilities, int count,
                                       int draft, std::uint32_t& random_state) {
   SpeculativeVerdict verdict;
@@ -143,9 +184,13 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
                  const int* history, int history_size,
                  std::vector<float>& scores, std::vector<int>& order,
                  std::uint32_t& random_state) {
+  if (logits == nullptr) {
+    throw std::invalid_argument("sample_token: null logits");
+  }
   if (count <= 0) {
     return 0;
   }
+  validate_sampling_params(params, history, history_size);
 
   scores.assign(logits, logits + count);
   apply_repeat_penalty(scores, count, params, history, history_size);

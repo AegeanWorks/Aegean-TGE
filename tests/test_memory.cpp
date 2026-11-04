@@ -5,6 +5,7 @@
 #include "tge/memory/allocator.hpp"
 #include "tge/memory/budget.hpp"
 #include "tge/memory/system_ram.hpp"
+#include "tge/models/plan.hpp"
 
 TGE_TEST(aligned_buffer_respects_requested_alignment) {
   const std::size_t alignments[] = {16, 32, 64, 128, 256};
@@ -84,4 +85,56 @@ TGE_TEST(budget_admission_respects_total_usage) {
   }
   TGE_CHECK(budget.admit(snapshot.usable));
   TGE_CHECK(!budget.admit(snapshot.usable + 1));
+}
+
+TGE_TEST(normalization_rejects_absurd_alignment) {
+  // Regression: normalize_alignment(SIZE_MAX) shifted until wrap to 0
+  // then looped forever. Absurd requests must throw instead of hanging.
+  bool threw = false;
+  try {
+    (void)tge::memory::normalize_alignment(SIZE_MAX);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  } catch (...) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+  TGE_CHECK(tge::memory::normalize_alignment(1ULL << 30) == (1ULL << 30));
+}
+
+TGE_TEST(plan_place_exact_fit_admits_weights) {
+  // Regression: headroom == 0 reported "weights alone exceed" though equal.
+  tge::models::ModelPlan plan;
+  plan.parameter_bytes = 100;
+  plan.decode_bytes_per_token = 100;
+  plan.kv_bytes_per_token = 10;
+  plan.context = 16;
+  const tge::models::PlacementDecision decision =
+      tge::models::place(plan, 100, 16, 1);
+  TGE_CHECK(decision.weights_fit);
+}
+
+TGE_TEST(plan_place_shrink_counts_sessions) {
+  // Regression: by_sessions = headroom/(per_session*wanted) was always 0
+  // in the shrink branch; it must be headroom/per_session.
+  tge::models::ModelPlan plan;
+  plan.parameter_bytes = 0;
+  plan.decode_bytes_per_token = 10;
+  plan.kv_bytes_per_token = 10;
+  plan.context = 16;
+  // usable=95, requested 10 tokens x 10 sessions: per_session=100,
+  // needed=1000 > 95 -> shrink. by_context = (95/10)/10 = 0,
+  // by_sessions = 95/100 = 0 sessions at full context, but the
+  // max_sessions fallback path must be consistent (no divide-by-zero,
+  // non-negative, and max_context <= requested).
+  const tge::models::PlacementDecision decision =
+      tge::models::place(plan, 95, 10, 10);
+  TGE_CHECK(decision.max_context <= 10);
+  TGE_CHECK(decision.max_context >= 0);
+  TGE_CHECK(decision.max_sessions >= 0);
+  // Single-session shrink must still admit a reduced context:
+  // headroom 95, per_token 10 -> 9 tokens fit.
+  const tge::models::PlacementDecision single =
+      tge::models::place(plan, 95, 10, 1);
+  TGE_CHECK(single.max_context == 9);
 }

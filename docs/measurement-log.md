@@ -3138,6 +3138,86 @@ real kernel. No numerics changed; no fidelity owed. Next: output-region
 GEMV (Q8 dequant + dot, single sync) with its fidelity price.
 Verdict: **kept (submit path proven)**.
 
+## 54. First offload: decode output projection on GPU (2026-11-03)
+
+`q8_gemv.comp` (1 thread/row, portable 32-bit-only GLSL: read_u32 for
+unaligned blocks, integer fp16->fp32, per-block dot-then-scale matching
+the host scalar kernel) + persistent device-local weights (upload once
+per mmap pointer, +4 zero-pad for the tail word) + lazy pipeline +
+per-call H2D/D2H. `Qwen2::output_logits()` tries the single-sync GPU
+GEMV at both decode tails and falls back to the exact CPU matvec on any
+failure; F32 weights stay CPU until their twin lands.
+
+Two bugs caught by the gates, both fixed: the shader read the GGML
+block backwards (quants-first; the host layout is scale-first per
+`q8_gemv_scalar.cpp:22-27`) - the hybrid answered `!!!` while CPU
+answered Paris, and the unit test had encoded the same wrong layout, so
+it passed while the engine diverged. The fidelity run is the
+load-bearing guard: the test now uses the true layout.
+
+| Check | Result |
+|---|---|
+| `tge_tests` | **98/98 green** (`gpu_gemv_q8_matches_scalar_reference`: worst 1e-3, top-1 held) |
+| `generate` 5+31 hybrid vs `--gpu off` (same box, parallel bench running: absolutes depressed, ratios comparable) | hybrid text **identical** ("Paris...French Alps...south of"); **7.17 vs 2.38 tok/s = 3.0x**; `gpu: output offload 795.1 ms, 18951168 B moved` (31 x 611328 B; first-token upload included, steady-state per-token NOT isolated - open for Stage 4) |
+| `fidelity --tokens 512` (candidate on GPU path) | **KL mean 9.676e-12, worst 2.4e-10; max diff 1.9e-04; top-1 511/511** (f16 precedent 1.7e-6 - five orders tighter) |
+| `python aikit.py check aegean-tge` | **4/4 passed** |
+
+Roofline: 144 MB weights stream once (upload, ~13 ms worst case) then
+0.61 MB/token vs 4.5-7 ms CPU saving closes as predicted; per-call
+alloc + fence overhead is the next thing to measure, not assume.
+No speedup claimed beyond the noisy 3x; controlled A/B is Stage 4.
+Verdict: **kept (first offload priced and held)**.
+
+## 55. Batch offload: prefill GEMM on GPU, numerics held, timing noisy (2026-11-03)
+
+`q8_gemm.comp` (2D: 1 thread per token x row, same portable Q8 math) +
+resident upload cache (one device buffer per pointer key, shared by both
+kernels) + lazy second pipeline + `batch_matvec` hook behind
+`wants_gpu_batch` (tokens >= 8, Q8_0, clean flags) with exact-CPU
+fallback. Prefill `generate` prints its own `gpu:` transfer line.
+
+| Check | Result |
+|---|---|
+| `tge_tests` | **99/99 green** (`gpu_gemm_q8_matches_scalar_reference`, worst 1e-3) |
+| `fidelity --tokens 512` (batch + output both GPU) | **KL 9.676e-12, top-1 511/511** (identical to GEMV-only slice: batch adds no error) |
+| generate text, 53-token prompt, hybrid vs `--gpu off` | **identical** ("...software spans from the") |
+| `python aikit.py check aegean-tge` | **4/4 passed** |
+
+Timing (NOT conclusive, recorded for the record): 8-token chunk hybrid
+31.2 s (gpu 16.2 s / 18.2 MB) vs CPU 0.59 s; 64-token chunk hybrid 3.0 s
+(gpu 1.8 s / 141 MB) vs a 53-token CPU run at 26 tok/s. The 8-token run
+is 9x slower with 8x less compute than the 64-token run while CPU-side
+attn moved 86 -> 26 ms between the same runs: the box (parallel bench
+session + 79% RAM in use per `tge info`) is the dominant variable, not
+the kernel. No speedup claimed; per-call fixed costs (descriptor/buffer
+allocs per dispatch) and kernel fetch pattern are the two known
+suspects, in that order - but suspects only until a quiet box says so.
+Stage 4 requires: parallel session idle, 3x repeats, first-token upload
+split from steady-state. Verdict: **kept (numerics priced, timing open)**.
+
+## 56. Persistent dispatch resources: steady submit 0.2 ms (2026-11-03)
+
+The `TGE_GPU_TRACE=1` split showed host-side churn dominating: first-call
+io alloc + per-call descriptor pool/fence/cmd plus one weight upload per
+matrix. Now persistent: one descriptor pool (reset per call), one command
+buffer (reset + re-record), one fence (reset), grow-only mapped I/O
+buffers, shared `run_q8_call` for both kernels, per-phase `alloc_ns` in
+the result. Teardown releases everything before the device dies.
+
+| Check | Result (quiet-ish box for the steady lines) |
+|---|---|
+| `tge_tests` | 99 pass incl. all 9 `gpu_*`; 1 failure in `dequant_batch_kq8_matches_float_oracle` (`tests/test_dequant.cpp:508`, worst 69945 vs tol 0.05) - the parallel session's in-flight K-quant kernel (their `kernels.hpp`/`test_dequant.cpp`/`dequant_batch_kq8_avx2.cpp` hunks); untouched by this change, CPU fallback path identical when `use_gpu` is off |
+| trace, 8-token chunk | `alloc 0.02-0.03 ms` steady (was per-call pool+fence+cmd+2 allocs), `submit ~0.2 ms`, `d2h ~0.1 ms`; first-touch uploads 2-90 ms each (page faults + submit under load), pipeline cached |
+| `fidelity --tokens 128` after refactor | **KL 1.2e-11, top-1 127/127** (no numeric drift from the refactor) |
+| `python aikit.py check` | test gate FAILs only on the foreign kq8 case above (repro: `tge_tests`, same line); hygiene/guidelines/secrets pass |
+
+Per-dispatch steady cost is now ~0.5 ms (alloc+submit+d2h+memcpy) vs ~9 ms
+before, on a box that keeps getting re-contended (attn 7 -> 128 ms
+between runs): absolute A/B claims stay gated on a quiet box (Stage 4).
+Next: GQA attention offload (shader + host + unit test + fidelity -
+all verifiable without a quiet box), then the controlled three-way.
+Verdict: **kept (churn removed, foreign red documented)**.
+
 ## 51. Acceptance map: drafter saturated, LogitSpec stays unopened (2026-11-03)
 
 Round-3 read-only measurement (no code; L5/G4 receipts consumed, not
@@ -3285,4 +3365,223 @@ TGE runs above used the peer-relined binary (`gpu: auto (ready,
 CPU fallback armed)` vs the older loader-present line) — CPU
 path confirmed armed, ids identical, no behavior delta.
 
+## 57. Integer Q4_K/Q6_K x Q8_K prototype: differential-green,
+2.2x pulse, model wiring written, verification parked on a
+peer refactor (2026-11-03)
 
+Round 6 Stage 3. New TU `src/cpu/avx2/dequant_batch_kq8_avx2.cpp`
+(scalar per-row Q8_K activation quant + AVX2 `maddubs` dots,
+transcribed from `quants.c` at cd8427d), `bench batch
+--kernel kq8` hook, differential vs the shipped float oracle
+plus an independent generic-scalar port of upstream's own dot
+as triangulation. Note on numbering: parallel rounds duplicated
+§§50-53 in this file; §57 is the first number free across both
+committed and uncommitted sections.
+
+Differential-first, all green on the final tree (101 cases,
+0 failed): zero-input exact; constant inputs bit-identical;
+random-input price bounded at 5% (measured ≤0.8%); generic
+triangulation matches AVX2 to 1e-4 with generic==float on
+constants (transcription verified, price isolated).
+Two real bugs caught by the gates, both fixed: (1) a
+hand-transcribed k4 shuffle table with dropped/duplicated rows
+(proven by byte-compare against upstream: 252 vs 256 entries;
+replaced with a computed mask of verified-identical bytes);
+(2) repeated STALE-BINARY measurements from the link-lock
+flake (`ld: Permission denied` with no live holder — AV scan
+race; clears on retry) — intermediate "residual" numbers were
+stale artifacts, and the final verdicts above are from a
+verified-fresh link. Lesson recorded: gate every test run on a
+confirmed build, never on a Select-Object tail.
+
+Bench A/B, same binary, interleaved best-of-5 (wall read 52 GB/s
+at the time): target q6k-down x64 shipped 23.689/23.095 ms vs
+kq8 10.033/10.542 ms (**2.2-2.4x**, both rounds); control
+q4k-gate x64 shipped 16.959/21.797 vs kq8 13.900/10.216
+(+22% / +113%, same direction, gate passes — R1 ran on a
+drifting box, R2 is the cleaner window); x1 decode-shape
+10.5 ms vs shipped 9.2 ms (0.8x — quantizer unamortized, so
+the model wiring below keeps decode on the float path by
+construction).
+
+Model wiring is WRITTEN but UNBUILT: `set_kq8()` on Qwen2,
+`batch_matvec` routes Q4_K/Q6_K with tokens > 1 through
+`gemv_dequant_batch_kq8_avx2` (decode untouched), generate and
+fidelity accept `--kernel kq8` (candidate arm only in
+fidelity). The tree does not compile right now for reasons
+outside this round: the peer's mid-flight GEMV→GEMM rename
+(`cpu::GemvArgs` → `cpu::GemmArgs` in `qwen2.cpp` batch F32
+block) is inconsistent with HEAD's `GemmArgs` (no
+rows/cols/matrix/ldm/vector members; `gemv_f32` still takes
+`const GemvArgs&`) — repro: `cmake --build --preset release`
+fails at `qwen2.cpp:934-941`. No peer file touched in
+response. Pending, in order: tree compiles again → rebuild +
+full suite → warm generate A/B → 3-corpus fidelity ≤ VNNI
+1.6e-3 with top-1 held → then the default-switch decision.
+
+## 58. kq8 verified end to end: 2.2x kernel, 1.83x prefill, fidelity at floor (2026-11-04)
+
+Round-6 gate (2) and (3) closed on a green tree (peer fixed the
+GemvArgs/GemmArgs rename; no peer file touched in return).
+Rebuild + full suite green (108 cases, 0 failed - includes the
+kq8 differential, the generic-scalar triangulation at 1e-3, and
+zero-input exactness).
+
+Bench A/B, same binary interleaved best-of-5, wall read
+56.5 GB/s: target q6k-down x64 shipped 23.4/21.0 ms vs kq8
+14.8/9.5 ms (**1.58x / 2.22x**); control q4k-gate x64 shipped
+12.4/21.8 vs kq8 9.1/10.2 (**+37% / +113%**, same direction
+both rounds - R1 ran while the box settled, R2 is the cleaner
+window). x1 decode-shape: shipped 9.2 vs kq8 11.5 ms (0.8x -
+quantizer unamortized, the reason model wiring keeps decode
+on the float path by construction; `batch_matvec` routes kq8
+only for tokens > 1).
+
+Fidelity `--kernel kq8`, 31 pos ctx 512, all three corpora at
+the floor: architecture.md 1.467e-11 / 30-30 top-1,
+report-0.1.md 1.478e-11 / 30-30, sampling.cpp 4.308e-12 /
+30-30 - about eight orders of magnitude inside the 1.6e-3
+VNNI-class gate. The integer prefill path is fidelity-neutral
+on real data at this token count.
+
+End to end, same window: 138-tok warm prefill 27.0 -> 49.4 t/s
+(**1.83x**, matvec 94% -> 91% of prefill, promptids
+identical); story decode under `--kernel kq8` byte-identical
+(`11 304 ... 11 1070`, tokens==1 guard holds, 6.40 t/s on a
+healthier box than the loaded §51 runs).
+
+Status: prototype fully verified (differential + bench pulse
++ fidelity + e2e). Remaining decision (not taken here):
+default-switch for prefill batches vs keeping the opt-in flag
+- needs a fresh quiet-window confirmation plus the 2048-ctx
+ladder, as a follow-up round. Numbering note: §58 is the
+first number free across committed and uncommitted sections
+(parallel rounds duplicated §§50-53).
+
+
+## 59. Round-7 checkpoint: load-proof items green, t/s parked for quiet (2026-11-04)
+
+Box collapsed at read time (wall copy 15.7 / read 12.3 GB/s), so no
+timed comparison was attempted - the following are deterministic and
+load-independent by construction:
+
+- Fidelity `--kernel kq8` at ctx 2048 (architecture.md, 31 pos):
+  mean 1.467e-11, worst 5.531e-11, top-1 30/30 - identical to the
+  512-ctx floor. The integer path is context-length independent, as
+  constructed (per-superblock math never sees the span).
+- Greedy story ids, default vs `--kernel kq8`: byte-identical
+  (`11 304 ... 11 1070`, matches every baseline back to §46).
+- Greedy repetitive F2 ids, default vs `--kernel kq8`: byte-identical
+  (matches the round-3 F2 greedy baseline), so the drafter sees the
+  same prefill output either way.
+
+Still parked for a quiet box (wall read 48-59 AND story 9-11
+together): paired A/B re-confirmation on the final tree, the
+2048-ctx ladder t/s, then the flip-vs-flag decision with full
+gates. Nothing in this checkpoint changes a file outside the log.
+## 60. Round-7 window: end-to-end holds 1.82x, control shape unresolvable on collapsed box (2026-11-04)
+
+Wall 48.2 at open, collapsed to 26 mid-window (foreign load); all
+t/s below is same-window pairing only, absolutes unclaimed.
+Target q6k-down x64: shipped 34.2 / kq8 12.8 (**2.68x**).
+Control q4k-gate x64: 34.1 vs 34.1 (**tie**) then, after the
+collapse, shipped 16.3 vs kq8 22.4 (**0.73x**). End-to-end
+138-tok prefill in the same collapsed window: 12.5 -> 22.7 t/s
+(**1.82x**, replicates round 6 exactly), matvec share down
+94% -> 91%, kq8 ids `578`. Story decode under kq8:
+`11 304 ... 11 1070`, unchanged.
+Verdict so far: target + end-to-end win in every window (4 + 2
+windows); control shape swings +113% to -37% with box state
+and is unresolvable while collapsed. The flip stays parked:
+ladder mechanics verified (prompt builder + promptids count;
+full 2070-token ladder needs ~x120 repeats, not the x45 = 765
+tried here), t/s ladder + quiet re-confirmation queued for the
+armed wakeup. No code touched this window.
+
+## 61. Default-switch: kq8 is now the prefill path, float kept as off-ramp (2026-11-04)
+
+Round-7 verdict executed. `set_kq8` defaults true; `batch_matvec`
+routes Q4_K/Q6_K with tokens > 1 through the integer path unless
+`--kernel float` is passed (generate, fidelity; bench keeps
+float default and selects kq8 explicitly). Scalar oracle and
+tokens == 1 stay float by construction (scalar gate + tokens
+guard, same `clean` idiom as the GPU/VNNI gates).
+Healthy-window confirmation on the final tree: target
+q6k-down x64 shipped 21.5 vs kq8 10.7 (**2.00x**); control
+q4k-gate x64 shipped 15.8 vs kq8 10.3 (**+53%**); x1 decode
+guard 1.5 vs 3.9 ms (kq8 0.38x unamortized - bypass justified).
+2048-ctx ladder (2040-tok prompt): 23.6/25.0 -> 37.6 t/s
+(**~1.6x**), attn absolute identical, ids `578` both arms.
+Fidelity defaults now exercise kq8: architecture.md
+1.467e-11 / 30-30 top-1 (floor), report-0.1.md 1.478e-11 /
+30-30, sampling.cpp 4.308e-12 / 30-30, plus 2048-ctx
+1.467e-11 / 30-30. Greedy ids identical on story, F2
+repetitive, and the ladder prompt.
+End to end, flipped default: 46-tok prefill 67.5 tok/s vs
+`--kernel float` 40.4 tok/s (**1.67x**); story decode
+unchanged (`11 304 ... 11 1070`, 10.04 t/s on a healthy box).
+Control-shape caveat stands: one collapsed-box -37% exists
+against three healthy-window wins (+22%, +113%, +53%);
+verbatim from §60, the gate counts admissible windows only.
+The wiring lives in shared files (qwen2, main) - commit
+with the peer lane, not over it.
+
+## 62. Post-flip head-to-head vs pinned llama: 71% prefill, 78% decode - goal not met (2026-11-04)
+
+Same window, healthy box (wall 56.7, story 7-10 t/s), llama
+rebuilt at cd8427d (`llama-bench -t 6`: pp128 **94.55 +- 7.59**,
+tg64 **13.05 +- 0.39** - far above the round-5 22.16/5.20,
+which were collapsed-box absolutes; same-window ratios from
+round 5 stand). TGE flipped default: 138-tok prefill
+**67.5 tok/s** (was 27.0 float: **1.67x**); 63-tok story
+decode **10.19 tok/s** (`11 304 ... 47967`, matvec 97%).
+Head-to-head: prefill 94.55 vs 67.5 (**TGE at 71%**, was 52%),
+decode 13.05 vs 10.19 (**TGE at 78%**, was 55%).
+The flip closed roughly half the gap on both paths. Decode
+was never in kq8 scope (unpack-bound, drafter saturated) and
+stays the next lane alongside long-ctx attention (12-20%
+share after the matvec win). No code touched this window
+beyond the flip already on record; box variance note: llama
+absolutes swing 4x with box state, ratios only ever count
+same-window.
+
+## 63. Decode integer path: bench pulse real (2-2.8x), model fidelity fails - reverted, prefill stands (2026-11-04)
+
+Round-8 outcome: NO-GO for decode, recorded once with the full
+trail so it is never re-researched without new evidence.
+New TU entry `gemv_dequant_kq8_row_avx2` (thread-local wdata,
+no per-call heap alloc, no token loop, decode-pool
+compatible) behind `bench batch --kernel kq8d` plus a tight
+differential (zero exact, constant 1e-3, random 5%, generic
+triangulation) - all green, 101+ cases passing.
+Bench A/B, healthy wall, best-of-5 interleaved R1+R2:
+gate 8192x3072 2.07x/1.46x, down 3072x8192 2.80x/2.10x,
+vocab 128256x3072 1.77x. Gate (>=10% every shape) passes on
+the kernel alone.
+Model wiring (matvec tokens==1 branch, scalar-oracle gated)
+then FAILED the gate that matters: fidelity default (prefill
+kq8 + decode kq8) = mean KL 4.533e-11 -> 4.533e-3, worst
+1.996e-2, top-1 28/30 (two flips) vs the 1.6e-3 VNNI-class
+bar. Isolation proved it is the decode path and only it:
+same binary with matvec forced float (batch kq8 kept) returns
+to the floor 1.467e-11 / 30-30; `--kernel float`
+(float everywhere) also floors. Verdict: matvec wiring
+REVERTED (file back to pure float decode); TU row entry,
+bench hook, and tests stay - bench-researchable, zero model
+impact; `--kernel kq8` now means prefill-only, which is the
+verified scope.
+Mechanism unresolved and honestly logged as such: the row
+entry is bit-faithful to upstream on every differential we
+own (generic triangulation 1e-4, AVX2-vs-float inside price),
+yet real-data decode diverges. Candidates: (a) activation
+outliers pricing decode harder than prefill (per-256-block
+amax crushes small values next to a 100x channel; random
+test inputs cannot show this); (b) a transcription slip
+invisible to random/constant inputs. What would reopen it:
+proof of what llama actually runs for single-token decode
+(the §52 teardown verified the batch path only - the decode
+extrapolation was never sourced), or a differential on
+outlier-bearing inputs with a priced gate. Box note: one
+transient link-lock (`ld: Permission denied`, no live holder)
+and several stale-binary runs during the round; every number
+above is from a verified-fresh link.

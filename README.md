@@ -12,10 +12,11 @@ Aegean TGE (Token Generation Engine) is an independent inference runtime. It own
 its model loading, memory placement and kernels; it does not wrap llama.cpp,
 Ollama or any other engine.
 
-**Status: 0.1.0 — CPU inference.** Hardware detection, the AVX2 kernels, the
-memory budget manager and the Qwen2 decode path are implemented and tested.
-GGUF loading, the tokenizer, sampling and text generation work end to end; the
-GPU backends are not started.
+**Status: 0.1.0 — CPU inference, opt-in Vulkan offload.** Hardware detection,
+the AVX2 kernels, the memory budget manager and the Qwen2 decode path are
+implemented and tested. GGUF loading, the tokenizer, sampling and text
+generation work end to end; the GPU backend is opt-in (`TGE_HAS_VULKAN=1`
+with SDK `glslc`, CPU fallback otherwise).
 
 ## ⚡ 30-Second Cold-Start Quick Reference
 
@@ -78,6 +79,7 @@ aegean-tge/
 ├── .gitignore                <- build output and models excluded
 ├── CMakeLists.txt            <- CMake 3.25+, C++20, per-TU ISA flags
 ├── CMakePresets.json         <- release and debug presets (Ninja)
+├── cmake/                    <- bin2h.cmake (SPIR-V embed helper)
 ├── LICENSE                   <- Aegean License 1.1 (AL-1.1): free personal use
 ├── COMMERCIAL.md             <- Commercial licensing terms
 ├── LICENSES/                 <- REUSE license texts
@@ -91,6 +93,7 @@ aegean-tge/
 │   └── tge/
 │       ├── core/             <- detection, dispatch, thread pool
 │       ├── cpu/              <- kernel signatures and dispatch types
+│       ├── gpu/              <- Vulkan backend selector (SDK-optional)
 │       ├── memory/           <- RAM query, allocator, budget
 │       ├── models/           <- GGUF reader and Qwen2 decoder
 │       └── tensor/           <- reference operation declarations
@@ -99,6 +102,7 @@ aegean-tge/
 │   ├── cpu/
 │   │   ├── avx2/             <- ISA-specific, compiled with -mavx2 -mfma
 │   │   └── scalar/           <- portable fallbacks for every ISA tier
+│   ├── gpu/                  <- Vulkan compute backend plus CPU-only noop fallback
 │   ├── memory/               <- system RAM, aligned allocation, budget
 │   ├── models/               <- GGUF reader and the Qwen2 decoder
 │   └── tensor/               <- reference operations
@@ -128,7 +132,7 @@ aegean-tge/
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 75 cases, all passing |
+| Tests | 123 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
