@@ -199,6 +199,7 @@ if(TGE_BUILD_TESTS)
     tests/test_thread_pool.cpp
     tests/test_attention.cpp
     tests/test_block_table.cpp
+    tests/test_io_advice.cpp
     tests/test_norm_rope.cpp
     tests/test_gpu_fallback.cpp
   )

@@ -5,29 +5,12 @@
     "last_phase": "phase 4",
     "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793814199.171523,
+    "updated_at": 1793814274.1219254,
     "owner": "kilo:impl",
     "started_by": "kilo:impl",
     "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-BENCH",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Head-to-head throughput on Llama-3.2-3B Q4_K_M",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793632932.5350645,
-      "timestamp_str": "2026-11-02 18:22:12",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "Correctness is established (tokenizer parity 24/24, fluent factual output, ggml-verified kernels); no throughput numbers exist for the 3B model on either engine, and the Qwen pattern (TGE decode lead, llama prefill lead) may not transfer to a bigger interleaved-RoPE model",
-        "benefits": "First same-box, same-model, same-thread comparison on 3B; tests whether the parity story holds at larger scale",
-        "risks": "contract: read-only benchmarks, no code changes unless a crash exposes a bug; dependency: none; concurrency: none; state: none; accuracy: back-to-back runs, same prompt shape, load caveats as \u00a728al",
-        "mitigation": "llama-bench pp128/tg64 vs TGE 128-tok prefill + 64 gen; report both raw numbers and the range caveat; 77/77 tests + 4/4 gates unchanged"
-      }
-    },
     {
       "task_id": "TGE-LLAMA-ARCH",
       "phase": "phase 4",
@@ -276,6 +259,17 @@
       "status": "in_progress",
       "timestamp": 1793814199.171523,
       "timestamp_str": "2026-11-04 20:43:19",
+      "agent": "kilo:impl"
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[4/5] Wave 2 step 2 done - checklists: passed; IO advice helpers plus 2 tests, no prefetch change, 141/141, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793814274.1219254,
+      "timestamp_str": "2026-11-04 20:44:34",
       "agent": "kilo:impl"
     }
   ]

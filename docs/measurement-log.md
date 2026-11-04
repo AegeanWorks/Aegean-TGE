@@ -3627,3 +3627,12 @@ over 67 elems incl tail, wide-range identity). Microkernel store path
 untouched; wiring gated on cubed bench within-run win.
 Suite: 139/139 pass (4 new OK). `python aikit.py check aegean-tge`
 4/4 passed. Verdict: kept.
+
+## 68. Portable IO advice helpers plus 2 unit tests, no prefetch change (2026-11-04)
+
+Wave 2 step 2 for IDEA-1586: `include/tge/memory/io_advice.hpp`
+(page-aligned range math, bounded PrefetchBudget accounting; no OS calls,
+gguf prefetch untouched) plus `tests/test_io_advice.cpp` (2 cases).
+Suite: 141/141 pass (2 new OK). `python aikit.py check aegean-tge`
+4/4 passed. Wiring (advise_range wrapper + bounded KV prefetcher) gated
+on >=30% RSS cut at parity. Verdict: kept.
