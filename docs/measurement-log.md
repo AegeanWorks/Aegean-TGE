@@ -3584,3 +3584,13 @@ outlier-bearing inputs with a priced gate. Box note: one
 transient link-lock (`ld: Permission denied`, no live holder)
 and several stale-binary runs during the round; every number
 above is from a verified-fresh link.
+
+## 64. IDEA-1568 ablation protocol added, no engine delta (2026-11-04)
+
+Protocol-only change for deep-checked Approved IDEA-1568: added
+`docs/ablation-1568.md` (4-family x86 batch-one triage, kill criteria,
+back-to-back 20% rule). No kernel, dispatch, or model change; no
+numbers claimed. Baseline: `python aikit.py check aegean-tge` 4/4
+passed before and after (test 15.4s, hygiene, guidelines, secrets).
+Live bench skipped per no-run constraint; existing log sections
+19/50/71/75 are the baseline. Verdict: kept (docs).

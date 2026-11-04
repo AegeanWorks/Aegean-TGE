@@ -1,66 +1,16 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-PHI3",
-    "last_phase": "in_progress",
-    "active_phase": 2,
+    "task_id": "TGE-IMPL-11",
+    "last_phase": "phase 4",
+    "active_phase": 4,
     "status": "in_progress",
-    "updated_at": 1793641838.3996496,
-    "owner": "kilo:phi3",
-    "started_by": "unidentified",
-    "continuations": [
-      {
-        "agent": "kilo:phi3",
-        "from": "unidentified",
-        "at": 1793634062.7765398
-      }
-    ],
-    "impact_assessment": {
-      "why": "llama multiplies Phi cos/sin tables by attn_factor 1.19024 and ignores absent per-block factors; TGE runs unscaled today so end-to-end parity needs the same table",
-      "benefits": "Phi attention temperature matches the reference; Qwen/Llama untouched (key absent defaults 1.0)",
-      "risks": "contract: table-build scaling only, forward untouched; dependency: none; concurrency: read-only tables; state: none",
-      "mitigation": "Synthetic config test + real-file greedy parity vs llama-cli (built from source)"
-    }
+    "updated_at": 1793813881.997049,
+    "owner": "kilo:impl",
+    "started_by": "kilo:impl",
+    "continuations": []
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-ROPE",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/3] RoPE interleaved (NORM) mode for Llama-family archs",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793627156.1626022,
-      "timestamp_str": "2026-11-02 16:45:56",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "TGE hardcodes NeoX halves layout (correct for Qwen, verified); Llama uses interleaved consecutive pairs per ggml NORM mode; current 3B output is degraded exactly as wrong-RoPE predicts",
-        "benefits": "Unblocks Llama-3.2-3B/1B, SmolLM2, Phi (all NORM per ggml); Qwen path bit-unchanged",
-        "risks": "contract: rope-mode flag in config (arch-selected) + interleaved scalar/AVX2 paths; dependency: none; concurrency: per-call local; state: none; accuracy: hand-computed unit test + memcmp AVX2-vs-scalar + llama greedy parity on templated prompt",
-        "mitigation": "Qwen outputs must be bit-identical before/after (default path untouched); Llama validated against llama.cpp greedy"
-      }
-    },
-    {
-      "task_id": "TGE-LLAMA-ARCH",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/3]+[3/3] Llama runs end-to-end - checklists: passed; tied output, zero-bias fallback, interleaved RoPE (scalar+AVX2, differential caught one real bug); fluent + factual output; Qwen ids identical; 76/76 tests",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793628544.8794212,
-      "timestamp_str": "2026-11-02 17:09:04",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-LLAMA-ROPE",
-      "phase": "superseded",
-      "phase_num": 2,
-      "description": "Superseded by 'TGE-LLAMA-ARCH' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793628544.8794212,
-      "timestamp_str": "2026-11-02 17:09:04",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-LLAMA-ARCH",
       "phase": "completed",
@@ -285,6 +235,46 @@
         "risks": "contract: table-build scaling only, forward untouched; dependency: none; concurrency: read-only tables; state: none",
         "mitigation": "Synthetic config test + real-file greedy parity vs llama-cli (built from source)"
       }
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/5] Approved-11 implement queue: start with IDEA-1568 portability ablation harness (docs+protocol, no engine change)",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793813810.7499025,
+      "timestamp_str": "2026-11-04 20:36:50",
+      "agent": "kilo:impl",
+      "impact_assessment": {
+        "why": "Deep-checked Approved 11 need ordered implementation; 1568 triages pruning vs speculative vs ports before any kernel spend",
+        "benefits": "Harness-only decision gate with zero engine risk; unblocks 1451/1539/1540 direction",
+        "risks": "contract: docs plus harness protocol only, no kernel change; dependency: none; concurrency: none; state: ledger active-task switch from PHI3",
+        "mitigation": "Track B docs first; full suite plus 4/4 gates each step; live bench skipped per no-run constraint, existing log as baseline"
+      },
+      "plan_digest": "2cbb89d689924b484a7102a45b8e589f47a7ef3689a8da6e9f1fb7e78b577ff2"
+    },
+    {
+      "task_id": "TGE-PHI3",
+      "phase": "superseded",
+      "phase_num": 2,
+      "description": "Superseded by 'TGE-IMPL-11' without --complete or --reset",
+      "status": "superseded",
+      "timestamp": 1793813810.7499025,
+      "timestamp_str": "2026-11-04 20:36:50",
+      "agent": "kilo:impl",
+      "continued_from": "kilo:phi3"
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/5] IDEA-1568 done - checklists: passed; ablation protocol docs/ablation-1568.md plus log s64, no engine delta, 4/4 gates (test 16.7s)",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1793813881.997049,
+      "timestamp_str": "2026-11-04 20:38:01",
+      "agent": "kilo:impl"
     }
   ]
 }
