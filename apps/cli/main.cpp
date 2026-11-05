@@ -103,6 +103,10 @@ void print_usage() {
       "        --sparse-stride N  every N-th middle position kept (default 4)\n"
       "        --speculative    prompt-lookup speculation: greedy +-penalty,\n"
       "                         temperature-only sampling (other cuts fall back)\n"
+      "        --no-fuse        A/B gate: disable fused steady state (baseline\n"
+      "                         correction-forward path, same binary)\n"
+      "        --no-skip        A/B gate: disable SKIP-locked fast path\n"
+      "                         (spans/bigram/gapped chain only)\n"
       "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
       "        --kernel kq8     integer Q4_K/Q6_K x Q8_K prefill kernels (default on)\n"
       "        --kernel float   float dequant prefill kernels (default off)\n"
@@ -475,10 +479,11 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      int context_limit, bool print_text,
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
-                    bool speculative, bool vnni, bool kq8, bool kv_half, bool kv_q8,
-                    bool prefetch, int prefill_threads, bool pin_threads,
-                    tge::models::SparseConfig sparse,
-                    const std::string& gpu_mode) {
+                     bool speculative, bool vnni, bool kq8, bool kv_half, bool kv_q8,
+                     bool prefetch, int prefill_threads, bool pin_threads,
+                     tge::models::SparseConfig sparse,
+                     const std::string& gpu_mode, bool disable_fuse = false,
+                     bool disable_skip = false) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -703,24 +708,25 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   // Stop where the model stops: an end-of-sequence or end-of-turn id ends the
   // turn instead of being fed back and answered as if it were a new prompt.
   // Fused speculative steady state: after a full-accept greedy step, the bonus
-  // token's KV is resident but its successor logits were never materialized.
-  // Instead of a 1-row correction forward, the next step re-verifies the
-  // bonus as feed[0] (identical rows) plus 5 history-drafts in ONE 6-row
-  // sweep and post-judges all rows. Full accept chains 1 sweep/step; partial
-  // accept falls back to a 1-row forward exactly like the baseline. Output
-  // identical by construction (argmax accept rule, same history, same
+  // id is known but its successor logits were never materialized (its KV row
+  // is NOT yet resident -- the next verify writes it as feed[0] along with 5
+  // history-drafts in ONE 6-row sweep and post-judges all rows). This deletes
+  // the baseline's 1-row correction forward. Full accept chains 1 sweep/step;
+  // partial accept falls back to a 1-row forward exactly like the baseline.
+  // Output identical by construction (argmax accept rule, same history, same
   // positions). Measured: locked repetition wins ~1.3-1.5x over the baseline
   // greedy path on Qwen2.5-0.5B and Llama-3.2-3B; non-locked prompts never
-  // chain and behave exactly like the baseline.
+  // chain and behave exactly like the baseline. --no-fuse forces the baseline
+  // path for same-binary A/B (Appendix A3); TGE_NO_FUSE=1 is the env fallback.
   bool fused = false;
   while (static_cast<int>(generated.size()) < count &&
          (generated.empty() || !config.is_end_token(generated.back()))) {
-    if (fused && speculate && position + tge::models::Qwen2::kSpeculativeBatch <=
+    if (!disable_fuse && fused && speculate && position + tge::models::Qwen2::kSpeculativeBatch <=
                                  model->max_context()) {
       int draft5[5];
       if (!prompt_lookup_draft(history, draft5, 5)) {
-        // No drafts: recover current logits with one 1-row forward of the
-        // last token (KV already resident, recomputed identically), emit one
+        // No drafts: the bonus KV was never written, so one 1-row forward of
+        // the last token writes it and recovers current logits, emit one
         // plain token exactly like the single-token path, then resume
         // baseline mode. Costs 2 rows for 1 token on this rare exit only.
         const auto f0 = Clock::now();
@@ -768,8 +774,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         }
         int predicted[tge::models::Qwen2::kSpeculativeBatch];
         const auto v0 = Clock::now();
-        // feed[0] (the bonus) is KV-resident at position - 1; the verify
-        // rewrites those rows identically, so the sweep is still one pass.
+        // feed[0] (the bonus id) is written as a new KV row at vpos by this
+        // verify along with the 5 drafts -- it was never resident, which is
+        // exactly the correction forward this path deletes. One pass total.
         const int vpos = position - 1;
         if (no_penalty) {
           model->verify_draft(feed, tge::models::Qwen2::kSpeculativeBatch,
@@ -863,7 +870,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
       // repetition accepts at the 6.00/step ceiling with identical ids;
       // non-locked prompts abstain and behave exactly like before.
       bool used_skip = false;
-      if (skip_locked_draft(history, draft, 6)) {
+      if (!disable_skip && skip_locked_draft(history, draft, 6)) {
         used_skip = true;
         if (no_penalty) {
           first_ok =
@@ -973,14 +980,18 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         spec_accepted += accepted;
         spec_output += accepted + (stopped ? 0 : 1);
         if (!stopped && static_cast<int>(generated.size()) < count) {
-          if (accepted == 6) {
-            // Full accept, bonus KV resident: skip the 1-row correction
-            // forward and chain into the fused steady state. Next first
-            // (= bonus) is a known argmax, no logits needed.
+          if (accepted == 6 && !disable_fuse) {
+            // Full accept, bonus id known (KV not yet written): skip the 1-row
+            // correction forward and chain into the fused steady state. Next
+            // first (= bonus) is a known argmax, no logits needed.
             position += accepted + 1;
             fused = true;
             continue;
           }
+          // Baseline (including --no-fuse full accepts): the 1-row correction
+          // forward materializes the bonus logits for the next d0 pre-check.
+          // Skipping it here would leave stale logits and diverge ids, which
+          // is exactly what the fused path avoids by post-judging instead.
           const auto f0 = Clock::now();
           logits = model->forward(corrected, position + accepted);
           const auto f1 = Clock::now();
@@ -1955,6 +1966,8 @@ int run_generate(int argc, char** argv) {
   VocabularyMode vocabulary = VocabularyMode::Auto;
   tge::models::AttentionMode attention_mode = tge::models::AttentionMode::Auto;
   bool speculative = false;
+  bool disable_fuse = false;
+  bool disable_skip = false;
   bool vnni = false;
   bool kq8 = true;
   bool kv_half = false;
@@ -1976,6 +1989,14 @@ int run_generate(int argc, char** argv) {
     }
     if (std::strcmp(argv[index], "--speculative") == 0) {
       speculative = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--no-fuse") == 0) {
+      disable_fuse = true;
+      continue;
+    }
+    if (std::strcmp(argv[index], "--no-skip") == 0) {
+      disable_skip = true;
       continue;
     }
     if (std::strcmp(argv[index], "--sparse") == 0) {
@@ -2104,6 +2125,18 @@ int run_generate(int argc, char** argv) {
     return 2;
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
+  // Temp-copy compat: the invention harness used TGE_NO_FUSE=1 / TGE_NO_SKIP=1
+  // in the same binary for A/B measurement. The shipped CLI keeps the flags
+  // above as the documented path; the env vars remain as a fallback so old
+  // probe scripts keep working. Default (both unset) is fused + SKIP on.
+  if (std::getenv("TGE_NO_FUSE") != nullptr &&
+      std::strcmp(std::getenv("TGE_NO_FUSE"), "1") == 0) {
+    disable_fuse = true;
+  }
+  if (std::getenv("TGE_NO_SKIP") != nullptr &&
+      std::strcmp(std::getenv("TGE_NO_SKIP"), "1") == 0) {
+    disable_skip = true;
+  }
   if (sparse.enabled && (sparse.window < 1 || sparse.stride < 2)) {
     std::fprintf(stderr,
                  "generate: --sparse-window must be >= 1 and --sparse-stride "
@@ -2114,7 +2147,8 @@ int run_generate(int argc, char** argv) {
                           print_ids, sampling, context_limit, print_text,
                           vocabulary, attention_mode, speculative, vnni, kq8,
                           kv_half, kv_q8, prefetch, prefill_threads,
-                          pin_threads != 0, sparse, gpu_mode);
+                          pin_threads != 0, sparse, gpu_mode, disable_fuse,
+                          disable_skip);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {

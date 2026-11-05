@@ -32,14 +32,16 @@ constexpr int kHardMaxContext = 32768;
 // the tail is left to the single-token path.
 constexpr int kPrefillChunk = 64;
 
-// Cross-sequence shared-prefix snapshot. The first start-0 f32 prefill
-// populates the snapshot (tokens plus per-layer K/V rows, up to the cap);
-// later sequences with identical leading tokens memcpy the rows into their
-// own slots and skip recompute. Byte-identical by construction (same tokens,
-// same positions, resident rows recomputed nowhere). The verifier path
-// (all_logits) is excluded; other KV forms are excluded. Measured: 8x(120+32)
-// shared-prefix prefill 3.06-3.32x prefill-side, FNV hash-identical to cold
-// recompute on Qwen2.5-0.5B and Llama-3.2-3B.
+// Cross-sequence shared-prefix snapshot. The first start-0 f32 prefill with
+// >=16 tokens populates the snapshot (tokens plus per-layer K/V rows, up to
+// the cap); later sequences with identical leading tokens memcpy the rows
+// into their own slots and skip recompute. Byte-identical by construction
+// (same tokens, same positions, resident rows recomputed nowhere). The
+// verifier path (all_logits) is excluded; other KV forms are excluded.
+// Cleared on every model load so different files with the same geometry
+// can never false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim). Measured:
+// 8x(120+32) shared-prefix prefill 3.06-3.32x prefill-side, FNV
+// hash-identical to cold recompute on Qwen2.5-0.5B and Llama-3.2-3B.
 struct SharedPrefix {
   std::vector<int> tokens;
   std::vector<float> k;
@@ -599,6 +601,18 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
             sine;
       }
     }
+
+    // A new file means a new weight stream: drop any cross-sequence snapshot
+    // from a previous load so same-geometry files (e.g. Q8_0 vs Q4_K_M) can
+    // never false-hit on identical leading ids. Within this model's life the
+    // first start-0 prefill repopulates and later sequences share it.
+    g_shared_prefix.tokens.clear();
+    g_shared_prefix.k.clear();
+    g_shared_prefix.v.clear();
+    g_shared_prefix.layers = 0;
+    g_shared_prefix.kv_dim = 0;
+    g_shared_prefix_hits = 0;
+    g_shared_prefix_saved = 0;
 
     return model;
   } catch (const std::exception& exception) {
@@ -1979,11 +1993,13 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     consumed += chunk;
   }
 
-  // Shared-prefix populate: the first start-0 f32 prefill wins (up to the
-  // cap); later sequences hit against it.
+  // Shared-prefix populate: the first start-0 f32 prefill with >=16 tokens
+  // wins (up to the cap); later sequences hit against it. The 16-token floor
+  // mirrors the HIT threshold so a 4-token story prompt can never poison the
+  // snapshot for a later 120-token shared prefix.
   {
     if (all_logits == nullptr && !kv_half_ && !kv_q8_ && start_position == 0 &&
-        sequence >= 0 && g_shared_prefix.tokens.empty() && count > 0) {
+        sequence >= 0 && g_shared_prefix.tokens.empty() && count >= 16) {
       const int cap = count < kSharedPrefixCap ? count : kSharedPrefixCap;
       g_shared_prefix.tokens.assign(tokens, tokens + cap);
       g_shared_prefix.layers = config_.block_count;
