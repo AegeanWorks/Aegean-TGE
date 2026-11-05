@@ -18,3 +18,7 @@ compile_commands.json
 /models/
 *.gguf
 benchmarks/results/*.json
+
+# arXiv draft lives on the author's desktop, not in the repo.
+docs/fused-correction.md
+docs/fused-correction.tex
