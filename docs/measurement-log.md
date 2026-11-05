@@ -3718,3 +3718,34 @@ drift-dominated, reported as-is. Story abstains 0 steps on both with the
 historical ids (`11 304 ... 11 1070`); reasoning + creative texts
 identical; 11-token periodic history identical (1.00/step both). Tests
 141/141 on the shipping binary. Verdict: kept.
+
+## 2026-11-05 — SKIP-locked drafter + fused verify + cross-sequence CoW prefix
+
+Three invented mechanisms landed together (invention book 2026-11-05:
+32 mechanisms, steelman verdicts, temp-copy engine proofs before port;
+the port is line-identical logic with production comments, no test
+scaffolding). Tests 141/141 on the shipping binary.
+
+SKIP-locked (`skip_locked_draft`, drafter-only, verifier-gated, d0
+pre-check unchanged): period-1/period-2 lock proposes along the cycle.
+Qwen2.5-0.5B Q8_0 periodic: 96.19 t/s at 6.00/step ceiling, ids
+identical; story neutral (0 steps, identical ids). Llama-3.2-3B Q4_K_M:
+period-1 lock 43-50 t/s at 5.25/step vs 5.7-9.9 nospec (interleaved AABB:
+4.62x, 5.03x); periodic non-locked 5.12 -> 7.69 (1.50x, 2.12/step);
+story neutral 10.55 vs 10.89 (0.97x), 0 steps, identical ids.
+
+Fused verify steady state (generate loop only, no kernel change): after a
+full-accept step the bonus KV is resident, so the next step re-verifies
+the bonus + 5 history-drafts in ONE 6-row sweep and post-judges all rows
+instead of a 1-row correction forward. Llama-3B lock: 30-32 -> 46-50
+t/s (1.43x, 1.52x interleaved pairs, ids identical); 0.5B lock 133 ->
+176 t/s (1.32x). Non-locked prompts never chain and behave exactly like
+the baseline (0.5B periodic mean +3%, sign flips inside the band).
+
+Cross-sequence CoW prefix (`prefill_run` + global snapshot, f32 only,
+verifier excluded, >=16 common tokens): first start-0 prefill populates,
+later sequences memcpy rows and skip recompute, byte-identical by
+construction. 8x(120+32): 3.06-3.32x prefill-side on 0.5B (4 runs) and
+3.06x on Llama-3B, FNV hash gates 7/7 per model vs cold recompute.
+Verdict: all three kept; parked in the book (scale-cache harmful-shape,
+dual-math inverted premise) stay out.
