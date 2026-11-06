@@ -3749,3 +3749,107 @@ construction. 8x(120+32): 3.06-3.32x prefill-side on 0.5B (4 runs) and
 3.06x on Llama-3B, FNV hash gates 7/7 per model vs cold recompute.
 Verdict: all three kept; parked in the book (scale-cache harmful-shape,
 dual-math inverted premise) stay out.
+
+## 2026-11-06 — Verify-then-build session: five temporary spikes killed or amended, prices re-confirmed (all reverted, tree green)
+
+Five temporary spikes (built, measured, fully reverted in-tree via
+`git checkout --`, tests 141/141 after each revert; no commit, no
+push) plus read-only re-confirmations on Llama-3.2-3B-Q4_K_M,
+`--threads 6`, warm page cache. Reference health: wall read
+~54-61 GB/s, story ids `11 304 … 11 1070` (~10 t/s quiet).
+
+### S1. Trigram-chain drafter fallback — KILLED (dead code, reverted)
+`trigram_chain_draft` (order-2 successor chaining) appended after the
+gapped fallback in `prompt_lookup_draft`. Story spec: 0 steps, ids
+identical; repetitive: 3 steps, 18 accepted (6.00/step), ids identical
+to the pre-spike baseline. Whenever the trigram condition holds (pair
+observed), the bigram condition holds and fires first — unreachable
+except a 32-cap edge. Tie = revert per the no-evidence rule. Doubly
+determined (triply with shipped SKIP-lock and the recorded trie kill).
+
+### S2. IDEA-1325 pre-packed-B GEMM — KILLED at kernel level (reverted)
+`gemm_packed_preb` (persistent-B cache, same panels/order →
+max|reference-out| 7.629e-05, differential gate passes) behind
+temporary `--kernel preb`. 1024^3 best-of-5: R1 packed 16T 11.98 ms
+vs preb 11.87 (+0.9%), 1T +15% (reference itself drifted 102→121 ms
+between processes); R2 reversed preb 16T 10.74 vs packed 14.01
+(+30%), 1T -54%. Sign flips on both thread counts with identical
+binaries — box state, not kernel (a skipped pack_b cannot cost -54%
+on identical compute). Falsifier needs >=5% consistent: kill, no
+model wiring. Retry trigger: quiet box + same interleaved pairs.
+
+### S3. SlimAttention-style tiled prefill attention — KILLED (reverted)
+Q-block(8) x K-block(128) tiling with per-(query,head) online softmax
+in `attention_batch`, env-gated (`TGE_TILE_ATTN=1`), f32 dense path
+only. 2043-token repetitive prefill: dense attn 12.83 s of 59.6 s vs
+tiled 19.12 s of 62.4 s (attn +49% worse, prefill 0.95x). Scalar dots
++ `expf` lose to the AVX2 kernel by far more than the K/V traffic
+saving. Ids byte-identical 31/31 (greedy-exact here); 27-tok ids
+identical (path live, parity holds short). Reopen trigger:
+vectorized tiled inner loop matching AVX2 compute rate.
+
+### S4. Multi-prefix CoW table — REJECTED, not portable (reverted)
+4-entry snapshot table (longest run >= 16) + temp `spike-mprefix`
+driver (8 fresh seqs, 2x120 shared prefixes + 32 suffixes, FNV
+determinism check). Two clean fast hits (~600 ms vs ~2250 ms
+populates, deterministic hashes) then unexplained misses (one fell
+through to the single snapshot, one full compute) plus
+populate-on-hit slot waste (found and half-fixed mid-spike). A spike
+that misbehaves inexplicably must not port. Single-prefix path
+unaffected (story ids identical on the spike binary). Parked with a
+precise trigger: clean re-spike (populate-only-on-miss, single
+retired, untruncated stderr) that explains the misses first. Shipped
+single-prefix CoW stands.
+
+### S5. LUT nibble unpack — KILLED on uop arithmetic (no silicon)
+Per 32 weights the shipped `write32` spends ~20+ uops; the nibble
+split itself is 1-2. `pshufb` cannot remove the high-nibble shift
+(it indexes low nibbles only) and replaces a 1-uop `and` with a
+1-uop shuffle on the low path: max theoretical saving ~1 uop, ~5%,
+vs the item's own >=15% kernel gate. Scout NO-GO stands with the
+explicit count instead of a hunch.
+
+### S6. 1517 stage-1 batch-side snapshot — construction proven, gate amended (reverted)
+Contiguous-from-0 arrival tracking + end-of-`forward_batch`
+snapshot + FNV MATCH gate vs a cold `prefill_run` snapshot for the
+same 32-token prompt. Tracking fires (`[batch-snap] POPULATE slot=0
+C=32`) but MATCH fails on Llama-3B by construction, not by bug:
+`batch_matvec` forces float math (`float_only`, the
+continuous-batch LEAK fix) while `prefill_run` takes the kq8
+integer path on Q4_K — different arithmetic, so byte-identity was
+never on the table (it would MATCH on Q8_0, the wrong model to
+prove it on). Amendment, not kill: kind-tagged snapshots (reuse
+the 1384 quantized-tier recipe) + KL pricing, never cross-path
+sharing of rows between float and integer arithmetic. The epic's
+headroom (up to ~44% redundant recompute at P=32) stands untouched
+— it is about traffic, not arithmetic.
+
+### Prices re-confirmed (no code this session)
+KV f16 fidelity mean 3.1e-7 / top-1 30/30, i8 3.24e-4 / 30-30 at
+ctx 512 and 2048 (floor 1.467e-11 throughout); story f16 9.60 vs
+f32 9.97 t/s (overhead, no KV pressure). Sparse-2043 best-of-3
+interleaved: prefill best 48.7 vs 48.1 (0.99x), decode best 6.41
+vs 7.12 (+11.1%, round signs 0.86x/1.13x/1.09x — under the 15%
+bar, flip-flopping); ids identical 6/6. KV-2048 repetitive:
+i8 best-of-best +3.8% (neutral; round deltas drift-contaminated,
+only best-of-best counts; does not overturn the §29 window).
+Continuous triplet 8x32 best-of-1: P=8 20.29 → P=32 12.07 t/s
+(crowd-out caution, shape only, absolutes unclaimed).
+Cross-checked vs peer reports (1514 analytic, 1542 + recorded
+trie kill, 1501 supersede with chunked-GQA + quantize-on-write
+both shipping, kv-auto Llama validation, sparse-f16 recipe):
+no conflicts; f16 numbers same order (1.658e-6 cited there vs
+3.1e-7 here on Llama-3B).
+
+Commands run (selection; every spike followed
+build → measure → `git checkout --` → rebuild → `tge_tests`
+141/141 → `git status` clean): `bench mem`, story/repetitive
+`generate` (+`--speculative`, `--kv f16|i8`, `--sparse`,
+`--print-ids`), `bench batch` (q4k gate / q6k down x64),
+`bench continuous` (8x32/4 slots, `--prompt-tokens` 1/8/32),
+`fidelity` (arch corpus, ctx 512/2048, 31 tok, f32/f16/i8),
+2043-token id-list prefill pairs (dense/sparse/i8/tiled),
+temp `spike-mprefix` (8-seq A/B + FNV) and `spike-batchsnap`
+(MATCH gate) drivers on spike binaries, `git log/status/diff`
+throughout. Verdicts: S1 kill, S2 kill, S3 kill, S4 reject
+(not portable), S5 kill, S6 amend-and-proceed (epic-owned).
