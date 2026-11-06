@@ -11,11 +11,11 @@ Quantize each activation once, share the quantized rows across the workers/matri
 
 ## 2. Predicted gain — realized, priced per tier
 
-Prefill without new math: kq8 1.58–2.22x kernel / 1.6–1.83x end-to-end ( flood §§58/61), VNNI 1.9x prefill (§23). Fidelity prices (§6): kq8 at the dense floor, VNNI at 1.5e-3 with 97% top-1 agreement.
+Prefill without new math: kq8 1.58–2.22x kernel / 1.6–1.83x end-to-end (flood §§58/61), VNNI 1.9x prefill (§23). Fidelity prices (§6): kq8 at the dense floor, VNNI at 1.5e-3 with 97% top-1 agreement. (Correction appended 2026-11-06: "prefill-only" described VNNI's measured price, not its engagement — see §3.)
 
 ## 3. Falsifier (from the dossier) — evaluated arm by arm on today's tree
 
-"Mean KL > 1e-9 vs scalar oracle": default path PASSES (9.248e-12, ~100x inside); VNNI path prices 1.503e-03 — fails the letter, and that failure is the documented gate (opt-in flag, prefill-only, never default), not a regression. "Greedy ids diverge on Q8_0 or Q4_K_M": default 1023/1023 (no divergence); VNNI 993/1023 (30 flips — the reason it stays gated). "Decode regress is reject": both quantized paths are batch-only by construction (VNNI decode keeps float; kq8 tokens==1 keeps float — `kq8d` single-row variant aside, still the float-attention decode path); no decode regress possible, none measured anywhere on record.
+"Mean KL > 1e-9 vs scalar oracle": default path PASSES (9.248e-12, ~100x inside); VNNI path prices 1.503e-03 — fails the letter, and that failure is the documented gate (opt-in flag, never default), not a regression. "Greedy ids diverge on Q8_0 or Q4_K_M": default 1023/1023 (no divergence); VNNI 993/1023 (30 flips — the reason it stays gated). "Decode regress is reject": kq8 keeps float at tokens==1 by construction (`batch_matvec` routes kq8 only for tokens > 1; the `kq8d` single-row decode variant stays prototype-only) — but CORRECTION (2026-11-06, VNNI-split cycle): VNNI is NOT prefill-only; single-token `forward()` quantizes activations too (`src/models/qwen2.cpp:1683-1742`) whenever `--vnni` is set, so flagged decode runs the VNNI int dots with the same 1.5e-3-class numerics (decode ids under `--vnni` unmeasured; the fidelity price covers batch paths and VNNI decode shares those kernels). The gate still covers it — the flag gates ALL VNNI engagement, prefill and decode alike — but "decode untouched" holds for kq8 only, not VNNI.
 
 ## 4. File anchors (current `master`, read but untouched)
 
