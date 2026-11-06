@@ -1,4 +1,6 @@
-# INVENTED: VNNI Error Split — Quantization Exonerated, Int Dots Convicted (qonly at dense floor; corpus confound killed; next spike named)
+# INVENTED: VNNI Error Split — PARTIALLY RETRACTED (qonly-floor was silent non-engagement; confound kills stand; see qonly re-run)
+
+> **RETRACTION 2026-11-06 (same day, next cycle)**: the arm-(3) verdict below — "activation quantization exonerated (qonly at floor 9.248e-12)" — is WITHDRAWN. The qonly fidelity run never engaged its path (all 15 `quantize_activations` call sites gate on `vnni_`; the spike set only its own flag, so every matmul silently took the float path — digit-identical floor explained exactly). The engaged re-run (`idea-invented-vnni-qonly-rerun-measured.md`, with stderr engagement proof + `, qonly` label) prices qonly at KL 1.515e-03, 992/1023: **activation quantization CONFIRMED as the error; int dots add nothing measurable.** Arms (1) corpus confound killed and (2) engagement confinement STAND (independent measurements, unaffected). The replay round's kernel-arithmetic exoneration (1.7e-5 int-vs-int) also stands. Do not cite the exoneration below; cite the re-run. (Minor erratum fixed at the same time: the roundtrip unit test lived in `tests/test_q8.cpp`, not `test_attention.cpp` as §7.6 originally said.)
 
 - **Idea**: Invented (no dossier; follow-up the 1394 verification round explicitly deferred: "VNNI accuracy program... is a new idea, not this one"). Decompose VNNI's priced 1.5e-3 error into activation-quant vs int-dot halves with a temporary `--vnni-qonly` flag (dequantize the shared Q8 buffer back to float, run the float Q8 dots), plus kill the corpus confound (was kq8's floor short-corpus-only?) and the engagement confound (where does VNNI actually run?).
 - **Cycle date**: 2026-11-06
@@ -53,7 +55,7 @@ Reading, in falsifier order. kq8's floor is real on real K-quants at full length
 3. `qwen2.hpp`: `bool vnni_qonly_ = false;` + `set_vnni_qonly`.
 4. `qwen2.cpp`: widen the `quantize_activations` early-out to `(!vnni_ && !vnni_qonly_)`; in both Q8_0 branches (`matvec`, `batch_matvec`) insert before the VNNI branch: if `vnni_qonly_` and buffer present → thread-local float dequant → production float `gemv_q8`/`gemv_q8_batch`.
 5. `main.cpp`: `--vnni-qonly` no-value flag on generate + fidelity; trailing `bool vnni_qonly = false` params on `command_generate`/`command_fidelity`; `set_vnni_qonly` beside `set_vnni`.
-6. `tests/test_attention.cpp`: `vnni_qonly_roundtrip_bounds_error` (error ≤ half block scale, nonzero).
+6. `tests/test_q8.cpp`: `vnni_qonly_roundtrip_bounds_error` (error ≤ half block scale, nonzero).
 7. Gate: build 54/54, 142/142 tests; fidelity qonly == floor digit-for-digit (§6 row 4 vs dense floor); remove entirely afterward.
 
 ## 8. Verdict and why — plus the named next spike
