@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-VNNI-ATTN-KSUM",
+    "task_id": "TGE-IDEA-VNNI-ATTN-S2",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794078760.76562,
+    "updated_at": 1794084148.0533183,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794078761.4383857
+    "completed_at": 1794084148.6736398
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-FRONTIER",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] kq8d frontier mixed: up 1.421e-4/394/399, gate+down 8.451e-4/390/399 pass; gate/f16+down fail; combo speed order-drift, keep down-only; 145/145, 4/4; report reports/idea-invented-kq8d-scope-frontier-mixed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794074448.6872787,
-      "timestamp_str": "2026-11-07 21:00:48",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-FRONTIER",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-FRONTIER' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794074448.866049,
-      "timestamp_str": "2026-11-07 21:00:48",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-COMBO",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] kq8d gate/up combos: interleaved 2048 A/B vs down-only, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794075057.1725461,
-      "timestamp_str": "2026-11-07 21:10:57",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 20 left gate+down/up+down speed unresolved; a rotating-order A/B can decide whether to promote a faster tier.",
-        "benefits": "Promote only if >5% over down; otherwise close the kq8d scope line.",
-        "risks": "contract: ids identical; dependency: scoped kq8d; concurrency: decode pool; state: CLI/engine scope only.",
-        "mitigation": "Two rotating rounds, mean+best, identical ids, full revert."
-      },
-      "plan_digest": "78ca8c12cccd7d15992275a7dd8f07678f702306f414112afbc804d6b0c2b184"
-    },
     {
       "task_id": "TGE-IDEA-KQ8D-COMBO",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794078761.4383876,
       "timestamp_str": "2026-11-07 22:12:41",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S2",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] VNNI i8 attention stage-2 wiring: key sums at store, args plumbing, per-head query quant, head/group dispatch, fidelity + 8k A/B",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794084147.784547,
+      "timestamp_str": "2026-11-07 23:42:27",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 26's key-bsum dot was 1.61x on an 8192-key span; wire it into the model to test the 1.15x long-context gate.",
+        "benefits": "A model-level win would open the i8 tier for long context; otherwise the QK-only direction closes with end-to-end evidence.",
+        "risks": "contract: i8 fidelity class, ids; dependency: AVX-VNNI + key sums; concurrency: decode pool; state: KV sums vector + args + two kernels.",
+        "mitigation": "399-pos i8 A/B, id parity, two drift-checked 8k pairs, full revert."
+      },
+      "plan_digest": "7907bab2dc56af71bff50c35694e804ebb497868e866bd78d545bc60aa28a4ac"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S2",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] VNNI wiring killed: fidelity 4.396e-4/394/399 in class, ids identical; 8k decode raw 1.51x/1.10x tracks matvec 1.55x/1.07x, normalized attention +6%/-7%; 145/145, 4/4; report reports/idea-invented-vnni-attn-wiring-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794084148.0533183,
+      "timestamp_str": "2026-11-07 23:42:28",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S2",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-VNNI-ATTN-S2' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794084148.673642,
+      "timestamp_str": "2026-11-07 23:42:28",
       "agent": "opencode:idea-loop"
     }
   ]
