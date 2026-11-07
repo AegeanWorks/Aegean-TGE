@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-VNNI-ATTN-S2",
+    "task_id": "TGE-IDEA-GQA-REUSE",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794084148.0533183,
+    "updated_at": 1794084701.2191029,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794084148.6736398
+    "completed_at": 1794084701.6127367
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-COMBO",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] kq8d combos killed: down 6.92 mean/6.77 best vs up+down 6.70/6.20 and gate+down 5.96/5.74; ids identical; 145/145, 4/4; report reports/idea-invented-kq8d-combos-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794075057.4137683,
-      "timestamp_str": "2026-11-07 21:10:57",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-COMBO",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-COMBO' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794075057.6837184,
-      "timestamp_str": "2026-11-07 21:10:57",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-SHARED",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Shared-activation kq8d gate+up: prequant API, 399-pos fidelity, 2048 shared/separate/down A/B, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794076374.3977945,
-      "timestamp_str": "2026-11-07 21:32:54",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 21's gate/up combo paid two activation quantizations; sharing one pass could recover the shape penalty if the quantizer is the cost.",
-        "benefits": "If shared gate+up beats down-only at 99% fidelity, a stronger decode tier; otherwise close the kq8d line.",
-        "risks": "contract: identical to separate gate+up numerics; dependency: Q8K block layout; concurrency: decode pool; state: new API + member + branch.",
-        "mitigation": "399-pos fidelity equals separate, rotating 2048 A/B, ids, full revert."
-      },
-      "plan_digest": "b9d20c6f3ac85d3017d492ad31a166bb971cef1d09bcbf146f134532857a324e"
-    },
     {
       "task_id": "TGE-IDEA-KQ8D-SHARED",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794084148.673642,
       "timestamp_str": "2026-11-07 23:42:28",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-GQA-REUSE",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Token-outer GQA i8 attention: K/V row reuse across group heads, 8k/4k stage-1 A/B, equivalence, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794084700.4541163,
+      "timestamp_str": "2026-11-07 23:51:40",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 27 showed the attention phase dominates long-context i8 decode; the 3-head GQA group re-reads the same K/V rows per head.",
+        "benefits": "A >=1.4x kernel would justify model wiring; otherwise close the loop-inversion direction.",
+        "risks": "contract: per-head math must match head-outer; dependency: AVX2/FMA; concurrency: kernel runs per decode task; state: one new kernel + temp test.",
+        "mitigation": "8k and 4k spans, 4/3 runs, maxrel <1e-5, full revert."
+      },
+      "plan_digest": "d30b2af20c6d2f8cfa4d6325f50f37ced5f54b8dbdb716a4cdfafda954ab5a4b"
+    },
+    {
+      "task_id": "TGE-IDEA-GQA-REUSE",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] GQA reuse killed: 0.81-0.96x at 8k, 0.83-0.94x at 4k, maxrel 5.9e-6/3.0e-6; cache-resident rows + register pressure; 145/145, 4/4; report reports/idea-invented-gqa-reuse-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794084701.2191029,
+      "timestamp_str": "2026-11-07 23:51:41",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-GQA-REUSE",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-GQA-REUSE' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794084701.612739,
+      "timestamp_str": "2026-11-07 23:51:41",
       "agent": "opencode:idea-loop"
     }
   ]
