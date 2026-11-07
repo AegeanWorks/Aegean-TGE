@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 
 #include <immintrin.h>
@@ -325,6 +326,9 @@ void gemv_dequant_batch_kq8_avx2(const DequantBatchArgs& args,
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
     return;
   }
+  if (args.data == nullptr || args.input == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_dequant_batch_kq8: null data/input/out");
+  }
   if ((args.kind != QuantKind::Q4_K && args.kind != QuantKind::Q6_K) ||
       args.cols % 256 != 0) {
     gemv_dequant_batch_avx2(args, config);
@@ -394,6 +398,9 @@ void gemv_dequant_kq8_row_avx2(const DequantBatchArgs& args,
                                const GemvConfig& config) {
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
     return;
+  }
+  if (args.data == nullptr || args.input == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_dequant_kq8_row: null data/input/out");
   }
   if (args.tokens != 1 ||
       (args.kind != QuantKind::Q4_K && args.kind != QuantKind::Q6_K) ||

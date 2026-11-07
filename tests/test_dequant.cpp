@@ -102,6 +102,64 @@ TGE_TEST(dequant_rejects_partial_block) {
   TGE_CHECK(threw_kind);
 }
 
+TGE_TEST(dequant_batch_rejects_null_buffers) {
+  // Regression: the K-quant batch entries are on the reference model's own
+  // prefill path; a null data/input/out faulted inside worker bands instead
+  // of throwing at the entry. Every entry must fail loud; the quiet
+  // non-positive-dims early-return stays quiet even with null buffers.
+  const std::vector<std::uint8_t> q4k = make_q4_k_matrix(1, 0x51ED270Bu);
+  std::vector<float> input(256, 0.5F);
+  std::vector<float> out(3, 0.0F);
+  tge::core::ThreadPool pool(tge::cpu::resolve_thread_count(0));
+  const tge::cpu::GemvConfig config{tge::cpu::resolve_thread_count(0), &pool};
+  auto throws = [&](auto entry, const char* name) {
+    bool all_threw = true;
+    for (int null_which = 0; null_which < 3; ++null_which) {
+      tge::cpu::DequantBatchArgs args;
+      args.data = null_which == 0 ? nullptr : q4k.data();
+      args.kind = tge::cpu::QuantKind::Q4_K;
+      args.rows = 3;
+      args.cols = 256;
+      args.input = null_which == 1 ? nullptr : input.data();
+      args.tokens = 1;
+      args.out = null_which == 2 ? nullptr : out.data();
+      bool threw = false;
+      try {
+        entry(args, config);
+      } catch (const std::invalid_argument&) {
+        threw = true;
+      } catch (...) {
+        threw = false;
+      }
+      if (!threw) {
+        std::fprintf(stderr, "    %s accepted null buffer %d\n", name,
+                     null_which);
+        all_threw = false;
+      }
+    }
+    // Quiet early-return contract preserved (no throw, even with nulls).
+    tge::cpu::DequantBatchArgs empty;
+    empty.data = nullptr;
+    empty.kind = tge::cpu::QuantKind::Q4_K;
+    empty.rows = 0;
+    empty.cols = 256;
+    empty.input = nullptr;
+    empty.tokens = 1;
+    empty.out = nullptr;
+    try {
+      entry(empty, config);
+    } catch (...) {
+      std::fprintf(stderr, "    %s threw on empty dims\n", name);
+      all_threw = false;
+    }
+    return all_threw;
+  };
+  TGE_CHECK(throws(tge::cpu::gemv_dequant_batch_avx2, "gemv_dequant_batch_avx2"));
+  TGE_CHECK(throws(tge::cpu::gemv_dequant_batch_scalar, "gemv_dequant_batch_scalar"));
+  TGE_CHECK(throws(tge::cpu::gemv_dequant_batch_kq8_avx2, "gemv_dequant_batch_kq8_avx2"));
+  TGE_CHECK(throws(tge::cpu::gemv_dequant_kq8_row_avx2, "gemv_dequant_kq8_row_avx2"));
+}
+
 namespace {
 
 constexpr std::size_t kQ6_KBlockBytes = 210;

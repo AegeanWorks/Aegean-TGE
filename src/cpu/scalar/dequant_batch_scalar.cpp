@@ -1,6 +1,7 @@
 #include "tge/cpu/kernels.hpp"
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace tge::cpu {
@@ -9,6 +10,9 @@ void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
                                const GemvConfig& /*config*/) {
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
     return;
+  }
+  if (args.data == nullptr || args.input == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_dequant_batch: null data/input/out");
   }
 
   const std::size_t row_bytes = quant_row_bytes(args.kind, args.cols);
