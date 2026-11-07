@@ -1186,16 +1186,23 @@ void Qwen2::attention_head(int sequence, int layer, int position, int head,
   args.scores = scores;
   args.out = out;
 
-  // Static sparse subset (f32 KV only, never the Scalar oracle): the
-  // strided kernel walks the kept rows in place with the native stride, so
-  // no index build, scratch, or gather. Same gate as before; kept order
-  // matches build_sparse_index exactly, hence bit-identical outputs.
-  if (sparse_.enabled && !kv_half_ && !kv_q8_ &&
+  // Static sparse subset (f32 + f16 KV, never the Scalar oracle): the
+  // strided kernels walk the kept rows in place with the native stride, so
+  // no index build, scratch, or gather. Same gate as before minus the f32
+  // restriction; kept order matches build_sparse_index exactly, hence
+  // bit-identical outputs. i8 stays excluded (no strided i8 kernel).
+  if (sparse_.enabled && !kv_q8_ &&
       attention_mode_ != AttentionMode::Scalar &&
       args.span > sparse_.sink + sparse_.window) {
-    cpu::attention_head_static_sparse_avx2(args, sparse_.sink, sparse_.window,
-                                           sparse_.stride < 2 ? 2
-                                                              : sparse_.stride);
+    if (kv_half_) {
+      cpu::attention_head_static_sparse_fp16_avx2(
+          args, sparse_.sink, sparse_.window,
+          sparse_.stride < 2 ? 2 : sparse_.stride);
+    } else {
+      cpu::attention_head_static_sparse_avx2(
+          args, sparse_.sink, sparse_.window,
+          sparse_.stride < 2 ? 2 : sparse_.stride);
+    }
   } else if (attention_mode_ == AttentionMode::Scalar) {
     cpu::attention_head_scalar(args);
   } else {
@@ -1211,7 +1218,7 @@ bool Qwen2::uses_gqa(int position) const {
 }
 
 bool Qwen2::uses_sparse(int position) const {
-  return sparse_.enabled && !kv_half_ && !kv_q8_ &&
+  return sparse_.enabled && !kv_q8_ &&
          attention_mode_ != AttentionMode::Scalar &&
          position + 1 > sparse_.sink + sparse_.window;
 }

@@ -362,6 +362,131 @@ void attention_head_static_sparse_avx2(const AttentionArgs& args, int sink,
   }
 }
 
+void attention_head_static_sparse_fp16_avx2(const AttentionArgs& args,
+                                              int sink, int window,
+                                              int stride) {
+  validate_attention_args(args);
+  if (args.q8) {
+    throw std::invalid_argument("static sparse: q8 not supported");
+  }
+  if (!args.half) {
+    throw std::invalid_argument("static sparse fp16: half flag required");
+  }
+  if (sink < 0 || window < 1 || stride < 2) {
+    throw std::invalid_argument("static sparse: bad sink/window/stride");
+  }
+  const int head_dim = args.head_dim;
+  const int span = args.span;
+  const int kv_stride = args.kv_stride;
+  const std::uint16_t* half_keys = args.keys_half;
+  const std::uint16_t* half_values = args.values_half;
+
+  const int sink_end = sink < span ? sink : span;
+  const int window_start = span - window;
+  const int tail_start = window_start > sink_end ? window_start : sink_end;
+  const int middle_count =
+      window_start > sink_end ? (window_start - sink_end + stride - 1) / stride
+                              : 0;
+  const int tail_count = span > tail_start ? span - tail_start : 0;
+  const int kept_count = sink_end + middle_count + tail_count;
+  if (kept_count <= 0) {
+    throw std::invalid_argument("static sparse: empty kept set");
+  }
+  auto kept_position = [=](int ordinal) {
+    if (ordinal < sink_end) {
+      return ordinal;
+    }
+    const int middle = ordinal - sink_end;
+    if (middle < middle_count) {
+      return sink_end + middle * stride;
+    }
+    return tail_start + (middle - middle_count);
+  };
+
+  float maximum = -INFINITY;
+  for (int kept = 0; kept < kept_count; ++kept) {
+    const std::size_t row =
+        static_cast<std::size_t>(kept_position(kept)) * kv_stride;
+    const std::uint16_t* key = half_keys + row;
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    int index = 0;
+    for (; index + 16 <= head_dim; index += 16) {
+      const __m256 k0 = _mm256_cvtph_ps(
+          _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+      const __m256 k1 = _mm256_cvtph_ps(
+          _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index + 8)));
+      acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index), k0, acc0);
+      acc1 =
+          _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index + 8), k1, acc1);
+    }
+    for (; index + 8 <= head_dim; index += 8) {
+      const __m256 k = _mm256_cvtph_ps(
+          _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + index)));
+      acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(args.query + index), k, acc0);
+    }
+    float dot = horizontal_sum(_mm256_add_ps(acc0, acc1));
+    for (; index < head_dim; ++index) {
+      dot += args.query[index] * half_to_float(key[index]);
+    }
+    const float scaled = dot * args.scale;
+    args.scores[static_cast<std::size_t>(kept)] = scaled;
+    maximum = std::max(maximum, scaled);
+  }
+
+  float total = 0.0F;
+  {
+    const __m256 vmax = _mm256_set1_ps(maximum);
+    __m256 vsum = _mm256_setzero_ps();
+    int kept = 0;
+    const int blocked = kept_count & ~7;
+    for (; kept < blocked; kept += 8) {
+      const __m256 s =
+          _mm256_loadu_ps(args.scores + static_cast<std::size_t>(kept));
+      const __m256 shifted = _mm256_sub_ps(s, vmax);
+      const __m256 e = exp_avx2(shifted);
+      _mm256_storeu_ps(args.scores + static_cast<std::size_t>(kept), e);
+      vsum = _mm256_add_ps(vsum, e);
+    }
+    total = horizontal_sum(vsum);
+    for (; kept < kept_count; ++kept) {
+      const float value =
+          std::exp(args.scores[static_cast<std::size_t>(kept)] - maximum);
+      args.scores[static_cast<std::size_t>(kept)] = value;
+      total += value;
+    }
+  }
+  const float inverse = 1.0F / total;
+
+  int index = 0;
+  for (; index + 8 <= head_dim; index += 8) {
+    _mm256_storeu_ps(args.out + index, _mm256_setzero_ps());
+  }
+  for (; index < head_dim; ++index) {
+    args.out[index] = 0.0F;
+  }
+
+  for (int kept = 0; kept < kept_count; ++kept) {
+    const float scalar_weight =
+        args.scores[static_cast<std::size_t>(kept)] * inverse;
+    const std::size_t row =
+        static_cast<std::size_t>(kept_position(kept)) * kv_stride;
+    const std::uint16_t* value = half_values + row;
+    const __m256 weight = _mm256_set1_ps(scalar_weight);
+    int lane = 0;
+    for (; lane + 8 <= head_dim; lane += 8) {
+      const __m256 v = _mm256_cvtph_ps(
+          _mm_loadu_si128(reinterpret_cast<const __m128i*>(value + lane)));
+      _mm256_storeu_ps(
+          args.out + lane,
+          _mm256_fmadd_ps(weight, v, _mm256_loadu_ps(args.out + lane)));
+    }
+    for (; lane < head_dim; ++lane) {
+      args.out[lane] += scalar_weight * half_to_float(value[lane]);
+    }
+  }
+}
+
 void attention_group_avx2(const AttentionGroupArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;

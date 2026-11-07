@@ -558,6 +558,80 @@ TGE_TEST(auto_kv_half_threshold) {
   TGE_CHECK(tge::models::Qwen2::auto_kv_half(32768));
 }
 
+TGE_TEST(static_sparse_fp16_matches_gather_bit_exact) {
+  // f16-KV twin of the no-gather differential: strided reads with on-load
+  // cvt must equal gather+dense-half bit-for-bit on the same kept set.
+  // Patterns are normals via float_to_half (production weight range).
+  const tge::models::SparseConfig config{true, 16, 512, 4};
+  for (const int span : {600, 1024, 2048}) {
+    const int head_dim = 128;
+    const std::vector<float> query = make_values(head_dim, 41u);
+    const std::vector<float> keys_f =
+        make_values(span * head_dim, 42u + static_cast<std::uint32_t>(span));
+    const std::vector<float> values_f =
+        make_values(span * head_dim, 43u + static_cast<std::uint32_t>(span));
+    std::vector<std::uint16_t> keys(span * head_dim);
+    std::vector<std::uint16_t> values(span * head_dim);
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+      keys[i] = tge::cpu::float_to_half(keys_f[i]);
+      values[i] = tge::cpu::float_to_half(values_f[i]);
+    }
+    const std::vector<int> kept =
+        tge::models::build_sparse_index(span, config);
+
+    std::vector<std::uint16_t> compact_keys(kept.size() * head_dim);
+    std::vector<std::uint16_t> compact_values(kept.size() * head_dim);
+    for (std::size_t index = 0; index < kept.size(); ++index) {
+      const std::size_t row = static_cast<std::size_t>(kept[index]) * head_dim;
+      std::copy(keys.begin() + row, keys.begin() + row + head_dim,
+                compact_keys.begin() + index * head_dim);
+      std::copy(values.begin() + row, values.begin() + row + head_dim,
+                compact_values.begin() + index * head_dim);
+    }
+    std::vector<float> gather_scores(kept.size());
+    std::vector<float> gather_out(head_dim);
+    tge::cpu::AttentionArgs gather_args;
+    gather_args.query = query.data();
+    gather_args.half = true;
+    gather_args.keys_half = compact_keys.data();
+    gather_args.values_half = compact_values.data();
+    gather_args.kv_stride = head_dim;
+    gather_args.span = static_cast<int>(kept.size());
+    gather_args.head_dim = head_dim;
+    gather_args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    gather_args.scores = gather_scores.data();
+    gather_args.out = gather_out.data();
+    tge::cpu::attention_head_avx2(gather_args);
+
+    std::vector<float> strided_scores(kept.size());
+    std::vector<float> strided_out(head_dim);
+    tge::cpu::AttentionArgs strided_args;
+    strided_args.query = query.data();
+    strided_args.half = true;
+    strided_args.keys_half = keys.data();
+    strided_args.values_half = values.data();
+    strided_args.kv_stride = head_dim;
+    strided_args.span = span;
+    strided_args.head_dim = head_dim;
+    strided_args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    strided_args.scores = strided_scores.data();
+    strided_args.out = strided_out.data();
+    tge::cpu::attention_head_static_sparse_fp16_avx2(
+        strided_args, config.sink, config.window, config.stride);
+
+    for (int axis = 0; axis < head_dim; ++axis) {
+      if (gather_out[axis] != strided_out[axis]) {
+        std::fprintf(stderr,
+                     "    static sparse f16: span=%d axis=%d "
+                     "gather=%a strided=%a\n",
+                     span, axis, static_cast<double>(gather_out[axis]),
+                     static_cast<double>(strided_out[axis]));
+        tgetest::fail("static sparse f16 bit-exact", __FILE__, __LINE__);
+      }
+    }
+  }
+}
+
 TGE_TEST(attention_rejects_bad_shapes) {
   // Regression: stride<head_dim read overlapping rows, half+q8 was
   // ambiguous, and q8 with a ragged width read the wrong scale row —

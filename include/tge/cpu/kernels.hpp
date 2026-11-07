@@ -246,6 +246,13 @@ void attention_head_avx2(const AttentionArgs& args);
 void attention_head_static_sparse_avx2(const AttentionArgs& args, int sink,
                                        int window, int stride);
 
+/// f16-KV twin of the strided kernel: same kept-set walk, per-row
+/// fp16->fp32 conversion on K/V loads (same blocking as the dense half
+/// path). f16 KV only (throws on q8); args.span keeps the FULL span,
+/// scores[0..kept) hold the compact weights.
+void attention_head_static_sparse_fp16_avx2(const AttentionArgs& args,
+                                            int sink, int window, int stride);
+
 /// One KV group's attention over one position chunk, with an online softmax.
 ///
 /// Grouped-query attention has several query heads sharing each KV head. Each

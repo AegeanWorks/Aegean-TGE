@@ -559,9 +559,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   model->set_vnni(vnni);
   model->set_kq8(kq8);
   if (sparse.enabled) {
-    if (kv_half || kv_q8) {
+    if (kv_q8) {
       std::fprintf(stderr,
-                   "generate: --sparse needs the f32 KV cache (no --kv f16|i8)\n");
+                   "generate: --sparse needs the f32|f16 KV cache (no --kv i8)\n");
       return 2;
     }
     try {
@@ -2349,9 +2349,9 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   // prices the GPU numerics against the exact scalar oracle.
   candidate->set_use_gpu(gpu_mode != "off");
   if (sparse.enabled) {
-    if (kv_half || kv_q8) {
+    if (kv_q8) {
       std::fprintf(stderr,
-                   "fidelity: --sparse needs the f32 KV cache (no --kv f16|i8)\n");
+                   "fidelity: --sparse needs the f32|f16 KV cache (no --kv i8)\n");
       return 2;
     }
     try {
