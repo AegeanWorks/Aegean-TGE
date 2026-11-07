@@ -235,6 +235,17 @@ using AttentionHeadFn = void (*)(const AttentionArgs& args);
 void attention_head_scalar(const AttentionArgs& args);
 void attention_head_avx2(const AttentionArgs& args);
 
+/// Static strided sparse attention: the same per-head computation as
+/// attention_head_avx2 over the sink/stride/window kept set, read in place
+/// from the resident K/V cache (native kv_stride) instead of gathered
+/// compact buffers. Kept positions ascend exactly as build_sparse_index
+/// emits them, so outputs are bit-identical to gather+dense; the only delta
+/// is the removed memcpy traffic + per-call allocation. f32 KV only
+/// (throws on half/q8); args.span stays the FULL span, scores[0..kept)
+/// holds the compact weights.
+void attention_head_static_sparse_avx2(const AttentionArgs& args, int sink,
+                                       int window, int stride);
+
 /// One KV group's attention over one position chunk, with an online softmax.
 ///
 /// Grouped-query attention has several query heads sharing each KV head. Each

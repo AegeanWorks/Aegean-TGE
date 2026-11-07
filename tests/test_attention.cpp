@@ -476,6 +476,75 @@ TGE_TEST(sparse_gather_matches_subset_reference) {
   }
 }
 
+TGE_TEST(static_sparse_matches_gather_bit_exact) {
+  // The no-gather kernel reads kept rows in place with the native stride
+  // instead of memcpys into compact buffers. Arithmetic and kept order are
+  // identical to gather+dense, so outputs must match bit-for-bit (exact
+  // equality, not tolerance) on engaged spans.
+  const tge::models::SparseConfig config{true, 16, 512, 4};
+  for (const int span : {600, 1024, 2048}) {
+    const int head_dim = 128;
+    const std::vector<float> query = make_values(head_dim, 31u);
+    const std::vector<float> keys =
+        make_values(span * head_dim, 32u + static_cast<std::uint32_t>(span));
+    const std::vector<float> values =
+        make_values(span * head_dim, 33u + static_cast<std::uint32_t>(span));
+    const std::vector<int> kept =
+        tge::models::build_sparse_index(span, config);
+
+    // Reference arm: gather + dense AVX2 kernel (today's production path).
+    std::vector<float> compact_keys(kept.size() * head_dim);
+    std::vector<float> compact_values(kept.size() * head_dim);
+    for (std::size_t index = 0; index < kept.size(); ++index) {
+      const std::size_t row = static_cast<std::size_t>(kept[index]) * head_dim;
+      std::copy(keys.begin() + row, keys.begin() + row + head_dim,
+                compact_keys.begin() + index * head_dim);
+      std::copy(values.begin() + row, values.begin() + row + head_dim,
+                compact_values.begin() + index * head_dim);
+    }
+    std::vector<float> gather_scores(kept.size());
+    std::vector<float> gather_out(head_dim);
+    tge::cpu::AttentionArgs gather_args;
+    gather_args.query = query.data();
+    gather_args.keys = compact_keys.data();
+    gather_args.values = compact_values.data();
+    gather_args.kv_stride = head_dim;
+    gather_args.span = static_cast<int>(kept.size());
+    gather_args.head_dim = head_dim;
+    gather_args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    gather_args.scores = gather_scores.data();
+    gather_args.out = gather_out.data();
+    tge::cpu::attention_head_avx2(gather_args);
+
+    // Strided arm: native stride, full span, same kept order.
+    std::vector<float> strided_scores(kept.size());
+    std::vector<float> strided_out(head_dim);
+    tge::cpu::AttentionArgs strided_args;
+    strided_args.query = query.data();
+    strided_args.keys = keys.data();
+    strided_args.values = values.data();
+    strided_args.kv_stride = head_dim;
+    strided_args.span = span;
+    strided_args.head_dim = head_dim;
+    strided_args.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    strided_args.scores = strided_scores.data();
+    strided_args.out = strided_out.data();
+    tge::cpu::attention_head_static_sparse_avx2(
+        strided_args, config.sink, config.window, config.stride);
+
+    for (int axis = 0; axis < head_dim; ++axis) {
+      if (gather_out[axis] != strided_out[axis]) {
+        std::fprintf(stderr,
+                     "    static sparse mismatch: span=%d axis=%d "
+                     "gather=%a strided=%a\n",
+                     span, axis, static_cast<double>(gather_out[axis]),
+                     static_cast<double>(strided_out[axis]));
+        tgetest::fail("static sparse bit-exact", __FILE__, __LINE__);
+      }
+    }
+  }
+}
+
 TGE_TEST(attention_rejects_bad_shapes) {
   // Regression: stride<head_dim read overlapping rows, half+q8 was
   // ambiguous, and q8 with a ragged width read the wrong scale row —

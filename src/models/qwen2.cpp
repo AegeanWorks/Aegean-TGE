@@ -1181,35 +1181,17 @@ void Qwen2::attention_head(int sequence, int layer, int position, int head,
   args.scores = scores;
   args.out = out;
 
-  // Static sparse subset (f32 KV only, never the Scalar oracle): gather the
-  // kept rows into thread-local scratch and run the same kernel over them.
-  // The span fits check keeps the exact dense path bit-identical below it.
+  // Static sparse subset (f32 KV only, never the Scalar oracle): the
+  // strided kernel walks the kept rows in place with the native stride, so
+  // no index build, scratch, or gather. Same gate as before; kept order
+  // matches build_sparse_index exactly, hence bit-identical outputs.
   if (sparse_.enabled && !kv_half_ && !kv_q8_ &&
       attention_mode_ != AttentionMode::Scalar &&
       args.span > sparse_.sink + sparse_.window) {
-    const std::vector<int> kept = build_sparse_index(args.span, sparse_);
-    thread_local std::vector<float> sparse_keys;
-    thread_local std::vector<float> sparse_values;
-    const std::size_t kept_count = kept.size();
-    sparse_keys.resize(kept_count * static_cast<std::size_t>(head_dim));
-    sparse_values.resize(kept_count * static_cast<std::size_t>(head_dim));
-    for (std::size_t kept_index = 0; kept_index < kept_count; ++kept_index) {
-      const float* key_row =
-          args.keys + static_cast<std::size_t>(kept[kept_index]) * kv_dim;
-      const float* value_row =
-          args.values + static_cast<std::size_t>(kept[kept_index]) * kv_dim;
-      std::memcpy(sparse_keys.data() + kept_index * head_dim, key_row,
-                  sizeof(float) * static_cast<std::size_t>(head_dim));
-      std::memcpy(sparse_values.data() + kept_index * head_dim, value_row,
-                  sizeof(float) * static_cast<std::size_t>(head_dim));
-    }
-    args.keys = sparse_keys.data();
-    args.values = sparse_values.data();
-    args.kv_stride = head_dim;
-    args.span = static_cast<int>(kept_count);
-  }
-
-  if (attention_mode_ == AttentionMode::Scalar) {
+    cpu::attention_head_static_sparse_avx2(args, sparse_.sink, sparse_.window,
+                                           sparse_.stride < 2 ? 2
+                                                              : sparse_.stride);
+  } else if (attention_mode_ == AttentionMode::Scalar) {
     cpu::attention_head_scalar(args);
   } else {
     kernels().attention_head(args);

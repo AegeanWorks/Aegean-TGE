@@ -258,6 +258,110 @@ void attention_head_avx2(const AttentionArgs& args) {
   }
 }
 
+void attention_head_static_sparse_avx2(const AttentionArgs& args, int sink,
+                                       int window, int stride) {
+  validate_attention_args(args);
+  if (args.half || args.q8) {
+    throw std::invalid_argument("static sparse: half/q8 not supported");
+  }
+  if (sink < 0 || window < 1 || stride < 2) {
+    throw std::invalid_argument("static sparse: bad sink/window/stride");
+  }
+  const int head_dim = args.head_dim;
+  const int span = args.span;
+  const int kv_stride = args.kv_stride;
+
+  // Kept-set geometry identical to build_sparse_index (ascending): sink
+  // verbatim [0,sink_end), strided middle [sink_end,window_start), window
+  // tail [max(window_start,sink_end),span). Ordinal i maps to a resident
+  // position arithmetically — no index build, no compact buffers.
+  const int sink_end = sink < span ? sink : span;
+  const int window_start = span - window;
+  const int tail_start = window_start > sink_end ? window_start : sink_end;
+  const int middle_count =
+      window_start > sink_end
+          ? (window_start - sink_end + stride - 1) / stride
+          : 0;
+  const int tail_count = span > tail_start ? span - tail_start : 0;
+  const int kept_count = sink_end + middle_count + tail_count;
+  if (kept_count <= 0) {
+    throw std::invalid_argument("static sparse: empty kept set");
+  }
+  auto kept_position = [=](int ordinal) {
+    if (ordinal < sink_end) {
+      return ordinal;
+    }
+    const int middle = ordinal - sink_end;
+    if (middle < middle_count) {
+      return sink_end + middle * stride;
+    }
+    return tail_start + (middle - middle_count);
+  };
+
+  float maximum = -INFINITY;
+  for (int kept = 0; kept < kept_count; ++kept) {
+    const std::size_t row =
+        static_cast<std::size_t>(kept_position(kept)) * kv_stride;
+    const float dot = dot_avx2(args.query, args.keys + row, head_dim);
+    const float scaled = dot * args.scale;
+    args.scores[static_cast<std::size_t>(kept)] = scaled;
+    maximum = std::max(maximum, scaled);
+  }
+
+  // Softmax via the shared vectorised exp (same block as the dense kernel,
+  // over the compact kept count).
+  float total = 0.0F;
+  {
+    const __m256 vmax = _mm256_set1_ps(maximum);
+    __m256 vsum = _mm256_setzero_ps();
+    int kept = 0;
+    const int blocked = kept_count & ~7;
+    for (; kept < blocked; kept += 8) {
+      const __m256 s =
+          _mm256_loadu_ps(args.scores + static_cast<std::size_t>(kept));
+      const __m256 shifted = _mm256_sub_ps(s, vmax);
+      const __m256 e = exp_avx2(shifted);
+      _mm256_storeu_ps(args.scores + static_cast<std::size_t>(kept), e);
+      vsum = _mm256_add_ps(vsum, e);
+    }
+    total = horizontal_sum(vsum);
+    for (; kept < kept_count; ++kept) {
+      const float value =
+          std::exp(args.scores[static_cast<std::size_t>(kept)] - maximum);
+      args.scores[static_cast<std::size_t>(kept)] = value;
+      total += value;
+    }
+  }
+  const float inverse = 1.0F / total;
+
+  int index = 0;
+  for (; index + 8 <= head_dim; index += 8) {
+    _mm256_storeu_ps(args.out + index, _mm256_setzero_ps());
+  }
+  for (; index < head_dim; ++index) {
+    args.out[index] = 0.0F;
+  }
+
+  for (int kept = 0; kept < kept_count; ++kept) {
+    const float scalar_weight =
+        args.scores[static_cast<std::size_t>(kept)] * inverse;
+    const std::size_t row =
+        static_cast<std::size_t>(kept_position(kept)) * kv_stride;
+    const float* value = args.values + row;
+    const __m256 weight = _mm256_set1_ps(scalar_weight);
+    int lane = 0;
+    for (; lane + 8 <= head_dim; lane += 8) {
+      _mm256_storeu_ps(
+          args.out + lane,
+          _mm256_fmadd_ps(weight, _mm256_loadu_ps(value + lane),
+                           _mm256_loadu_ps(args.out + lane)));
+    }
+    for (; lane < head_dim; ++lane) {
+      args.out[lane] += scalar_weight * value[lane];
+    }
+  }
+}
+
 void attention_group_avx2(const AttentionGroupArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
