@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-CONT-SLOTS",
+    "task_id": "TGE-IDEA-SEQ-AUTO",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794068863.5270154,
+    "updated_at": 1794069427.5177197,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794068863.7009203
+    "completed_at": 1794069427.8639352
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-TOK-STATE-CACHE",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[4/4] Tokenizer state cache kept-grade: warm 107.6->19.2 ms (5.6x) Llama, 91.7->15.9 ms (5.8x) Qwen, auto 333->219 ms (1.52x), ids identical, 145/145, 4/4 gates; report reports/idea-invented-tokenizer-state-cache-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794062704.507508,
-      "timestamp_str": "2026-11-07 17:45:04",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-TOK-STATE-CACHE",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-TOK-STATE-CACHE' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794062704.7941816,
-      "timestamp_str": "2026-11-07 17:45:04",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SCRATCH-NOINIT",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] Scratch no-init plan: NoInitAllocator on logits_batch_/verify_logits_/scores_, load A/B, ids/tests, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794062766.085106,
-      "timestamp_str": "2026-11-07 17:46:06",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "~70 MB of scratch buffers are zero-filled at load although every element is written before it is read; at ctx 4096 this is ~12-13 ms of the ~183 ms load.",
-        "benefits": "Standalone ~5-7% load reduction; compounds with the no-init KV report (183->19 ms) toward a ~6 ms load.",
-        "risks": "contract: every scratch row is written before read; dependency: allocator only, no new deps; concurrency: per-model buffers; state: three vector members, load-time resize only.",
-        "mitigation": "No-init allocator with default-init construct, resize not assign, full suite + thinking ids, revert."
-      },
-      "plan_digest": "0a447bad12c397803ec12655babacda3eb97d66cde9777d0b2566227536bd7be"
-    },
     {
       "task_id": "TGE-IDEA-SCRATCH-NOINIT",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794068863.700922,
       "timestamp_str": "2026-11-07 19:27:43",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Budget-aware --sequences auto: plan/place slot resolution, 4-preference/8-cap, A/B + fidelity, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794069427.1198807,
+      "timestamp_str": "2026-11-07 19:37:07",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 11 showed 8 f16 slots can add ~34% aggregate but can lose under memory pressure; a fixed default is unsafe.",
+        "benefits": "Opt-in auto picks 8 when the model/KV plan fits and falls back otherwise, capturing the throughput win with a budget guard.",
+        "risks": "contract: identical transcripts; dependency: existing plan/budget APIs; concurrency: slots chosen before load; state: CLI-only, opt-in.",
+        "mitigation": "3 paired auto-vs-4 runs, fidelity tiers, budget readout, full revert."
+      },
+      "plan_digest": "1eefd2fb8994938417ddc58f05f2b6c9f3c71817475399e4f59a32219f264c3b"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Sequences auto kept opt-in: picks 8 slots, 3/3 pairs faster median 1.253x, ids/fidelity exact, 145/145, 4/4; report reports/idea-invented-sequences-auto-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794069427.5177197,
+      "timestamp_str": "2026-11-07 19:37:07",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-SEQ-AUTO' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794069427.8639374,
+      "timestamp_str": "2026-11-07 19:37:07",
       "agent": "opencode:idea-loop"
     }
   ]
