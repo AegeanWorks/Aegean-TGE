@@ -1,55 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-BPE-HEAP",
+    "task_id": "TGE-IDEA-KV-NOINIT",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794060418.7984617,
+    "updated_at": 1794060989.5380719,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794060418.9462368
+    "completed_at": 1794060989.7406003
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/4] Phi-3.5 port: fused QKV + fused gate|up + YaRN-aware rope + phi tokenizer rule",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793633424.0832076,
-      "timestamp_str": "2026-11-02 18:30:24",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "Phi-3.5-mini is local, popular, and currently unloadable (missing attn_q.weight); fused-QKV + fused-gate|up + YaRN + tokenizer are each bounded and independently verifiable",
-        "benefits": "Third architecture family running; fused-weight machinery reusable for any future fused model",
-        "risks": "contract: load-time tensor mapping + forward-path splits, gated per piece; dependency: none; concurrency: same parallel regions; state: none; accuracy: ggml-verified formulas, templated llama comparison at the end",
-        "mitigation": "One piece at a time: config first, then load, then smoke, then fidelity, then tokenizer, then llama cross-check; Qwen/Llama regression via full suite each step"
-      }
-    },
-    {
-      "task_id": "TGE-MORE-MODELS",
-      "phase": "superseded",
-      "phase_num": 2,
-      "description": "Superseded by 'TGE-PHI3' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793633424.0832076,
-      "timestamp_str": "2026-11-02 18:30:24",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/4] started: config + load path",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793633430.2347753,
-      "timestamp_str": "2026-11-02 18:30:30",
-      "agent": "unidentified"
-    },
     {
       "task_id": "TGE-PHI3",
       "phase": "in_progress",
@@ -273,6 +235,45 @@
       "status": "completed",
       "timestamp": 1794060418.9462388,
       "timestamp_str": "2026-11-07 17:06:58",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KV-NOINIT",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] No-init KV plan: measure load-vs-context, replace eager zero-fill with uninitialized cache allocation, verify ids/fidelity/f16/i8, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794060534.9215598,
+      "timestamp_str": "2026-11-07 17:08:54",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Qwen2::load zero-fills the whole KV cache (assign(cache_elements,0)): ~896 MiB at Llama-3B ctx 4096, ~185 ms of the 200 ms load, while only the used positions are ever read.",
+        "benefits": "Expected 4x+ startup load at ctx 4096 and lower total memory traffic; short prompts touch only the used KV pages.",
+        "risks": "contract: every KV read must be preceded by a write for that position; dependency: allocator type change in qwen2.hpp; concurrency: caches are per-model, not shared; state: f32/f16/i8 and prefix/batch paths must stay exact.",
+        "mitigation": "Custom no-init allocator only for cache members, resize not assign, full suite + fidelity + id parity across f32/f16/i8 and continuous batching, then revert."
+      },
+      "plan_digest": "41dc261ee834393fb107cab7059a130bbea99e50a75d5d0c55d368b4e9d71a27"
+    },
+    {
+      "task_id": "TGE-IDEA-KV-NOINIT",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[4/4] No-init KV kept-grade: load 183->19 ms @4096 (9.7x), 98->15 @2048; 145/145 both sides, f32/f16/i8 fidelity in class, all ids identical; checklists: passed; report reports/idea-invented-kv-noinit-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794060989.5380719,
+      "timestamp_str": "2026-11-07 17:16:29",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KV-NOINIT",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KV-NOINIT' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794060989.740602,
+      "timestamp_str": "2026-11-07 17:16:29",
       "agent": "opencode:idea-loop"
     }
   ]
