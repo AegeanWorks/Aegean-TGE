@@ -187,6 +187,13 @@ class Qwen2 {
   /// the quantization the same way it prices `--kv f16`.
   bool kv_q8() const { return kv_q8_; }
 
+  /// `--kv auto` rule: declared context capacity (0 = the loader's 4096
+  /// default) above kAutoKvHalfContext selects f16, else f32. i8 is never
+  /// auto (size-ladder conditional). Short histories keep the exact f32
+  /// path; long histories take the priced f16 tier (1.7e-6, top-1 held).
+  static constexpr int kAutoKvHalfContext = 512;
+  static bool auto_kv_half(int context_limit);
+
   /// GPU offload request (`--gpu`, default off). True only *wishes* for the
   /// GPU: dispatch additionally requires the backend ready (`gpu::use_gpu`)
   /// and the static winners (`wants_gpu_*` below). Without an SDK build the

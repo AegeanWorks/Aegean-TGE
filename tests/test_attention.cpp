@@ -545,6 +545,19 @@ TGE_TEST(static_sparse_matches_gather_bit_exact) {
   }
 }
 
+TGE_TEST(auto_kv_half_threshold) {
+  static_assert(tge::models::Qwen2::kAutoKvHalfContext == 512,
+                "auto tier boundary moved; update the ladder test");
+  TGE_CHECK(tge::models::Qwen2::auto_kv_half(0));
+  TGE_CHECK(!tge::models::Qwen2::auto_kv_half(1));
+  TGE_CHECK(!tge::models::Qwen2::auto_kv_half(511));
+  TGE_CHECK(!tge::models::Qwen2::auto_kv_half(512));
+  TGE_CHECK(tge::models::Qwen2::auto_kv_half(513));
+  TGE_CHECK(tge::models::Qwen2::auto_kv_half(1024));
+  TGE_CHECK(tge::models::Qwen2::auto_kv_half(4096));
+  TGE_CHECK(tge::models::Qwen2::auto_kv_half(32768));
+}
+
 TGE_TEST(attention_rejects_bad_shapes) {
   // Regression: stride<head_dim read overlapping rows, half+q8 was
   // ambiguous, and q8 with a ragged width read the wrong scale row —

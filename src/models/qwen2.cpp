@@ -135,6 +135,11 @@ bool to_quant_kind(gguf::TensorType type, cpu::QuantKind& kind) {  switch (type)
 
 }  // namespace
 
+bool Qwen2::auto_kv_half(int context_limit) {
+  const int declared = context_limit > 0 ? context_limit : kDefaultContext;
+  return declared > kAutoKvHalfContext;
+}
+
 void Qwen2::set_sparse_config(const SparseConfig& config) {
   if (config.enabled && config.stride < 2) {
     throw std::runtime_error("sparse: stride must be >= 2");

@@ -73,7 +73,7 @@ void print_usage() {
       "        --model PATH --context N --sessions N --bandwidth GB/s\n"
       "  bench sessions [opts] concurrent decoding over shared weights\n"
       "        --model PATH --sessions N --tokens N --threads N --context N\n"
-      "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --pin-threads 1|0  pin decode workers to P-cores (default 0)\n"
       "  bench continuous [opts] continuous batching over N KV slots\n"
       "        --model PATH --requests N --tokens N --threads N --sequences N\n"
@@ -110,7 +110,7 @@ void print_usage() {
       "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
       "        --kernel kq8     integer Q4_K/Q6_K x Q8_K prefill kernels (default on)\n"
       "        --kernel float   float dequant prefill kernels (default off)\n"
-      "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --gpu M          auto|off|on GPU offload (default auto)\n"
       "        --prefetch       fault weights before first token, report ms\n"
       "        --print-ids      print generated token ids\n"
@@ -120,7 +120,7 @@ void print_usage() {
       "        --vnni           compare against the VNNI batch kernels\n"
       "        --kernel kq8     compare against the integer Q4_K/Q6_K x Q8_K prefill kernel (default on)\n"
       "        --kernel float   compare against the float dequant prefill kernels (default off)\n"
-      "        --kv T           KV cache type: f32|f16|i8 (default f32)\n"
+      "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --gpu M          auto|off|on GPU offload (default auto)\n"
       "        --sparse         price the static sparse subset on the candidate\n"
       "        --sparse-window N  most-recent kept positions (default 512)\n"
@@ -1986,6 +1986,7 @@ int run_generate(int argc, char** argv) {
   bool kq8 = true;
   bool kv_half = false;
   bool kv_q8 = false;
+  bool kv_auto = false;
   bool prefetch = false;
   tge::models::SamplingParams sampling;
   int seed = 0;
@@ -2090,8 +2091,13 @@ int run_generate(int argc, char** argv) {
       } else if (std::strcmp(value, "f32") == 0) {
         kv_half = false;
         kv_q8 = false;
+        kv_auto = false;
+      } else if (std::strcmp(value, "auto") == 0) {
+        kv_auto = true;
+        kv_half = false;
+        kv_q8 = false;
       } else {
-        std::fprintf(stderr, "generate: --kv takes f32|f16|i8\n");
+        std::fprintf(stderr, "generate: --kv takes f32|f16|i8|auto\n");
         return 2;
       }
     } else if (std::strcmp(flag, "--gpu") == 0) {
@@ -2156,6 +2162,10 @@ int run_generate(int argc, char** argv) {
                  "generate: --sparse-window must be >= 1 and --sparse-stride "
                  "must be >= 2\n");
     return 2;
+  }
+  if (kv_auto) {
+    kv_half = tge::models::Qwen2::auto_kv_half(context_limit);
+    kv_q8 = false;
   }
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
@@ -2489,6 +2499,7 @@ int run_fidelity(int argc, char** argv) {
   bool kq8 = true;
   bool kv_half = false;
   bool kv_q8 = false;
+  bool kv_auto = false;
   tge::models::SparseConfig sparse;
   std::string gpu_mode = "auto";
 
@@ -2516,8 +2527,12 @@ int run_fidelity(int argc, char** argv) {
       } else if (std::strcmp(value, "f32") == 0) {
         kv_half = false;
         kv_q8 = false;
+      } else if (std::strcmp(value, "auto") == 0) {
+        kv_auto = true;
+        kv_half = false;
+        kv_q8 = false;
       } else {
-        std::fprintf(stderr, "fidelity: --kv takes f32|f16|i8\n");
+        std::fprintf(stderr, "fidelity: --kv takes f32|f16|i8|auto\n");
         return 2;
       }
       continue;
@@ -2591,6 +2606,10 @@ int run_fidelity(int argc, char** argv) {
                  "fidelity: --sparse-window must be >= 1 and --sparse-stride "
                  "must be >= 2\n");
     return 2;
+  }
+  if (kv_auto) {
+    kv_half = tge::models::Qwen2::auto_kv_half(context);
+    kv_q8 = false;
   }
   return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
                           vnni, kq8, kv_half, kv_q8, sparse, gpu_mode);
@@ -2688,6 +2707,7 @@ int main(int argc, char** argv) {
   bool vnni = false;
   bool kv_half = false;
     bool kv_q8 = false;
+    bool kv_auto = false;
     for (int index = 3; index < argc; ++index) {
       if (std::strcmp(argv[index], "--vnni") == 0) {
         vnni = true;
@@ -2708,8 +2728,12 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(value, "f32") == 0) {
           kv_half = false;
           kv_q8 = false;
+        } else if (std::strcmp(value, "auto") == 0) {
+          kv_auto = true;
+          kv_half = false;
+          kv_q8 = false;
         } else {
-          std::fprintf(stderr, "bench continuous: --kv takes f32|f16|i8\n");
+          std::fprintf(stderr, "bench continuous: --kv takes f32|f16|i8|auto\n");
           return 2;
         }
         continue;
@@ -2733,6 +2757,10 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "bench continuous: --model is required\n");
       return 2;
     }
+    if (kv_auto) {
+      kv_half = tge::models::Qwen2::auto_kv_half(context);
+      kv_q8 = false;
+    }
     return command_continuous_bench(model_path, requests, tokens, threads,
                                     sequences, context, prompt_tokens, vnni,
                                     kv_half, kv_q8, prefill_threads);
@@ -2747,7 +2775,8 @@ int main(int argc, char** argv) {
     int pin_threads = 0;
     bool kv_half = false;
     bool kv_q8 = false;
-    for (int index = 3; index < argc; index += 2) {
+    bool kv_auto = false;
+    for (int index = 3; index + 1 < argc; index += 2) {
       const char* flag = argv[index];
       const char* value = index + 1 < argc ? argv[index + 1] : "";
       bool ok = true;
@@ -2764,6 +2793,10 @@ int main(int argc, char** argv) {
           kv_q8 = true;
           kv_half = false;
         } else if (std::strcmp(value, "f32") == 0) {
+          kv_half = false;
+          kv_q8 = false;
+        } else if (std::strcmp(value, "auto") == 0) {
+          kv_auto = true;
           kv_half = false;
           kv_q8 = false;
         } else {
@@ -2784,6 +2817,10 @@ int main(int argc, char** argv) {
     if (sessions < 1) {
       std::fprintf(stderr, "bench sessions: --sessions must be positive\n");
       return 2;
+    }
+    if (kv_auto) {
+      kv_half = tge::models::Qwen2::auto_kv_half(context);
+      kv_q8 = false;
     }
     return command_sessions_bench(model_path, sessions, tokens,
                                   threads_per_session, context,
