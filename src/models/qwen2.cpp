@@ -32,22 +32,29 @@ constexpr int kHardMaxContext = 32768;
 // the tail is left to the single-token path.
 constexpr int kPrefillChunk = 64;
 
-// Cross-sequence shared-prefix table. Up to four start-0 f32 prefills with
-// >=16 tokens populate slots (tokens plus per-layer K/V rows, up to the
+// Cross-sequence shared-prefix table. Up to four start-0 f32|f16 prefills
+// with >=16 tokens populate slots (tokens plus per-layer K/V rows, up to the
 // cap); later sequences with identical leading tokens memcpy the rows into
 // their own slots and skip recompute. Byte-identical by construction (same
-// tokens, same positions, resident rows recomputed nowhere). The verifier
-// path (all_logits) is excluded; other KV forms are excluded. Cleared on
-// every model load so different files with the same geometry can never
-// false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim). Replaces the former
-// first-prefix-wins single snapshot, which could never serve a second
-// distinct shared prefix in the same process.
+// tokens, same positions, resident rows recomputed nowhere; f16 traffic
+// converts losslessly on both sides). The verifier path (all_logits) and
+// i8 KV are excluded; entries are tier-tagged so f32 and f16 runs never
+// share bytes. Cleared on every model load so different files with the same
+// geometry can never false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim).
+// Replaces the former first-prefix-wins single snapshot, which could never
+// serve a second distinct shared prefix in the same process.
 struct MultiPrefix {
   std::vector<int> tokens;
   std::vector<float> k;
   std::vector<float> v;
   int layers = 0;
   int kv_dim = 0;
+  // KV tier tag: a snapshot populated from one tier must never serve
+  // another. f32 and f16 runs of the same prompt compute different K/V
+  // rows (the f16 store rounds), so cross-tier reuse would mix unpriced
+  // numerics. The table stores float either way (f16 traffic converts
+  // losslessly on both sides), and the tag keeps the tiers apart.
+  bool half = false;
   long last_use = 0;
   bool valid = false;
 };
@@ -104,6 +111,33 @@ inline void store_kv_q8(const float* k, const float* v, int kv_dim,
         k + block * 32, k_out + slot + block * 32);
     v_scales[scale_slot + block] = quantize_kv_block(
         v + block * 32, v_out + slot + block * 32);
+  }
+}
+
+/// Cross-tier K/V row transfer between the resident caches and the
+/// cross-sequence prefix table (which stores float). f16 traffic converts
+/// both ways with the same kernels as the store path; f16<->f32 is
+/// bit-exact for in-range f16 values, so the table path stays byte-identical
+/// by construction. Tier mixing is prevented by the entry tag, not here.
+inline void table_store_kv_row(float* table_dst, const float* f,
+                               const std::uint16_t* h, bool half, int kv_dim) {
+  if (half) {
+    for (int i = 0; i < kv_dim; ++i) {
+      table_dst[i] = cpu::half_to_float(h[i]);
+    }
+  } else {
+    std::memcpy(table_dst, f, sizeof(float) * static_cast<std::size_t>(kv_dim));
+  }
+}
+
+inline void table_load_kv_row(float* f, std::uint16_t* h, bool half,
+                              const float* table_src, int kv_dim) {
+  if (half) {
+    for (int i = 0; i < kv_dim; ++i) {
+      h[i] = cpu::float_to_half(table_src[i]);
+    }
+  } else {
+    std::memcpy(f, table_src, sizeof(float) * static_cast<std::size_t>(kv_dim));
   }
 }
 
@@ -621,6 +655,7 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
       g_mprefix_table[slot].v.clear();
       g_mprefix_table[slot].layers = 0;
       g_mprefix_table[slot].kv_dim = 0;
+      g_mprefix_table[slot].half = false;
       g_mprefix_table[slot].last_use = 0;
       g_mprefix_table[slot].valid = false;
     }
@@ -1655,9 +1690,10 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
   // as exact full prompts [0..P) for one sequence in a single batch call.
   // When such a prompt lands with P>=16 and the table holds no run >= 16
   // over it, snapshot the resident K/V rows so a later prefill_run of the
-  // same leading tokens HITs instead of recomputing. f32 only; memcpy-only,
-  // no arithmetic change. Batch capacity is 64 rows, so the scan is trivial.
-  if (!kv_half_ && !kv_q8_) {
+  // same leading tokens HITs instead of recomputing. f32|f16 (tier-tagged);
+  // memcpy-or-exact-cvt only, no arithmetic change. Batch capacity is 64
+  // rows, so the scan is trivial.
+  if (!kv_q8_) {
     int best_seq = -1;
     int best_len = 0;
     for (int row = 0; row < count; ++row) {
@@ -1709,12 +1745,12 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
       }
       if (full) {
         int best = 0;
-        for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
-          const MultiPrefix& entry = g_mprefix_table[slot];
-          if (!entry.valid || entry.layers != config_.block_count ||
-              entry.kv_dim != kv_dim) {
-            continue;
-          }
+      for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+        const MultiPrefix& entry = g_mprefix_table[slot];
+        if (!entry.valid || entry.layers != config_.block_count ||
+            entry.kv_dim != kv_dim || entry.half != kv_half_) {
+          continue;
+        }
           const int cached = static_cast<int>(entry.tokens.size());
           int run = 0;
           const int limit = cap < cached ? cap : cached;
@@ -1748,6 +1784,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
           entry.tokens = ordered;
           entry.layers = config_.block_count;
           entry.kv_dim = kv_dim;
+          entry.half = kv_half_;
           entry.k.assign(
               static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
           entry.v.assign(
@@ -1766,10 +1803,12 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
                        static_cast<std::size_t>(cap) +
                    static_cast<std::size_t>(pos)) *
                   static_cast<std::size_t>(kv_dim);
-              std::memcpy(entry.k.data() + dst, k_cache_.data() + src,
-                          sizeof(float) * static_cast<std::size_t>(kv_dim));
-              std::memcpy(entry.v.data() + dst, v_cache_.data() + src,
-                          sizeof(float) * static_cast<std::size_t>(kv_dim));
+              table_store_kv_row(entry.k.data() + dst,
+                                 k_cache_.data() + src,
+                                 k_cache_half_.data() + src, kv_half_, kv_dim);
+              table_store_kv_row(entry.v.data() + dst,
+                                 v_cache_.data() + src,
+                                 v_cache_half_.data() + src, kv_half_, kv_dim);
             }
           }
           entry.last_use = ++g_mprefix_tick;
@@ -1801,7 +1840,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
 }
 
 int Qwen2::shared_prefix_len(const int* tokens, int count) const {
-  if (kv_half_ || kv_q8_ || count <= 0) {
+  if (kv_q8_ || count <= 0) {
     return 0;
   }
   const int kv_dim = config_.kv_dim();
@@ -1809,7 +1848,7 @@ int Qwen2::shared_prefix_len(const int* tokens, int count) const {
   for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
     const MultiPrefix& entry = g_mprefix_table[slot];
     if (!entry.valid || entry.layers != config_.block_count ||
-        entry.kv_dim != kv_dim) {
+        entry.kv_dim != kv_dim || entry.half != kv_half_) {
       continue;
     }
     const int cached = static_cast<int>(entry.tokens.size());
@@ -1827,7 +1866,7 @@ int Qwen2::shared_prefix_len(const int* tokens, int count) const {
 
 bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
                                    int count) {
-  if (kv_half_ || kv_q8_ || count < 16 || sequence < 0 ||
+  if (kv_q8_ || count < 16 || sequence < 0 ||
       sequence >= sequence_count_) {
     return false;
   }
@@ -1837,7 +1876,7 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
   for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
     const MultiPrefix& entry = g_mprefix_table[slot];
     if (!entry.valid || entry.layers != config_.block_count ||
-        entry.kv_dim != kv_dim) {
+        entry.kv_dim != kv_dim || entry.half != kv_half_) {
       continue;
     }
     const int cached = static_cast<int>(entry.tokens.size());
@@ -1869,10 +1908,10 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
           (static_cast<std::size_t>(layer) * static_cast<std::size_t>(cached) +
            static_cast<std::size_t>(pos)) *
           static_cast<std::size_t>(kv_dim);
-      std::memcpy(k_cache_.data() + dst, entry.k.data() + src,
-                  sizeof(float) * static_cast<std::size_t>(kv_dim));
-      std::memcpy(v_cache_.data() + dst, entry.v.data() + src,
-                  sizeof(float) * static_cast<std::size_t>(kv_dim));
+      table_load_kv_row(k_cache_.data() + dst, k_cache_half_.data() + dst,
+                        kv_half_, entry.k.data() + src, kv_dim);
+      table_load_kv_row(v_cache_.data() + dst, v_cache_half_.data() + dst,
+                        kv_half_, entry.v.data() + src, kv_dim);
     }
   }
   std::fprintf(stderr, "[cow-mp] PRIME seq=%d C=%d slot=%d\n", sequence, count,
@@ -2037,12 +2076,12 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     }
   }
   // Cross-sequence shared-prefix hit: the table holds up to four start-0
-  // f32 prefixes; the longest leading-token run across valid same-geometry
-  // slots wins. Requires a common run of at least 16 tokens (one BlockTable
-  // block) and a longer prompt, so single-token overlaps never pay the
-  // memcmp setup.
+  // f32|f16 prefixes (tier-tagged; a snapshot never serves another tier);
+  // the longest leading-token run across valid same-geometry slots wins.
+  // Requires a common run of at least 16 tokens (one BlockTable block) and
+  // a longer prompt, so single-token overlaps never pay the memcmp setup.
   {
-    if (all_logits == nullptr && !kv_half_ && !kv_q8_ && start_position == 0 &&
+    if (all_logits == nullptr && !kv_q8_ && start_position == 0 &&
         sequence >= 0 && consumed == 0) {
       int best_slot = -1;
       int best_run = 0;
@@ -2050,7 +2089,7 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
       for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
         const MultiPrefix& entry = g_mprefix_table[slot];
         if (!entry.valid || entry.layers != config_.block_count ||
-            entry.kv_dim != kv_dim) {
+            entry.kv_dim != kv_dim || entry.half != kv_half_) {
           continue;
         }
         const int cached = static_cast<int>(entry.tokens.size());
@@ -2081,10 +2120,12 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                      static_cast<std::size_t>(best_cached) +
                  static_cast<std::size_t>(pos)) *
                 static_cast<std::size_t>(kv_dim);
-            std::memcpy(k_cache_.data() + dst, entry.k.data() + src,
-                        sizeof(float) * static_cast<std::size_t>(kv_dim));
-            std::memcpy(v_cache_.data() + dst, entry.v.data() + src,
-                        sizeof(float) * static_cast<std::size_t>(kv_dim));
+            table_load_kv_row(k_cache_.data() + dst,
+                              k_cache_half_.data() + dst, kv_half_,
+                              entry.k.data() + src, kv_dim);
+            table_load_kv_row(v_cache_.data() + dst,
+                              v_cache_half_.data() + dst, kv_half_,
+                              entry.v.data() + src, kv_dim);
           }
         }
         consumed = best_run;
@@ -2236,13 +2277,13 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
   // mirrors the HIT threshold so a 4-token story prompt can never poison a
   // slot for a later 120-token shared prefix.
   {
-    if (all_logits == nullptr && !kv_half_ && !kv_q8_ && start_position == 0 &&
+    if (all_logits == nullptr && !kv_q8_ && start_position == 0 &&
         sequence >= 0 && count >= 16) {
       int best = 0;
       for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
         const MultiPrefix& entry = g_mprefix_table[slot];
         if (!entry.valid || entry.layers != config_.block_count ||
-            entry.kv_dim != kv_dim) {
+            entry.kv_dim != kv_dim || entry.half != kv_half_) {
           continue;
         }
         const int cached = static_cast<int>(entry.tokens.size());
@@ -2279,6 +2320,7 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
         entry.tokens.assign(tokens, tokens + cap);
         entry.layers = config_.block_count;
         entry.kv_dim = kv_dim;
+        entry.half = kv_half_;
         entry.k.assign(
             static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
         entry.v.assign(
@@ -2297,10 +2339,10 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                      static_cast<std::size_t>(cap) +
                  static_cast<std::size_t>(pos)) *
                 static_cast<std::size_t>(kv_dim);
-            std::memcpy(entry.k.data() + dst, k_cache_.data() + src,
-                        sizeof(float) * static_cast<std::size_t>(kv_dim));
-            std::memcpy(entry.v.data() + dst, v_cache_.data() + src,
-                        sizeof(float) * static_cast<std::size_t>(kv_dim));
+            table_store_kv_row(entry.k.data() + dst, k_cache_.data() + src,
+                               k_cache_half_.data() + src, kv_half_, kv_dim);
+            table_store_kv_row(entry.v.data() + dst, v_cache_.data() + src,
+                               v_cache_half_.data() + src, kv_half_, kv_dim);
           }
         }
         entry.last_use = ++g_mprefix_tick;
