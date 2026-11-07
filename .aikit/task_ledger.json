@@ -1,63 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-KV-NOINIT",
+    "task_id": "TGE-IDEA-TOK-CACHE",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794060989.5380719,
+    "updated_at": 1794061786.3817165,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794060989.7406003
+    "completed_at": 1794061786.5237427
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] Phi config+load: epsilon key chain, rope-dim guard, YaRN flag, fused QKV/FFN row views",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793634062.7765398,
-      "timestamp_str": "2026-11-02 18:41:02",
-      "agent": "kilo:phi3",
-      "impact_assessment": {
-        "why": "Phi-3.5-mini is local but unloadable (missing attn_q.weight); fused tensors + attention-prefixed epsilon key + YaRN factors are each bounded and independently verifiable",
-        "benefits": "Phi loads with existing forward path unchanged; Qwen/Llama behavior bit-identical (split only when unfused names are absent)",
-        "risks": "contract: load-time tensor mapping only, forward untouched; dependency: none; concurrency: same parallel regions; state: none",
-        "mitigation": "Synthetic fused-file unit tests + real Phi load smoke; Qwen/Llama suite must pass unchanged; gate/up order and RoPE mode settled by parity in [2/4]"
-      },
-      "continued_from": "unidentified"
-    },
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] done: Phi loads - checklists: passed; fused QKV/FFN views + epsilon chain + rope guard + YaRN flag; 3 synthetic tests (epsilon, rope reject, fused load); real Phi file loads, generates 12 toks exit 0, decode ~6 t/s; 80/80 tests, 4/4 gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793634291.9138958,
-      "timestamp_str": "2026-11-02 18:44:51",
-      "agent": "kilo:phi3"
-    },
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[2/4] SPM tokenizer for mergeless llama-model vocabs: Viterbi over scores, dummy prefix, byte fallback",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793634719.170366,
-      "timestamp_str": "2026-11-02 18:51:59",
-      "agent": "kilo:phi3",
-      "impact_assessment": {
-        "why": "Phi GGUF is model=llama with no merges array; TGE only speaks BPE, so Hello world encodes as 11 byte ids vs reference 2",
-        "benefits": "Phi input fidelity becomes provable vs HF reference; Llama/Qwen untouched (SPM only when model==llama and merges absent)",
-        "risks": "contract: additive Tokenizer path + decode branch; dependency: none; concurrency: read-only after load; state: none",
-        "mitigation": "Synthetic hand-computed Viterbi unit tests first; corpus diff vs transformers reference; full suite must stay green"
-      }
-    },
     {
       "task_id": "TGE-PHI3",
       "phase": "in_progress",
@@ -274,6 +228,45 @@
       "status": "completed",
       "timestamp": 1794060989.740602,
       "timestamp_str": "2026-11-07 17:16:29",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-TOK-CACHE",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] Tokenizer sidecar plan: split parse/build, add keyed binary source cache, id parity + warm A/B, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794061387.8598895,
+      "timestamp_str": "2026-11-07 17:23:07",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "from_path reparses the GGUF metadata (tokens/merges/types/scores) on every text invocation; the parsed arrays are stable for a given model file and cost ~38 ms before the ~65 ms map build.",
+        "benefits": "Warm tokenizer construction should drop toward the map-build floor, cutting 30-40 ms of parse from each repeated CLI/API start with identical ids.",
+        "risks": "contract: cached arrays must be byte-equivalent to GGUF values; dependency: no new deps; concurrency: cache writes must be atomic enough to ignore partial files; state: temp-only cache keyed by model size+mtime.",
+        "mitigation": "Versioned magic/key, size caps, rebuild-on-any-error, id parity on fixtures and thinking set, full revert."
+      },
+      "plan_digest": "a9be15a0fb0c2fa7183c94475cec21b6a267da4e3ca04cd21c1548284440db5f"
+    },
+    {
+      "task_id": "TGE-IDEA-TOK-CACHE",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[4/4] Tokenizer source sidecar killed: quiet paired median 1.243x vs 1.25x bar, 145/145, ids identical; checklists: passed; report reports/idea-invented-tokenizer-source-cache-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794061786.3817165,
+      "timestamp_str": "2026-11-07 17:29:46",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-TOK-CACHE",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-TOK-CACHE' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794061786.5237443,
+      "timestamp_str": "2026-11-07 17:29:46",
       "agent": "opencode:idea-loop"
     }
   ]
