@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-I8-ATTN-8K",
+    "task_id": "TGE-IDEA-VNNI-ATTN-S1",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794078023.8582492,
+    "updated_at": 1794078375.04878,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794078024.3314476
+    "completed_at": 1794078375.7377083
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-EXP2",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] exp2 killed: rounds +7.3%, -9.2%, +9.2%, median 0.7% slower; fidelity f32 1.233e-11, ids identical; 145/145, 4/4; report reports/idea-invented-exp2-bitpath-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794072302.44668,
-      "timestamp_str": "2026-11-07 20:25:02",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-EXP2",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-EXP2' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794072302.599214,
-      "timestamp_str": "2026-11-07 20:25:02",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-DOWN",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Selective kq8d down scope: allow_kq8d flag, scope fidelity, 2048 decode, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794073243.519061,
-      "timestamp_str": "2026-11-07 20:40:43",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "The all-matvec kq8d decode kill was too broad; the down projection has the largest kernel win and may fit the VNNI-class KL budget alone.",
-        "benefits": "If it passes, a 10-36% opt-in f32 decode gain at VNNI-class fidelity.",
-        "risks": "contract: KL <=1.6e-3, top-1 ~97.6%, ids identical; dependency: existing kq8d row kernel; concurrency: decode pool; state: one matvec flag + scope.",
-        "mitigation": "Scope-by-scope fidelity, 399-position confirmation, 2x2048 A/B, thinking ids, full revert."
-      },
-      "plan_digest": "95c8b1fdfb33e3c46b3c9a2883e0297b0369baa706da55375ff1e078ff07c272"
-    },
     {
       "task_id": "TGE-IDEA-KQ8D-DOWN",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794078024.3314502,
       "timestamp_str": "2026-11-07 22:00:24",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S1",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] VNNI Q8 QK stage-1: query quantizer, dpbusd dot, 8192-key A/B + error, kill/proceed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794078374.12283,
+      "timestamp_str": "2026-11-07 22:06:14",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 24 met the 8k attention reopen (50%); build and price the VNNI QK dot before model wiring.",
+        "benefits": "A >=1.5x dot would make long-context VNNI worth wiring; otherwise close the direction.",
+        "risks": "contract: dot error vs float query; dependency: AVX-VNNI; concurrency: per-head query scratch; state: kernel + temp test.",
+        "mitigation": "8192-key best-of-3 A/B, error stats, full revert."
+      },
+      "plan_digest": "fa513456b6abb153007f3f66d62eeec63b48bed8a011cc2e81374d63c90d014a"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S1",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] VNNI QK stage-1 killed: 15.9 vs 18.8 ns/key = 1.19x <1.5x; 8k saving ~4.75% <5%; error 0.26% mean; 145/145, 4/4; report reports/idea-invented-vnni-attn-stage1-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794078375.04878,
+      "timestamp_str": "2026-11-07 22:06:15",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-S1",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-VNNI-ATTN-S1' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794078375.73771,
+      "timestamp_str": "2026-11-07 22:06:15",
       "agent": "opencode:idea-loop"
     }
   ]
