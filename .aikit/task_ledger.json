@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-SEQ-AUTO-LIVE",
+    "task_id": "TGE-IDEA-SEQ-AUTO-CPU",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794069943.3806777,
+    "updated_at": 1794070433.4823506,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794069943.5342486
+    "completed_at": 1794070436.0484896
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-NOINIT-COMBINED",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[4/4] Combined no-init kept: load 175.3->8.7 ms (20.1x), 8192 12.8 ms, f32/f16/i8 ids + fidelity identical, 145/145, 4/4; report reports/idea-invented-noinit-combined-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794063390.4405231,
-      "timestamp_str": "2026-11-07 17:56:30",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-NOINIT-COMBINED",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-NOINIT-COMBINED' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794063390.5849352,
-      "timestamp_str": "2026-11-07 17:56:30",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PAGED-KV-STAGE1",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Paged KV stage-1 probe: block-table/prefix-hash and fragmented read price, build/tests, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794063686.0187268,
-      "timestamp_str": "2026-11-07 18:01:26",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "IDEA-1517 is the remaining structural front; before wiring block storage, measure whether 16-token block fragmentation and indirection cost rule it out.",
-        "benefits": "A go/no-go number for paged KV; if viable, the next cycle wires storage with a known budget.",
-        "risks": "contract: block layout must equal contiguous K rows; dependency: existing BlockTable/kv_block_layout helpers; concurrency: single-threaded probe; state: test-only, no engine change.",
-        "mitigation": "Layout equality check, four independent timing runs, full revert."
-      },
-      "plan_digest": "8eb3219deb53b0ee5a49700db3afcbf26be6186d51825556ad9214536957e1dd"
-    },
     {
       "task_id": "TGE-IDEA-PAGED-KV-STAGE1",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794069943.53425,
       "timestamp_str": "2026-11-07 19:45:43",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CPU",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] CPU-load guard for sequences auto: GetSystemTimes cap at 4 over 70%, synthetic-load A/B, fidelity, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794070431.4990582,
+      "timestamp_str": "2026-11-07 19:53:51",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 13's live-memory auto still chose 8 under load and one pair lost; test whether CPU busy is a usable cap signal.",
+        "benefits": "If valid, avoids the 8-slot contention loss; if invalid, rules out CPU busy before a throughput calibration.",
+        "risks": "contract: identical transcripts; dependency: Windows GetSystemTimes; concurrency: sample before load; state: CLI-only opt-in.",
+        "mitigation": "Normal + 4-hog runs, guard vs no-guard vs fixed 4, fidelity tiers, full revert."
+      },
+      "plan_digest": "e74ab42e075369522386926c9637e06e2513f39f0ef2c163a3605265b8d3b03c"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CPU",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] CPU-load guard killed: under 4 hogs guard 4 slots 12.45 vs no-guard 8 slots 15.96; CPU busy not a slot signal; 145/145, 4/4; report reports/idea-invented-sequences-auto-cpu-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794070433.4823506,
+      "timestamp_str": "2026-11-07 19:53:53",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CPU",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-SEQ-AUTO-CPU' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794070436.0484917,
+      "timestamp_str": "2026-11-07 19:53:56",
       "agent": "opencode:idea-loop"
     }
   ]
