@@ -7,18 +7,18 @@
 
 ## 1. What was built (all reverted; recipe in §7)
 
-Q8P32Block (32 int8 + per-32 float scale + per-32 bsum), per-32 nearest-away quantizer (same mantissa trick as upstream), `dot_q4k_q8p32` (verbatim lane structure of dot_q4k_q8k with per-group float accumulation + per-group dmin bias), `gemv_dequant_kq8p32_row_avx2` row entry (Q4_K-only, falls back to the existing row kernel), temp matvec wiring behind `TGE_KQ8P32`, temp differential + capture + selftest drivers and a temp `--kernel kq8d` bench redirect (all reverted).
+Q8P32Block (32 int8 + per-32 float scale + per-32 bsum), per-32 nearest-away quantizer (same mantissa trick as upstream), `dot_q4k_q8p32` (verbatim lane structure of dot_q4k_q8k with per-group float accumulation + per-group dmin bias), `gemv_dequant_kq8p32_row_avx2` row entry (Q4_K-only, falls back to the existing row kernel), temp matvec wiring + capture + differential drivers (all reverted).
 
 ## 2. Gate results
 
-- Gate 1 (unit differential vs float on synthetic uniform/spike/broadtail/constant): new matches or beats old everywhere (spike 2x better: 0.005 vs 0.013). PASS.
+- Gate 1 (unit differential vs float on synthetic uniform/spike/broadtail/constant): new matches or beats old everywhere (spike 2x better: 0.005 vs 0.013). PASS. Also verified: bit-exact horizontal sum vs scalar, maxdiff 6e-6 on deterministic input.
 - Gate 2 (live-data capture vs float, 0.5B-Q4_K_M decode): new rel p99 1.53%, max 1.62% (old: p99 10%, max 28.6%). PASS (bar was <2%).
 - Gate 3 (fidelity, 0.5B-Q4_K_M, arch corpus, 1023 pos): KL 3.864e-05 (bar ≤1.6e-3: PASS by 40x), worst 1.4e-3, max|diff| 0.17, **top-1 1019/1023 (bar: held — FAIL, deterministic across runs)**.
-- Gate 4 (bench): kq8d-bench-redirect end-to-end decode +3.9% on 0.5B short (needs re-measurement on 3B before any future keep claim).
+- Gate 4 (bench pulse + decode A/B): kq8d-bench-redirect end-to-end decode +3.9% on 0.5B short (needs re-measurement on 3B before any future keep claim).
 
 ## 3. Debugging log (so nobody repeats it)
 
-Three independent implementation bugs were found and fixed in-cycle; the final build is verified correct (gates 1–2): (a) unpacked-scale uaux writeback dropped (`utmp[2] = uaux` missing — caught by review, would have scrambled half the scales); (b) minmax read at offset +8 instead of +0 (out-of-bounds read of uninitialized stack — caught by inspection after the differential stayed red); (c) a quantizer double-advance (`x[g*32+i]` plus `x += 32` — caught by code read). Lesson restated: verify each AVX2 transplant against the original with a bit-exact differential BEFORE wiring it into any model path.
+Three independent implementation bugs were found and fixed in-cycle; the final build is verified correct (gates 1–2 pass). (a) unpacked-scale uaux writeback dropped (`utmp[2] = uaux` missing — caught by review, would have scrambled half the scales); (b) minmax read at offset +8 instead of +0 (out-of-bounds read of uninitialized stack — caught by inspection after the differential stayed red); (c) a quantizer double-advance (`x[g*32+i]` plus `x += 32` — caught by code read). Lesson restated: verify each AVX2 transplant against the original with a bit-exact differential BEFORE wiring it into any model path.
 
 ## 4. What remains (not attempted; would need its own falsifier)
 
