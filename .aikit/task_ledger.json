@@ -1,64 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IMPL-11",
-    "last_phase": "phase 4",
-    "active_phase": 4,
-    "status": "in_progress",
-    "updated_at": 1793814274.1219254,
-    "owner": "kilo:impl",
-    "started_by": "kilo:impl",
-    "continuations": []
+    "task_id": "TGE-IDEA-BPE-HEAP",
+    "last_phase": "in_progress",
+    "active_phase": 5,
+    "status": "completed",
+    "updated_at": 1794060418.7984617,
+    "owner": "opencode:idea-loop",
+    "started_by": "opencode:idea-loop",
+    "continuations": [],
+    "completed_at": 1794060418.9462368
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-ARCH",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[3/3]+log 3B head-to-head: decode same band, prefill trails (caveats noted); tokenizer parity proven; no regressions",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793633087.4072976,
-      "timestamp_str": "2026-11-02 18:24:47",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-LLAMA-BENCH",
-      "phase": "superseded",
-      "phase_num": 2,
-      "description": "Superseded by 'TGE-LLAMA-ARCH' without --complete or --reset",
-      "status": "superseded",
-      "timestamp": 1793633087.4072976,
-      "timestamp_str": "2026-11-02 18:24:47",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-LLAMA-ARCH",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-LLAMA-ARCH' completed successfully.",
-      "status": "completed",
-      "timestamp": 1793633100.9418607,
-      "timestamp_str": "2026-11-02 18:25:00",
-      "agent": "unidentified"
-    },
-    {
-      "task_id": "TGE-MORE-MODELS",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Probe SmolLM2-135M (llama arch) and Phi-3.5-mini (phi3/NEOX)",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793633208.1902673,
-      "timestamp_str": "2026-11-02 18:26:48",
-      "agent": "unidentified",
-      "impact_assessment": {
-        "why": "SmolLM2 declares llama arch (interleaved path already built) and Phi-3.5 maps to NEOX per ggml; both may run unmodified, extending validated coverage cheaply",
-        "benefits": "Two more working architectures, or precisely-scoped gaps like the Llama ones",
-        "risks": "contract: read-only probes first, then minimal arch-gated fixes only; dependency: none; concurrency: none; state: none",
-        "mitigation": "Generate + fluency check per model; Qwen/Llama regression via existing suite; log per outcome (works or gap analysis)"
-      }
-    },
     {
       "task_id": "TGE-PHI3",
       "phase": "phase 2",
@@ -271,6 +224,56 @@
       "timestamp": 1793814274.1219254,
       "timestamp_str": "2026-11-04 20:44:34",
       "agent": "kilo:impl"
+    },
+    {
+      "task_id": "TGE-IMPL-11",
+      "phase": "abandoned",
+      "phase_num": 4,
+      "description": "Task 'TGE-IMPL-11' abandoned: stale TGE-IMPL-11 plan from 2026-11-04; repo advanced through 11-05/11-06 sessions with tree green; superseded by new idea cycle",
+      "status": "abandoned",
+      "timestamp": 1794059879.212361,
+      "timestamp_str": "2026-11-07 16:57:59",
+      "agent": "opencode:idea-loop",
+      "continued_from": "kilo:impl"
+    },
+    {
+      "task_id": "TGE-IDEA-BPE-HEAP",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] BPE heap plan: baseline encode timing, heap encoder, differential + A/B, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794059879.355517,
+      "timestamp_str": "2026-11-07 16:57:59",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Tokenizer BPE encode rescans every adjacent pair per merge, O(n^2) with a fresh string per test; long prompts pay it before prefill.",
+        "benefits": "Expected >=2x encode on long prompts plus identical ids; prompt latency only, no numerics.",
+        "risks": "contract: ids byte-identical including leftmost tie order; dependency: none; concurrency: tokenizer encode is const, no shared mutation; state: tokenizer-only temporary spike, fully reverted.",
+        "mitigation": "Differential ids on synthetic fixtures and real prompts, build+tests each change, best-of-3 A/B, full revert."
+      },
+      "plan_digest": "61dfd30e50e46c2803f221f805978e508b00a98f1fac69c09acf05c9ffe71495"
+    },
+    {
+      "task_id": "TGE-IDEA-BPE-HEAP",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[4/4] BPE heap kept-grade: spike 146/146, reverted 145/145, 202x/381x encode, ids identical; checklists: passed; report reports/idea-invented-bpe-heap-encode-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794060418.7984617,
+      "timestamp_str": "2026-11-07 17:06:58",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-BPE-HEAP",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-BPE-HEAP' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794060418.9462388,
+      "timestamp_str": "2026-11-07 17:06:58",
+      "agent": "opencode:idea-loop"
     }
   ]
 }
