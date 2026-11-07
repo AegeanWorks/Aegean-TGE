@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-VNNI-ATTN-S1",
+    "task_id": "TGE-IDEA-VNNI-ATTN-KSUM",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794078375.04878,
+    "updated_at": 1794078760.76562,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794078375.7377083
+    "completed_at": 1794078761.4383857
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-DOWN",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] kq8d down kept opt-in: 399-pos KL 7.954e-4, top-1 390/399 (97.74%); 2048 decode +9.6%/+35.6%, ids identical; 145/145, 4/4; report reports/idea-invented-kq8d-down-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794073243.7378347,
-      "timestamp_str": "2026-11-07 20:40:43",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-DOWN",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-DOWN' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794073243.905946,
-      "timestamp_str": "2026-11-07 20:40:43",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-FRONTIER",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] kq8d scope frontier: gate/up/combos/f16+down at 399 positions, ids, speed ordering, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794074448.5022495,
-      "timestamp_str": "2026-11-07 21:00:48",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 19 kept down-only; gate/up and safe f16 combos are the remaining kq8d scope questions.",
-        "benefits": "Map which scopes pass the VNNI-class fidelity bar before spending A/B time.",
-        "risks": "contract: KL <=1.6e-3, top-1 ~97.6%, ids; dependency: kq8d row kernel; concurrency: decode pool; state: scope parser + matvec flag.",
-        "mitigation": "399-position fidelity per scope, thinking ids, interleaved speed only for promotion, full revert."
-      },
-      "plan_digest": "a300b4f79f518dac8e00711809257cfbcdf9a40c0ca045b6273216fe5320b813"
-    },
     {
       "task_id": "TGE-IDEA-KQ8D-FRONTIER",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794078375.73771,
       "timestamp_str": "2026-11-07 22:06:15",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-KSUM",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] VNNI key-bsum layout: precomputed sums, unsigned query, folded scales, 8192-key A/B, error, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794078760.1823995,
+      "timestamp_str": "2026-11-07 22:12:40",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 25's VNNI dot was 1.19x; the per-block hsum/XOR overhead can be removed with key bsums and one folded accumulator.",
+        "benefits": "A >=1.5x dot plus 8k 50% attention makes model wiring worthwhile.",
+        "risks": "contract: dot error vs float query; dependency: AVX-VNNI + key sums at store; concurrency: per-head query scratch; state: kernel + temp test.",
+        "mitigation": "Three 8192-key runs, error stats, model fidelity/ids deferred to stage 2, full revert."
+      },
+      "plan_digest": "4f5d4459aed23eba7c607d0dd9067a0828a1233cda75ec13d133fd21c5b40032"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-KSUM",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] VNNI key-bsum marginal proceed: 1.61x median (1.24/1.61/2.30), error 0.28% RMS; 8k saving 7.5-15%; 145/145, 4/4; report reports/idea-invented-vnni-attn-keysums-proceed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794078760.76562,
+      "timestamp_str": "2026-11-07 22:12:40",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-VNNI-ATTN-KSUM",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-VNNI-ATTN-KSUM' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794078761.4383876,
+      "timestamp_str": "2026-11-07 22:12:41",
       "agent": "opencode:idea-loop"
     }
   ]
