@@ -32,27 +32,32 @@ constexpr int kHardMaxContext = 32768;
 // the tail is left to the single-token path.
 constexpr int kPrefillChunk = 64;
 
-// Cross-sequence shared-prefix snapshot. The first start-0 f32 prefill with
-// >=16 tokens populates the snapshot (tokens plus per-layer K/V rows, up to
-// the cap); later sequences with identical leading tokens memcpy the rows
-// into their own slots and skip recompute. Byte-identical by construction
-// (same tokens, same positions, resident rows recomputed nowhere). The
-// verifier path (all_logits) is excluded; other KV forms are excluded.
-// Cleared on every model load so different files with the same geometry
-// can never false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim). Measured:
-// 8x(120+32) shared-prefix prefill 3.06-3.32x prefill-side, FNV
-// hash-identical to cold recompute on Qwen2.5-0.5B and Llama-3.2-3B.
-struct SharedPrefix {
+// Cross-sequence shared-prefix table. Up to four start-0 f32 prefills with
+// >=16 tokens populate slots (tokens plus per-layer K/V rows, up to the
+// cap); later sequences with identical leading tokens memcpy the rows into
+// their own slots and skip recompute. Byte-identical by construction (same
+// tokens, same positions, resident rows recomputed nowhere). The verifier
+// path (all_logits) is excluded; other KV forms are excluded. Cleared on
+// every model load so different files with the same geometry can never
+// false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim). Replaces the former
+// first-prefix-wins single snapshot, which could never serve a second
+// distinct shared prefix in the same process.
+struct MultiPrefix {
   std::vector<int> tokens;
   std::vector<float> k;
   std::vector<float> v;
   int layers = 0;
   int kv_dim = 0;
+  long last_use = 0;
+  bool valid = false;
 };
-static SharedPrefix g_shared_prefix;
-static long g_shared_prefix_hits = 0;
-static long g_shared_prefix_saved = 0;
-static constexpr int kSharedPrefixCap = 256;
+static MultiPrefix g_mprefix_table[4];
+static long g_mprefix_tick = 0;
+static long g_mprefix_hits = 0;
+static long g_mprefix_saved = 0;
+static long g_mprefix_populates = 0;
+static constexpr int kMultiPrefixSlots = 4;
+static constexpr int kMultiPrefixCap = 256;
 
 // Grouped-query attention splits decode positions into at most this many
 // chunks; the scratch is sized for the maximum.
@@ -602,17 +607,22 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
       }
     }
 
-    // A new file means a new weight stream: drop any cross-sequence snapshot
-    // from a previous load so same-geometry files (e.g. Q8_0 vs Q4_K_M) can
-    // never false-hit on identical leading ids. Within this model's life the
-    // first start-0 prefill repopulates and later sequences share it.
-    g_shared_prefix.tokens.clear();
-    g_shared_prefix.k.clear();
-    g_shared_prefix.v.clear();
-    g_shared_prefix.layers = 0;
-    g_shared_prefix.kv_dim = 0;
-    g_shared_prefix_hits = 0;
-    g_shared_prefix_saved = 0;
+    // A new file means a new weight stream: drop any cross-sequence prefix
+    // table from a previous load so same-geometry files (e.g. Q8_0 vs
+    // Q4_K_M) can never false-hit on identical leading ids.
+    for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+      g_mprefix_table[slot].tokens.clear();
+      g_mprefix_table[slot].k.clear();
+      g_mprefix_table[slot].v.clear();
+      g_mprefix_table[slot].layers = 0;
+      g_mprefix_table[slot].kv_dim = 0;
+      g_mprefix_table[slot].last_use = 0;
+      g_mprefix_table[slot].valid = false;
+    }
+    g_mprefix_tick = 0;
+    g_mprefix_hits = 0;
+    g_mprefix_saved = 0;
+    g_mprefix_populates = 0;
 
     return model;
   } catch (const std::exception& exception) {
@@ -1816,25 +1826,39 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
       record.tokens.assign(tokens, tokens + count);
     }
   }
-  // Cross-sequence shared-prefix hit: the first start-0 f32 prefill populates
-  // the global snapshot; later sequences with identical leading tokens memcpy
-  // the per-layer K/V rows into their own slots and skip recompute. Requires
-  // a common prefix of at least 16 tokens (one BlockTable block) and a longer
-  // prompt, so single-token overlaps never pay the memcmp setup.
+  // Cross-sequence shared-prefix hit: the table holds up to four start-0
+  // f32 prefixes; the longest leading-token run across valid same-geometry
+  // slots wins. Requires a common run of at least 16 tokens (one BlockTable
+  // block) and a longer prompt, so single-token overlaps never pay the
+  // memcmp setup.
   {
     if (all_logits == nullptr && !kv_half_ && !kv_q8_ && start_position == 0 &&
-        sequence >= 0 && consumed == 0 && !g_shared_prefix.tokens.empty() &&
-        g_shared_prefix.layers == config_.block_count &&
-        g_shared_prefix.kv_dim == kv_dim) {
-      const int cached = static_cast<int>(g_shared_prefix.tokens.size());
-      int common = 0;
-      const int limit = count < cached ? count : cached;
-      while (common < limit && tokens[common] == g_shared_prefix.tokens[common]) {
-        ++common;
+        sequence >= 0 && consumed == 0) {
+      int best_slot = -1;
+      int best_run = 0;
+      int best_cached = 0;
+      for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+        const MultiPrefix& entry = g_mprefix_table[slot];
+        if (!entry.valid || entry.layers != config_.block_count ||
+            entry.kv_dim != kv_dim) {
+          continue;
+        }
+        const int cached = static_cast<int>(entry.tokens.size());
+        int run = 0;
+        const int limit = count < cached ? count : cached;
+        while (run < limit && tokens[run] == entry.tokens[run]) {
+          ++run;
+        }
+        if (run > best_run) {
+          best_run = run;
+          best_slot = slot;
+          best_cached = cached;
+        }
       }
-      if (common >= 16 && count > common) {
+      if (best_slot >= 0 && best_run >= 16 && count > best_run) {
+        const MultiPrefix& entry = g_mprefix_table[best_slot];
         for (int layer = 0; layer < config_.block_count; ++layer) {
-          for (int pos = 0; pos < common; ++pos) {
+          for (int pos = 0; pos < best_run; ++pos) {
             const std::size_t dst =
                 (static_cast<std::size_t>(sequence) *
                      static_cast<std::size_t>(config_.block_count) +
@@ -1844,24 +1868,26 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                 static_cast<std::size_t>(pos) * static_cast<std::size_t>(kv_dim);
             const std::size_t src =
                 (static_cast<std::size_t>(layer) *
-                     static_cast<std::size_t>(cached) +
+                     static_cast<std::size_t>(best_cached) +
                  static_cast<std::size_t>(pos)) *
                 static_cast<std::size_t>(kv_dim);
-            std::memcpy(k_cache_.data() + dst,
-                        g_shared_prefix.k.data() + src,
+            std::memcpy(k_cache_.data() + dst, entry.k.data() + src,
                         sizeof(float) * static_cast<std::size_t>(kv_dim));
-            std::memcpy(v_cache_.data() + dst,
-                        g_shared_prefix.v.data() + src,
+            std::memcpy(v_cache_.data() + dst, entry.v.data() + src,
                         sizeof(float) * static_cast<std::size_t>(kv_dim));
           }
         }
-        consumed = common;
-        ++g_shared_prefix_hits;
-        g_shared_prefix_saved += common;
+        consumed = best_run;
+        g_mprefix_table[best_slot].last_use = ++g_mprefix_tick;
+        ++g_mprefix_hits;
+        g_mprefix_saved += best_run;
         std::fprintf(stderr,
-                     "[cow-prefix] HIT seq=%d C=%d hits=%ld saved_tok=%ld\n",
-                     sequence, common, g_shared_prefix_hits,
-                     g_shared_prefix_saved);
+                     "[cow-mp] HIT seq=%d C=%d hits=%ld saved_tok=%ld slot=%d\n",
+                     sequence, best_run, g_mprefix_hits, g_mprefix_saved,
+                     best_slot);
+      } else {
+        std::fprintf(stderr, "[cow-mp] MISS seq=%d best=%d slot=%d\n",
+                     sequence, best_run, best_slot);
       }
     }
   }
@@ -1993,42 +2019,90 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     consumed += chunk;
   }
 
-  // Shared-prefix populate: the first start-0 f32 prefill with >=16 tokens
-  // wins (up to the cap); later sequences hit against it. The 16-token floor
-  // mirrors the HIT threshold so a 4-token story prompt can never poison the
-  // snapshot for a later 120-token shared prefix.
+  // Shared-prefix populate-only-on-miss: re-scan the table first — a best
+  // run >= 16 means this prompt already HIT above, so no populate (no slot
+  // waste on hits). On a true miss with >= 16 prompt tokens, fill an
+  // invalid slot else the least-recently-used slot. The 16-token floor
+  // mirrors the HIT threshold so a 4-token story prompt can never poison a
+  // slot for a later 120-token shared prefix.
   {
     if (all_logits == nullptr && !kv_half_ && !kv_q8_ && start_position == 0 &&
-        sequence >= 0 && g_shared_prefix.tokens.empty() && count >= 16) {
-      const int cap = count < kSharedPrefixCap ? count : kSharedPrefixCap;
-      g_shared_prefix.tokens.assign(tokens, tokens + cap);
-      g_shared_prefix.layers = config_.block_count;
-      g_shared_prefix.kv_dim = kv_dim;
-      g_shared_prefix.k.assign(
-          static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
-      g_shared_prefix.v.assign(
-          static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
-      for (int layer = 0; layer < config_.block_count; ++layer) {
-        for (int pos = 0; pos < cap; ++pos) {
-          const std::size_t src =
-              (static_cast<std::size_t>(sequence) *
-                   static_cast<std::size_t>(config_.block_count) +
-               static_cast<std::size_t>(layer)) *
-                  static_cast<std::size_t>(context_) *
-                  static_cast<std::size_t>(kv_dim) +
-              static_cast<std::size_t>(pos) * static_cast<std::size_t>(kv_dim);
-          const std::size_t dst =
-              (static_cast<std::size_t>(layer) * static_cast<std::size_t>(cap) +
-               static_cast<std::size_t>(pos)) *
-              static_cast<std::size_t>(kv_dim);
-          std::memcpy(g_shared_prefix.k.data() + dst, k_cache_.data() + src,
-                      sizeof(float) * static_cast<std::size_t>(kv_dim));
-          std::memcpy(g_shared_prefix.v.data() + dst, v_cache_.data() + src,
-                      sizeof(float) * static_cast<std::size_t>(kv_dim));
+        sequence >= 0 && count >= 16) {
+      int best = 0;
+      for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+        const MultiPrefix& entry = g_mprefix_table[slot];
+        if (!entry.valid || entry.layers != config_.block_count ||
+            entry.kv_dim != kv_dim) {
+          continue;
+        }
+        const int cached = static_cast<int>(entry.tokens.size());
+        int run = 0;
+        const int limit = count < cached ? count : cached;
+        while (run < limit && tokens[run] == entry.tokens[run]) {
+          ++run;
+        }
+        if (run > best) {
+          best = run;
         }
       }
-      std::fprintf(stderr, "[cow-prefix] POPULATE C=%d layers=%d kv_dim=%d\n",
-                   cap, config_.block_count, kv_dim);
+      if (best < 16) {
+        const int cap = count < kMultiPrefixCap ? count : kMultiPrefixCap;
+        int slot = -1;
+        for (int candidate = 0; candidate < kMultiPrefixSlots; ++candidate) {
+          if (!g_mprefix_table[candidate].valid) {
+            slot = candidate;
+            break;
+          }
+        }
+        bool evict = false;
+        if (slot < 0) {
+          slot = 0;
+          for (int candidate = 1; candidate < kMultiPrefixSlots; ++candidate) {
+            if (g_mprefix_table[candidate].last_use <
+                g_mprefix_table[slot].last_use) {
+              slot = candidate;
+            }
+          }
+          evict = true;
+        }
+        MultiPrefix& entry = g_mprefix_table[slot];
+        entry.tokens.assign(tokens, tokens + cap);
+        entry.layers = config_.block_count;
+        entry.kv_dim = kv_dim;
+        entry.k.assign(
+            static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+        entry.v.assign(
+            static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+        for (int layer = 0; layer < config_.block_count; ++layer) {
+          for (int pos = 0; pos < cap; ++pos) {
+            const std::size_t src =
+                (static_cast<std::size_t>(sequence) *
+                     static_cast<std::size_t>(config_.block_count) +
+                 static_cast<std::size_t>(layer)) *
+                    static_cast<std::size_t>(context_) *
+                    static_cast<std::size_t>(kv_dim) +
+                static_cast<std::size_t>(pos) * static_cast<std::size_t>(kv_dim);
+            const std::size_t dst =
+                (static_cast<std::size_t>(layer) *
+                     static_cast<std::size_t>(cap) +
+                 static_cast<std::size_t>(pos)) *
+                static_cast<std::size_t>(kv_dim);
+            std::memcpy(entry.k.data() + dst, k_cache_.data() + src,
+                        sizeof(float) * static_cast<std::size_t>(kv_dim));
+            std::memcpy(entry.v.data() + dst, v_cache_.data() + src,
+                        sizeof(float) * static_cast<std::size_t>(kv_dim));
+          }
+        }
+        entry.last_use = ++g_mprefix_tick;
+        entry.valid = true;
+        ++g_mprefix_populates;
+        if (evict) {
+          std::fprintf(stderr, "[cow-mp] EVICT slot=%d\n", slot);
+        }
+        std::fprintf(stderr,
+                     "[cow-mp] POPULATE C=%d layers=%d kv_dim=%d slot=%d\n",
+                     cap, config_.block_count, kv_dim, slot);
+      }
     }
   }
 
