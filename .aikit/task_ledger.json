@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-SEQ-AUTO-CPU",
+    "task_id": "TGE-IDEA-SEQ-AUTO-CAL",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794070433.4823506,
+    "updated_at": 1794071033.9860992,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794070436.0484896
+    "completed_at": 1794071034.172977
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-PAGED-KV-STAGE1",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Paged KV stage-1 proceed: paged/contiguous 1.00-1.12x, translate 0.1-0.2 ns, hash2k 8 us, layout exact; 146/146 spike, 145/145 reverted, 4/4; report reports/idea-1517-paged-kv-stage1-proceed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794063686.2842417,
-      "timestamp_str": "2026-11-07 18:01:26",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PAGED-KV-STAGE1",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-PAGED-KV-STAGE1' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794063686.479381,
-      "timestamp_str": "2026-11-07 18:01:26",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Paged KV stage-2 storage wiring: 16-token blocks, per-sequence tables, direct row addressing, f32-only",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794064967.2534251,
-      "timestamp_str": "2026-11-07 18:22:47",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Stage 1 priced fragmentation and translation but not the per-row lookup inside the real attention kernels; stage 2 wires storage to measure the true cost.",
-        "benefits": "Correct paged storage and a go/no-go for IDEA-1517 before more prefix/chunked-prefill work.",
-        "risks": "contract: exact ids/fidelity across f32 paged and f16/i8 contiguous; dependency: block tables + kernel args; concurrency: per-sequence tables; state: large f32-only refactor.",
-        "mitigation": "Full suite, 5/401/2048 id parity, fidelity tiers, interleaved A/B, full revert."
-      },
-      "plan_digest": "c1db4c007c72b9ec1b901190cf1972dbc2f8ef4857724b1fb859c45239972cae"
-    },
     {
       "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794070436.0484917,
       "timestamp_str": "2026-11-07 19:53:56",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CAL",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Short 4-vs-8 auto calibration: warmup, token-rate arms, choose winner, repeatability A/B, fidelity, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794071033.784079,
+      "timestamp_str": "2026-11-07 20:03:53",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "CPU busy failed as a slot signal; a direct throughput calibration is the remaining way to choose 4 vs 8 without hardcoding.",
+        "benefits": "If repeatable, auto picks the faster count on the current box; if not, rules out short calibration.",
+        "risks": "contract: identical transcripts; dependency: forward_batch; concurrency: calibration before timed run; state: CLI-only opt-in.",
+        "mitigation": "Two calibration lengths, warmup, token-rate metric, fidelity tiers, full revert."
+      },
+      "plan_digest": "9c27065905b1b194437f528f298159a756ae4a68279311e3299e426a57ca6b71"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CAL",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Short calibration killed: 8-step chose 8 (18.1 vs 22.7), 6-step chose 4 (16.1 vs 9.7) minutes later; variance > signal, cost 13-18 s; 145/145, 4/4; report reports/idea-invented-sequences-auto-calibration-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794071033.9860992,
+      "timestamp_str": "2026-11-07 20:03:53",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-SEQ-AUTO-CAL",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-SEQ-AUTO-CAL' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794071034.1729784,
+      "timestamp_str": "2026-11-07 20:03:54",
       "agent": "opencode:idea-loop"
     }
   ]
