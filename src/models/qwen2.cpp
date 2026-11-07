@@ -1657,6 +1657,142 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
     }
   }
 
+  // Populate-from-batch (1517-S1 port): continuous-bench admissions arrive
+  // as exact full prompts [0..P) for one sequence in a single batch call.
+  // When such a prompt lands with P>=16 and the table holds no run >= 16
+  // over it, snapshot the resident K/V rows so a later prefill_run of the
+  // same leading tokens HITs instead of recomputing. f32 only; memcpy-only,
+  // no arithmetic change. Batch capacity is 64 rows, so the scan is trivial.
+  if (!kv_half_ && !kv_q8_) {
+    int best_seq = -1;
+    int best_len = 0;
+    for (int row = 0; row < count; ++row) {
+      const int seq = sequences[row];
+      int run = 0;
+      bool contiguous = true;
+      for (int other = 0; other < count; ++other) {
+        if (sequences[other] != seq) {
+          continue;
+        }
+        if (positions[other] != run) {
+          contiguous = false;
+          break;
+        }
+        ++run;
+      }
+      // `run` is P iff positions are exactly 0..P-1 (run starts at 0).
+      if (contiguous && run > best_len) {
+        bool has_zero = false;
+        for (int other = 0; other < count; ++other) {
+          if (sequences[other] == seq && positions[other] == 0) {
+            has_zero = true;
+            break;
+          }
+        }
+        if (has_zero) {
+          best_seq = seq;
+          best_len = run;
+        }
+      }
+    }
+    if (best_seq >= 0 && best_len >= 16) {
+      const int cap = best_len < kMultiPrefixCap ? best_len : kMultiPrefixCap;
+      std::vector<int> ordered(static_cast<std::size_t>(cap), -1);
+      for (int row = 0; row < count; ++row) {
+        if (sequences[row] != best_seq) {
+          continue;
+        }
+        if (positions[row] >= 0 && positions[row] < cap) {
+          ordered[static_cast<std::size_t>(positions[row])] = tokens[row];
+        }
+      }
+      bool full = true;
+      for (int value : ordered) {
+        if (value < 0) {
+          full = false;
+          break;
+        }
+      }
+      if (full) {
+        int best = 0;
+        for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+          const MultiPrefix& entry = g_mprefix_table[slot];
+          if (!entry.valid || entry.layers != config_.block_count ||
+              entry.kv_dim != kv_dim) {
+            continue;
+          }
+          const int cached = static_cast<int>(entry.tokens.size());
+          int run = 0;
+          const int limit = cap < cached ? cap : cached;
+          while (run < limit && ordered[run] == entry.tokens[run]) {
+            ++run;
+          }
+          if (run > best) {
+            best = run;
+          }
+        }
+        if (best < 16) {
+          int slot = -1;
+          for (int candidate = 0; candidate < kMultiPrefixSlots; ++candidate) {
+            if (!g_mprefix_table[candidate].valid) {
+              slot = candidate;
+              break;
+            }
+          }
+          bool evict = false;
+          if (slot < 0) {
+            slot = 0;
+            for (int candidate = 1; candidate < kMultiPrefixSlots; ++candidate) {
+              if (g_mprefix_table[candidate].last_use <
+                  g_mprefix_table[slot].last_use) {
+                slot = candidate;
+              }
+            }
+            evict = true;
+          }
+          MultiPrefix& entry = g_mprefix_table[slot];
+          entry.tokens = ordered;
+          entry.layers = config_.block_count;
+          entry.kv_dim = kv_dim;
+          entry.k.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+          entry.v.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+          for (int layer = 0; layer < config_.block_count; ++layer) {
+            for (int pos = 0; pos < cap; ++pos) {
+              const std::size_t src =
+                  (static_cast<std::size_t>(best_seq) *
+                       static_cast<std::size_t>(config_.block_count) +
+                   static_cast<std::size_t>(layer)) *
+                      static_cast<std::size_t>(context_) *
+                      static_cast<std::size_t>(kv_dim) +
+                  static_cast<std::size_t>(pos) * static_cast<std::size_t>(kv_dim);
+              const std::size_t dst =
+                  (static_cast<std::size_t>(layer) *
+                       static_cast<std::size_t>(cap) +
+                   static_cast<std::size_t>(pos)) *
+                  static_cast<std::size_t>(kv_dim);
+              std::memcpy(entry.k.data() + dst, k_cache_.data() + src,
+                          sizeof(float) * static_cast<std::size_t>(kv_dim));
+              std::memcpy(entry.v.data() + dst, v_cache_.data() + src,
+                          sizeof(float) * static_cast<std::size_t>(kv_dim));
+            }
+          }
+          entry.last_use = ++g_mprefix_tick;
+          entry.valid = true;
+          ++g_mprefix_populates;
+          if (evict) {
+            std::fprintf(stderr, "[cow-mp] EVICT slot=%d\n", slot);
+          }
+          std::fprintf(stderr,
+                       "[cow-mp] POPULATE C=%d layers=%d kv_dim=%d slot=%d "
+                       "(batch)\n",
+                       cap, config_.block_count, kv_dim, slot);
+        }
+      }
+    }
+  }
+
   for (int token = 0; token < count; ++token) {
     rms_norm(batch_h_.data() + static_cast<std::size_t>(token) * dim,
              batch_x_.data() + static_cast<std::size_t>(token) * dim,
