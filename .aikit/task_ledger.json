@@ -1,63 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-TOK-CACHE",
+    "task_id": "TGE-IDEA-FLAT-INDEX",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794061786.3817165,
+    "updated_at": 1794062197.728654,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794061786.5237427
+    "completed_at": 1794062197.8692951
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[2/4] done: checklists: passed; SPM merge tokenizer 28/28 vs llama-tokenize (26/28 also HF), CJK argv fix, Phi speaks ('The sum of 2+2 is 4'); 6 synthetic tests; 83/83 suite, 4/4 gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793636587.1262894,
-      "timestamp_str": "2026-11-02 19:23:07",
-      "agent": "kilo:phi3"
-    },
-    {
-      "task_id": "TGE-PHI3",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[3/4] YaRN-aware rope: attn_factor mscale from rope.scaling.attn_factor (Phi 1.19024); per-block factors mirror llama null path",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793641838.3996496,
-      "timestamp_str": "2026-11-02 20:50:38",
-      "agent": "kilo:phi3",
-      "impact_assessment": {
-        "why": "llama multiplies Phi cos/sin tables by attn_factor 1.19024 and ignores absent per-block factors; TGE runs unscaled today so end-to-end parity needs the same table",
-        "benefits": "Phi attention temperature matches the reference; Qwen/Llama untouched (key absent defaults 1.0)",
-        "risks": "contract: table-build scaling only, forward untouched; dependency: none; concurrency: read-only tables; state: none",
-        "mitigation": "Synthetic config test + real-file greedy parity vs llama-cli (built from source)"
-      }
-    },
-    {
-      "task_id": "TGE-IMPL-11",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/5] Approved-11 implement queue: start with IDEA-1568 portability ablation harness (docs+protocol, no engine change)",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1793813810.7499025,
-      "timestamp_str": "2026-11-04 20:36:50",
-      "agent": "kilo:impl",
-      "impact_assessment": {
-        "why": "Deep-checked Approved 11 need ordered implementation; 1568 triages pruning vs speculative vs ports before any kernel spend",
-        "benefits": "Harness-only decision gate with zero engine risk; unblocks 1451/1539/1540 direction",
-        "risks": "contract: docs plus harness protocol only, no kernel change; dependency: none; concurrency: none; state: ledger active-task switch from PHI3",
-        "mitigation": "Track B docs first; full suite plus 4/4 gates each step; live bench skipped per no-run constraint, existing log as baseline"
-      },
-      "plan_digest": "2cbb89d689924b484a7102a45b8e589f47a7ef3689a8da6e9f1fb7e78b577ff2"
-    },
     {
       "task_id": "TGE-PHI3",
       "phase": "superseded",
@@ -267,6 +221,45 @@
       "status": "completed",
       "timestamp": 1794061786.5237443,
       "timestamp_str": "2026-11-07 17:29:46",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-FLAT-INDEX",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] Flat tokenizer index plan: replace unordered_map vocab/merge tables with arena-backed open addressing, id parity + build-time A/B, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794061843.7084618,
+      "timestamp_str": "2026-11-07 17:30:43",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 3 showed the tokenizer source cache caps at 1.24x because unordered_map construction of ~400k keys is ~65-80 ms and dominates every load.",
+        "benefits": "A single-allocation arena plus open addressing should cut map build time and lookup pointer-chasing; reusable for both vocab_ and merge_rank_ with identical first-insert/erase semantics.",
+        "risks": "contract: duplicate keys keep the first value, erase uses tombstones, find returns stable int pointer; dependency: none; concurrency: tokenizer is const during encode, tables are frozen after build; state: tokenizer-only temporary spike.",
+        "mitigation": "Differential ids on synthetic fixtures + thinking set, 145-test suite, interleaved A/B, full revert."
+      },
+      "plan_digest": "79472c12bc3a1ea3effd82bb420a2b4d88b37362f7c4ab4ba5c1ee251f1d9dbc"
+    },
+    {
+      "task_id": "TGE-IDEA-FLAT-INDEX",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[4/4] Flat tokenizer index killed: 22-pair median 1.22x vs 1.25x bar, 146/146 spike / 145/145 reverted, ids identical; checklists: passed; report reports/idea-invented-flat-tokenizer-index-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794062197.728654,
+      "timestamp_str": "2026-11-07 17:36:37",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-FLAT-INDEX",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-FLAT-INDEX' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794062197.8692963,
+      "timestamp_str": "2026-11-07 17:36:37",
       "agent": "opencode:idea-loop"
     }
   ]
