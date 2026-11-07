@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-PAGED-KV-STAGE2B",
+    "task_id": "TGE-IDEA-CONT-SLOTS",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794066497.1255763,
+    "updated_at": 1794068863.5270154,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794066497.283526
+    "completed_at": 1794068863.7009203
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-FLAT-INDEX",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[4/4] Flat tokenizer index killed: 22-pair median 1.22x vs 1.25x bar, 146/146 spike / 145/145 reverted, ids identical; checklists: passed; report reports/idea-invented-flat-tokenizer-index-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794062197.728654,
-      "timestamp_str": "2026-11-07 17:36:37",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-FLAT-INDEX",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-FLAT-INDEX' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794062197.8692963,
-      "timestamp_str": "2026-11-07 17:36:37",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-TOK-STATE-CACHE",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] Tokenizer state-cache plan: flat index + serialized final tables, warm-load A/B, ids/tests, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794062296.9761896,
-      "timestamp_str": "2026-11-07 17:38:16",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Source-cache and flat-index alone both cap near 1.22-1.24x; serializing the final flat tables removes the 100 ms rebuild instead of shaving its parse or node cost.",
-        "benefits": "Warm tokenizer construction should be a bounded read+assign (~15-25 ms) instead of ~126 ms, with identical ids and no arithmetic.",
-        "risks": "contract: serialized slots/arena must restore find/erase semantics exactly; dependency: none; concurrency: cache read is per-process, tokenizer frozen after load; state: 25-30 MB temp sidecar keyed by model size+mtime.",
-        "mitigation": "Versioned magic/key, bounds checks on every array, id parity on thinking/fixtures, 145-test suite, full revert."
-      },
-      "plan_digest": "c19b2794c63beac4fa90ff024fc689d96d293092447e1eb3539b9890d6a2b408"
-    },
     {
       "task_id": "TGE-IDEA-TOK-STATE-CACHE",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794066497.2835276,
       "timestamp_str": "2026-11-07 18:48:17",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-CONT-SLOTS",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Continuous slots 4->8 capacity study: f16/f32 KV, 8x32 load, A/B + memory, report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794068863.3621323,
+      "timestamp_str": "2026-11-07 19:27:43",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "The paged/memory line is closed for speed; continuous batching still has headroom from admitting more requests per weight pass, and the engine already exposes --sequences.",
+        "benefits": "Measure the aggregate gain and the memory cliff before recommending a higher slot count.",
+        "risks": "contract: identical transcripts; dependency: none, config-only; concurrency: 8 slots in one forward_batch; state: KV memory doubles/quadruples.",
+        "mitigation": "Interleaved 4/8 pairs, f16 and f32 arms, load-time tracking, report-only commit."
+      },
+      "plan_digest": "0ffcfee14fb2bbc20705f3715e8eb5e362ad54e696d462a6dc7f5c20f19309f2"
+    },
+    {
+      "task_id": "TGE-IDEA-CONT-SLOTS",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Continuous slots mixed: f16 median 1.337x but one 0.790 loss and load spikes; f32 1.191x at 2.3x load; keep 4 default, 8 f16 opt-in; 4/4 gates; report reports/idea-invented-continuous-slots-mixed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794068863.5270154,
+      "timestamp_str": "2026-11-07 19:27:43",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-CONT-SLOTS",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-CONT-SLOTS' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794068863.700922,
+      "timestamp_str": "2026-11-07 19:27:43",
       "agent": "opencode:idea-loop"
     }
   ]
