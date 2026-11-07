@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-EXP4",
+    "task_id": "TGE-IDEA-EXP2",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794071956.53584,
+    "updated_at": 1794072302.44668,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794071956.8063924
+    "completed_at": 1794072302.599213
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-CONT-SLOTS",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Continuous slots mixed: f16 median 1.337x but one 0.790 loss and load spikes; f32 1.191x at 2.3x load; keep 4 default, 8 f16 opt-in; 4/4 gates; report reports/idea-invented-continuous-slots-mixed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794068863.5270154,
-      "timestamp_str": "2026-11-07 19:27:43",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-CONT-SLOTS",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-CONT-SLOTS' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794068863.700922,
-      "timestamp_str": "2026-11-07 19:27:43",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SEQ-AUTO",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Budget-aware --sequences auto: plan/place slot resolution, 4-preference/8-cap, A/B + fidelity, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794069427.1198807,
-      "timestamp_str": "2026-11-07 19:37:07",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 11 showed 8 f16 slots can add ~34% aggregate but can lose under memory pressure; a fixed default is unsafe.",
-        "benefits": "Opt-in auto picks 8 when the model/KV plan fits and falls back otherwise, capturing the throughput win with a budget guard.",
-        "risks": "contract: identical transcripts; dependency: existing plan/budget APIs; concurrency: slots chosen before load; state: CLI-only, opt-in.",
-        "mitigation": "3 paired auto-vs-4 runs, fidelity tiers, budget readout, full revert."
-      },
-      "plan_digest": "1eefd2fb8994938417ddc58f05f2b6c9f3c71817475399e4f59a32219f264c3b"
-    },
     {
       "task_id": "TGE-IDEA-SEQ-AUTO",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794071956.806394,
       "timestamp_str": "2026-11-07 20:19:16",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-EXP2",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] exp2 range-reduction path: degree-4 2^f fit, alternating SiLU bench, fidelity, ids, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794072302.2840514,
+      "timestamp_str": "2026-11-07 20:25:02",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "The exp form spends a multiply on n*ln2 and a degree-5 polynomial; exp2 can remove one multiply and one FMA if the kernel is polynomial-limited.",
+        "benefits": "A consistent 3-6% SiLU win would be a free kernel improvement; a flat result closes the exp2 direction.",
+        "risks": "contract: f32 KL <=1e-10, f16/i8 in class, ids identical; dependency: none; concurrency: per-thread; state: one header + temporary bench test.",
+        "mitigation": "Alternating baseline/spike test binaries, three rounds, fidelity tiers, full revert."
+      },
+      "plan_digest": "0e39e09bb0e9ecc1f0cd1eed5335349b679ec0c74328e5a1f13697a13fe4b846"
+    },
+    {
+      "task_id": "TGE-IDEA-EXP2",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] exp2 killed: rounds +7.3%, -9.2%, +9.2%, median 0.7% slower; fidelity f32 1.233e-11, ids identical; 145/145, 4/4; report reports/idea-invented-exp2-bitpath-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794072302.44668,
+      "timestamp_str": "2026-11-07 20:25:02",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-EXP2",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-EXP2' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794072302.599214,
+      "timestamp_str": "2026-11-07 20:25:02",
       "agent": "opencode:idea-loop"
     }
   ]
