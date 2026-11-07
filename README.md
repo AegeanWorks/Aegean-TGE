@@ -107,8 +107,10 @@ aegean-tge/
 │   ├── models/               <- GGUF reader and the Qwen2 decoder
 │   └── tensor/               <- reference operations
 ├── tests/                    <- dependency-free harness, run by CTest
+├── reports/                  <- measured idea reports and reimplementation recipes
 ├── docs/                     <- architecture, roadmap, hardware, benchmarks, measurement log, ADRs
-└── scripts/                  <- env.ps1 (toolchain), test.cmd (gate), measure.ps1 (snapshot)
+└── scripts/                  <- env.ps1 (toolchain), test.cmd (gate), measure.ps1 (snapshot),
+                                measure_startup.py (load/tokenizer latency)
 ```
 
 ## Verified on this machine
