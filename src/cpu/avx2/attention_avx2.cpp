@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
-#include <vector>
 
 #include <immintrin.h>
 
@@ -259,149 +258,6 @@ void attention_head_avx2(const AttentionArgs& args) {
   }
 }
 
-/// Grouped q8 attention with the per-token widen hoisted out of the
-/// per-head loop. Each shared K/V row is widened+scaled once per token into
-/// a worker-local scratch (2*head_dim floats) and reused across the group's
-/// query heads. The per-head dot keeps q8_dot_avx2's dual-accumulator lane
-/// split and order over the pre-widened rows, and the online-softmax
-/// rescale/V-accumulate keeps the default path's exact op order per branch,
-/// so output is bit-identical to the per-head-inside loop at ~20% less
-/// attention time. Contract matches the default path: accumulators zeroed
-/// per head, per-head online state written back once, no finalize (the
-/// caller merges chunk states). q8 only; half/float keep the loop below.
-/// Groups wider than 64 heads fall back to the loop (no current model
-/// exceeds 7; the bound keeps the per-head state on the stack).
-void attention_group_q8_hoisted_avx2(const AttentionGroupArgs& args) {
-  const int head_dim = args.head_dim;
-  const int stride = args.kv_stride;
-  const int count = args.count;
-  const int group = args.group_heads;
-  const int scale_stride = stride / 32;
-
-  thread_local std::vector<float> scratch;
-  const std::size_t widened =
-      static_cast<std::size_t>(2) * static_cast<std::size_t>(head_dim);
-  if (scratch.size() < widened) {
-    scratch.resize(widened);
-  }
-  float* widened_keys = scratch.data();
-  float* widened_values = scratch.data() + head_dim;
-
-  float maxima[64];
-  float sums[64];
-  for (int head = 0; head < group; ++head) {
-    float* accumulators =
-        args.accumulators + static_cast<std::size_t>(head) * head_dim;
-    for (int index = 0; index < head_dim; ++index) {
-      accumulators[index] = 0.0F;
-    }
-    maxima[head] = -INFINITY;
-    sums[head] = 0.0F;
-  }
-
-  for (int token = 0; token < count; ++token) {
-    const std::size_t row = static_cast<std::size_t>(token) * stride;
-    const std::int8_t* key_row = args.keys_q8 + row;
-    const std::int8_t* value_row = args.values_q8 + row;
-    const float* key_scales =
-        args.keys_q8_scales + static_cast<std::size_t>(token) * scale_stride;
-    const float* value_scales =
-        args.values_q8_scales + static_cast<std::size_t>(token) * scale_stride;
-    int index = 0;
-    for (; index + 32 <= head_dim; index += 32) {
-      const __m256 key_scale = _mm256_set1_ps(key_scales[index / 32]);
-      const __m256 value_scale = _mm256_set1_ps(value_scales[index / 32]);
-      for (int lane = 0; lane < 32; lane += 8) {
-        _mm256_storeu_ps(widened_keys + index + lane,
-                         _mm256_mul_ps(widen_i8(key_row + index + lane),
-                                       key_scale));
-        _mm256_storeu_ps(widened_values + index + lane,
-                         _mm256_mul_ps(widen_i8(value_row + index + lane),
-                                       value_scale));
-      }
-    }
-    for (; index < head_dim; ++index) {
-      widened_keys[index] =
-          static_cast<float>(key_row[index]) * key_scales[index / 32];
-      widened_values[index] =
-          static_cast<float>(value_row[index]) * value_scales[index / 32];
-    }
-
-    for (int head = 0; head < group; ++head) {
-      const float* query =
-          args.queries + static_cast<std::size_t>(head) * head_dim;
-      float* accumulators =
-          args.accumulators + static_cast<std::size_t>(head) * head_dim;
-      __m256 acc0 = _mm256_setzero_ps();
-      __m256 acc1 = _mm256_setzero_ps();
-      int dot = 0;
-      for (; dot + 32 <= head_dim; dot += 32) {
-        for (int lane = 0; lane < 32; lane += 8) {
-          if ((lane & 16) == 0) {
-            acc0 = _mm256_fmadd_ps(
-                _mm256_loadu_ps(query + dot + lane),
-                _mm256_loadu_ps(widened_keys + dot + lane), acc0);
-          } else {
-            acc1 = _mm256_fmadd_ps(
-                _mm256_loadu_ps(query + dot + lane),
-                _mm256_loadu_ps(widened_keys + dot + lane), acc1);
-          }
-        }
-      }
-      float score = horizontal_sum(_mm256_add_ps(acc0, acc1));
-      for (; dot < head_dim; ++dot) {
-        // Exact q8_dot_avx2 tail order: (query * widened) * scale, not
-        // query * (widened * scale) — the two round differently.
-        score += (query[dot] * static_cast<float>(key_row[dot])) *
-                 key_scales[dot / 32];
-      }
-      score *= args.scale;
-
-      if (score > maxima[head]) {
-        const float alpha = std::exp(maxima[head] - score);
-        const __m256 scale = _mm256_set1_ps(alpha);
-        sums[head] = sums[head] * alpha + 1.0F;
-        int lane = 0;
-        for (; lane + 32 <= head_dim; lane += 32) {
-          for (int k = 0; k < 32; k += 8) {
-            _mm256_storeu_ps(
-                accumulators + lane + k,
-                _mm256_fmadd_ps(scale,
-                                _mm256_loadu_ps(accumulators + lane + k),
-                                _mm256_loadu_ps(widened_values + lane + k)));
-          }
-        }
-        for (; lane < head_dim; ++lane) {
-          accumulators[lane] =
-              accumulators[lane] * alpha + widened_values[lane];
-        }
-        maxima[head] = score;
-      } else {
-        const float beta = std::exp(score - maxima[head]);
-        const __m256 scale = _mm256_set1_ps(beta);
-        sums[head] += beta;
-        int lane = 0;
-        for (; lane + 32 <= head_dim; lane += 8) {
-          _mm256_storeu_ps(
-              accumulators + lane,
-              _mm256_fmadd_ps(scale, _mm256_loadu_ps(widened_values + lane),
-                              _mm256_loadu_ps(accumulators + lane)));
-        }
-        for (; lane < head_dim; ++lane) {
-          // Exact default tail order: (beta * widened) * scale.
-          accumulators[lane] += (beta * static_cast<float>(value_row[lane])) *
-                                value_scales[lane / 32];
-        }
-      }
-    }
-  }
-
-  for (int head = 0; head < group; ++head) {
-    args.maxima[head] = maxima[head];
-    args.sums[head] = sums[head];
-  }
-}
-
 void attention_group_avx2(const AttentionGroupArgs& args) {
   const int head_dim = args.head_dim;
   const int stride = args.kv_stride;
@@ -411,15 +267,6 @@ void attention_group_avx2(const AttentionGroupArgs& args) {
   const std::uint16_t* half_values = args.values_half;
   const bool q8 = args.q8;
   const int scale_stride = stride / 32;
-
-  // Winner port (invented grouped-hoist, measured bit-identical): the q8
-  // grouped span widens each shared K/V row once per token instead of once
-  // per query head (~5-22% attention-time win, same outputs). Half/float
-  // and over-wide groups keep the proven loop below.
-  if (q8 && args.group_heads <= 64) {
-    attention_group_q8_hoisted_avx2(args);
-    return;
-  }
 
   for (int head = 0; head < args.group_heads; ++head) {
     const float* query =
