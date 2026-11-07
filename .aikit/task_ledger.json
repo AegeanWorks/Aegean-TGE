@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-EXP2",
+    "task_id": "TGE-IDEA-KQ8D-DOWN",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794072302.44668,
+    "updated_at": 1794073243.7378347,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794072302.599213
+    "completed_at": 1794073243.9059448
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-SEQ-AUTO",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Sequences auto kept opt-in: picks 8 slots, 3/3 pairs faster median 1.253x, ids/fidelity exact, 145/145, 4/4; report reports/idea-invented-sequences-auto-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794069427.5177197,
-      "timestamp_str": "2026-11-07 19:37:07",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SEQ-AUTO",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-SEQ-AUTO' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794069427.8639374,
-      "timestamp_str": "2026-11-07 19:37:07",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SEQ-AUTO-LIVE",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Live-headroom sequences auto: free physical minus reserve, full-context KV headroom, pressure fallback, A/B + fidelity, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794069943.2251084,
-      "timestamp_str": "2026-11-07 19:45:43",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 12 used total usable and place().max_sessions, which can shrink context and overcommit; the policy needs live free memory and full-context KV accounting.",
-        "benefits": "Safer auto slot count under pressure; exposes the place() context-shrink trap.",
-        "risks": "contract: identical transcripts; dependency: plan/budget APIs; concurrency: slots fixed before load; state: CLI-only opt-in.",
-        "mitigation": "Normal + simulated-pressure runs, 3 paired A/B, fidelity tiers, full revert."
-      },
-      "plan_digest": "9271fc3fbbd1129fbe932e75aa766089d98dfad55656a62e5684a67239280826"
-    },
     {
       "task_id": "TGE-IDEA-SEQ-AUTO-LIVE",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794072302.599214,
       "timestamp_str": "2026-11-07 20:25:02",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DOWN",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Selective kq8d down scope: allow_kq8d flag, scope fidelity, 2048 decode, ids, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794073243.519061,
+      "timestamp_str": "2026-11-07 20:40:43",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "The all-matvec kq8d decode kill was too broad; the down projection has the largest kernel win and may fit the VNNI-class KL budget alone.",
+        "benefits": "If it passes, a 10-36% opt-in f32 decode gain at VNNI-class fidelity.",
+        "risks": "contract: KL <=1.6e-3, top-1 ~97.6%, ids identical; dependency: existing kq8d row kernel; concurrency: decode pool; state: one matvec flag + scope.",
+        "mitigation": "Scope-by-scope fidelity, 399-position confirmation, 2x2048 A/B, thinking ids, full revert."
+      },
+      "plan_digest": "95c8b1fdfb33e3c46b3c9a2883e0297b0369baa706da55375ff1e078ff07c272"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DOWN",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] kq8d down kept opt-in: 399-pos KL 7.954e-4, top-1 390/399 (97.74%); 2048 decode +9.6%/+35.6%, ids identical; 145/145, 4/4; report reports/idea-invented-kq8d-down-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794073243.7378347,
+      "timestamp_str": "2026-11-07 20:40:43",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DOWN",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KQ8D-DOWN' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794073243.905946,
+      "timestamp_str": "2026-11-07 20:40:43",
       "agent": "opencode:idea-loop"
     }
   ]
