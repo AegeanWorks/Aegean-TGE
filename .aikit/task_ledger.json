@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-GQA-REUSE",
+    "task_id": "TGE-IDEA-KQ8D-HEAD",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794084701.2191029,
+    "updated_at": 1794088278.4316473,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794084701.6127367
+    "completed_at": 1794088278.694258
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-SHARED",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Shared gate+up killed: fidelity 2.327e-4/395/399 identical, speed shared 4.09 vs separate 4.28 vs down 4.77 mean; ids identical; 145/145, 4/4; report reports/idea-invented-kq8d-shared-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794076374.7976892,
-      "timestamp_str": "2026-11-07 21:32:54",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-SHARED",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-SHARED' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794076375.2574093,
-      "timestamp_str": "2026-11-07 21:32:55",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-I8-VNNI-ATTN",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] i8 VNNI attention ceiling: phase share at 2048, QK-only 2x math, kill/proceed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794076908.8448634,
-      "timestamp_str": "2026-11-07 21:41:48",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "A VNNI Q8 QK dot is the remaining i8-KV kernel idea; price its ceiling before building.",
-        "benefits": "Avoids a multi-file kernel spike if attention is too small a share; names the long-context reopen trigger.",
-        "risks": "contract: none (read-only); dependency: none; concurrency: none; state: no code.",
-        "mitigation": "Measured phase shares f32/f16/i8; arithmetic ceiling."
-      },
-      "plan_digest": "5ee4eb0b152aff08d68c4ec8251da4fb1d8033ceaca42acef20f7bd872d693cb"
-    },
     {
       "task_id": "TGE-IDEA-I8-VNNI-ATTN",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794084701.612739,
       "timestamp_str": "2026-11-07 23:51:41",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-HEAD",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] kq8d on the LM head: allow_kq8d on output_logits, 399-pos fidelity f32/f16/i8, head timer + 2048 decode A/B, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794088278.1894596,
+      "timestamp_str": "2026-11-08 00:51:18",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "The 3072x128256 Q6_K LM head is the largest decode matvec and the only projection still on the float-dequant path.",
+        "benefits": "A large single-matrix decode win if the integer row kernel skips the per-row dequant cost.",
+        "risks": "contract: logits fidelity/top-1, ids; dependency: existing kq8d row kernel; concurrency: decode pool; state: one matvec flag + head call site.",
+        "mitigation": "399-pos fidelity on three tiers, direct head timer, two interleaved A/B pairs, full revert."
+      },
+      "plan_digest": "abf19d36e53791d63979b665eac67bd9e2eace456b12a4c6aae01a73ebc0dd6f"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-HEAD",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] kq8d LM head kept opt-in: 3.61x/3.30x head matvec, decode 1.33x/1.39x, ids identical; KL f32 1.874e-4/f16 1.903e-4/i8 4.086e-4, top-1 >=392/399; 145/145, 4/4; report reports/idea-invented-kq8d-lmhead-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794088278.4316473,
+      "timestamp_str": "2026-11-08 00:51:18",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-HEAD",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KQ8D-HEAD' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794088278.69426,
+      "timestamp_str": "2026-11-08 00:51:18",
       "agent": "opencode:idea-loop"
     }
   ]
