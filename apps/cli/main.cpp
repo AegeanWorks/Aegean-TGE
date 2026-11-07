@@ -1483,8 +1483,21 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
         }
       }
     }
+    // Stage-2 shared-prefix skip: when the full admission prompt is already
+    // cached, prime its K/V rows and admit only the trailing row (whose
+    // logits produce the first generated token). Earlier rows' logits are
+    // never read, and decode rows attend their own sequences only, so the
+    // shortened batch is bit-identical for every row the caller reads.
+    int prompt_skip = 0;
+    if (new_slot >= 0 && prompt_tokens >= 16 &&
+        model->shared_prefix_len(prompt.data(), prompt_tokens) >=
+            prompt_tokens &&
+        model->prime_cache_from_table(new_slot, prompt.data(),
+                                      prompt_tokens)) {
+      prompt_skip = prompt_tokens - 1;
+    }
     if (new_slot >= 0) {
-      for (int index = 0; index < prompt_tokens; ++index) {
+      for (int index = prompt_skip; index < prompt_tokens; ++index) {
         batch_tokens.push_back(prompt[static_cast<std::size_t>(index)]);
         batch_positions.push_back(index);
         batch_sequences.push_back(new_slot);
@@ -1514,7 +1527,8 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
       }
     }
     if (new_slot >= 0) {
-      const int row = active_count + prompt_tokens - 1;
+      const int row =
+          active_count + (prompt_tokens - prompt_skip) - 1;
       const int first = tge::models::Qwen2::argmax(
           logits + static_cast<std::size_t>(row) * static_cast<std::size_t>(vocab),
           vocab);

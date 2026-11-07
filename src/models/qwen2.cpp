@@ -1806,6 +1806,86 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
   return logits_batch_.data();
 }
 
+int Qwen2::shared_prefix_len(const int* tokens, int count) const {
+  if (kv_half_ || kv_q8_ || count <= 0) {
+    return 0;
+  }
+  const int kv_dim = config_.kv_dim();
+  int best = 0;
+  for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+    const MultiPrefix& entry = g_mprefix_table[slot];
+    if (!entry.valid || entry.layers != config_.block_count ||
+        entry.kv_dim != kv_dim) {
+      continue;
+    }
+    const int cached = static_cast<int>(entry.tokens.size());
+    int run = 0;
+    const int limit = count < cached ? count : cached;
+    while (run < limit && tokens[run] == entry.tokens[run]) {
+      ++run;
+    }
+    if (run > best) {
+      best = run;
+    }
+  }
+  return best;
+}
+
+bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
+                                   int count) {
+  if (kv_half_ || kv_q8_ || count < 16 || sequence < 0 ||
+      sequence >= sequence_count_) {
+    return false;
+  }
+  const int kv_dim = config_.kv_dim();
+  int best_slot = -1;
+  int best = 0;
+  for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+    const MultiPrefix& entry = g_mprefix_table[slot];
+    if (!entry.valid || entry.layers != config_.block_count ||
+        entry.kv_dim != kv_dim) {
+      continue;
+    }
+    const int cached = static_cast<int>(entry.tokens.size());
+    int run = 0;
+    const int limit = count < cached ? count : cached;
+    while (run < limit && tokens[run] == entry.tokens[run]) {
+      ++run;
+    }
+    if (run > best) {
+      best = run;
+      best_slot = slot;
+    }
+  }
+  if (best_slot < 0 || best < count) {
+    return false;
+  }
+  const MultiPrefix& entry = g_mprefix_table[best_slot];
+  const int cached = static_cast<int>(entry.tokens.size());
+  for (int layer = 0; layer < config_.block_count; ++layer) {
+    for (int pos = 0; pos < count; ++pos) {
+      const std::size_t dst =
+          (static_cast<std::size_t>(sequence) *
+               static_cast<std::size_t>(config_.block_count) +
+           static_cast<std::size_t>(layer)) *
+              static_cast<std::size_t>(context_) *
+              static_cast<std::size_t>(kv_dim) +
+          static_cast<std::size_t>(pos) * static_cast<std::size_t>(kv_dim);
+      const std::size_t src =
+          (static_cast<std::size_t>(layer) * static_cast<std::size_t>(cached) +
+           static_cast<std::size_t>(pos)) *
+          static_cast<std::size_t>(kv_dim);
+      std::memcpy(k_cache_.data() + dst, entry.k.data() + src,
+                  sizeof(float) * static_cast<std::size_t>(kv_dim));
+      std::memcpy(v_cache_.data() + dst, entry.v.data() + src,
+                  sizeof(float) * static_cast<std::size_t>(kv_dim));
+    }
+  }
+  std::fprintf(stderr, "[cow-mp] PRIME seq=%d C=%d slot=%d\n", sequence, count,
+               best_slot);
+  return true;
+}
+
 const float* Qwen2::forward(int token, int position) {
   // Guard the public entry point: an out-of-range position would write past the
   // KV cache, and an out-of-range token would read past the embedding table.

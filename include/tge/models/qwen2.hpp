@@ -218,6 +218,19 @@ class Qwen2 {
   const float* forward_batch(const int* tokens, const int* positions, int count,
                              const int* sequences);
 
+  /// Longest leading-token run of [tokens, tokens+count) across valid
+  /// same-geometry multi-prefix table slots. No side effects; 0 when the
+  /// table is empty or the KV form is not f32. Lets a batch admission skip
+  /// fully-cached prompt rows after priming them (see below).
+  int shared_prefix_len(const int* tokens, int count) const;
+
+  /// Memcpy per-layer K/V rows [0..count) from the best table slot into
+  /// `sequence`'s cache rows. Succeeds iff the best run covers the whole
+  /// [0..count) prompt with count >= 16 and the KV form is f32; on success
+  /// the caller may skip recomputing rows [0..count-1) and compute only a
+  /// trailing row for its logits. Returns false with no effect otherwise.
+  bool prime_cache_from_table(int sequence, const int* tokens, int count);
+
   /// Processes a prompt in one pass and returns the logits for its last token.
   ///
   /// Each weight is read once per chunk instead of once per token, which is the
