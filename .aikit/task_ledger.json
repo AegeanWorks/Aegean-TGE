@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-PAGED-KV-STAGE1",
+    "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794063686.2842417,
+    "updated_at": 1794064967.4230015,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794063686.4793782
+    "completed_at": 1794064967.60137
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KV-NOINIT",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[4/4] No-init KV kept-grade: load 183->19 ms @4096 (9.7x), 98->15 @2048; 145/145 both sides, f32/f16/i8 fidelity in class, all ids identical; checklists: passed; report reports/idea-invented-kv-noinit-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794060989.5380719,
-      "timestamp_str": "2026-11-07 17:16:29",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KV-NOINIT",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KV-NOINIT' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794060989.740602,
-      "timestamp_str": "2026-11-07 17:16:29",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-TOK-CACHE",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] Tokenizer sidecar plan: split parse/build, add keyed binary source cache, id parity + warm A/B, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794061387.8598895,
-      "timestamp_str": "2026-11-07 17:23:07",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "from_path reparses the GGUF metadata (tokens/merges/types/scores) on every text invocation; the parsed arrays are stable for a given model file and cost ~38 ms before the ~65 ms map build.",
-        "benefits": "Warm tokenizer construction should drop toward the map-build floor, cutting 30-40 ms of parse from each repeated CLI/API start with identical ids.",
-        "risks": "contract: cached arrays must be byte-equivalent to GGUF values; dependency: no new deps; concurrency: cache writes must be atomic enough to ignore partial files; state: temp-only cache keyed by model size+mtime.",
-        "mitigation": "Versioned magic/key, size caps, rebuild-on-any-error, id parity on fixtures and thinking set, full revert."
-      },
-      "plan_digest": "a9be15a0fb0c2fa7183c94475cec21b6a267da4e3ca04cd21c1548284440db5f"
-    },
     {
       "task_id": "TGE-IDEA-TOK-CACHE",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794063686.479381,
       "timestamp_str": "2026-11-07 18:01:26",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Paged KV stage-2 storage wiring: 16-token blocks, per-sequence tables, direct row addressing, f32-only",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794064967.2534251,
+      "timestamp_str": "2026-11-07 18:22:47",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Stage 1 priced fragmentation and translation but not the per-row lookup inside the real attention kernels; stage 2 wires storage to measure the true cost.",
+        "benefits": "Correct paged storage and a go/no-go for IDEA-1517 before more prefix/chunked-prefill work.",
+        "risks": "contract: exact ids/fidelity across f32 paged and f16/i8 contiguous; dependency: block tables + kernel args; concurrency: per-sequence tables; state: large f32-only refactor.",
+        "mitigation": "Full suite, 5/401/2048 id parity, fidelity tiers, interleaved A/B, full revert."
+      },
+      "plan_digest": "c1db4c007c72b9ec1b901190cf1972dbc2f8ef4857724b1fb859c45239972cae"
+    },
+    {
+      "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Paged KV stage 2 killed: continuous 0.937x, 2048 decode 0.887x median (2% bar); ids/fidelity exact; 145/145, 4/4; report reports/idea-1517-paged-kv-stage2-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794064967.4230015,
+      "timestamp_str": "2026-11-07 18:22:47",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-PAGED-KV-STAGE2",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-PAGED-KV-STAGE2' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794064967.6013722,
+      "timestamp_str": "2026-11-07 18:22:47",
       "agent": "opencode:idea-loop"
     }
   ]
