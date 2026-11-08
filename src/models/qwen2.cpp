@@ -403,6 +403,10 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->file_ = gguf::File::open(path, eager_vocabulary);
     model->config_ = read_config(model->file_);
     Qwen2Config& config = model->config_;
+    if (kv_q8 && config.kv_dim() % 32 != 0) {
+      throw std::runtime_error(
+          "kv: i8 requires kv_dim to be a multiple of 32");
+    }
 
     model->token_embd_ = model->matrix("token_embd.weight");
     if (model->file_.tensor("output.weight") != nullptr) {
@@ -431,7 +435,7 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     const ModelPlan plan = analyse(model->file_, model->context_);
     const PlacementDecision decision =
         place(plan, static_cast<std::int64_t>(memory::MemoryBudget{}.snapshot().usable),
-              model->context_, 1);
+              model->context_, std::max(1, sequences));
     if (!decision.weights_fit) {
       throw std::runtime_error("plan: " + decision.reason);
     }
@@ -2022,13 +2026,21 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
 }
 
 const float* Qwen2::forward(int token, int position) {
+  return forward(0, token, position);
+}
+
+const float* Qwen2::forward(int sequence, int token, int position) {
   // Guard the public entry point: an out-of-range position would write past the
-  // KV cache, and an out-of-range token would read past the embedding table.
+  // KV cache, an out-of-range token would read past the embedding table, and an
+  // out-of-range sequence would address another slot's rows.
   if (token < 0 || token >= config_.vocab_size) {
     throw std::runtime_error("forward: token outside the vocabulary");
   }
   if (position < 0 || position >= context_) {
     throw std::runtime_error("forward: position outside the allocated context");
+  }
+  if (sequence < 0 || sequence >= sequence_count_) {
+    throw std::runtime_error("forward: sequence outside the model");
   }
 
   const int dim = config_.embedding_length;
@@ -2058,8 +2070,8 @@ const float* Qwen2::forward(int token, int position) {
     apply_rope(q_.data(), config_.head_count, position);
     apply_rope(k_.data(), config_.head_count_kv, position);
 
-    const std::size_t layer_base =
-        static_cast<std::size_t>(index) * context_ * kv_dim;
+    const std::size_t layer_base = kv_layer_offset(
+        sequence, index, config_.block_count, context_, kv_dim);
     const std::size_t slot =
         layer_base + static_cast<std::size_t>(position) * kv_dim;
     if (kv_half_) {
@@ -2080,7 +2092,7 @@ const float* Qwen2::forward(int token, int position) {
                   sizeof(float) * static_cast<std::size_t>(kv_dim));
     }
 
-    attention(0, index, position, q_.data(), attn_.data());
+    attention(sequence, index, position, q_.data(), attn_.data());
 
     const cpu::Q8Quantized q_attn_out =
         vnni_ ? quantize_activations(attn_.data(), 1, dim) : cpu::Q8Quantized{};
@@ -2520,17 +2532,47 @@ const float* Qwen2::verify_draft_logits(const int* tokens, int count,
 }
 
 void Qwen2::reset_cache() {
+  for (int sequence = 0; sequence < sequence_count_; ++sequence) {
+    reset_cache(sequence);
+  }
+}
+
+void Qwen2::reset_cache(int sequence) {
+  if (sequence < 0 || sequence >= sequence_count_) {
+    throw std::runtime_error("reset_cache: sequence outside the model");
+  }
+  const std::size_t per_sequence = static_cast<std::size_t>(config_.block_count) *
+                                   static_cast<std::size_t>(context_) *
+                                   static_cast<std::size_t>(config_.kv_dim());
+  const std::size_t begin = static_cast<std::size_t>(sequence) * per_sequence;
+  const std::size_t end = begin + per_sequence;
   if (kv_half_) {
-    std::fill(k_cache_half_.begin(), k_cache_half_.end(), 0);
-    std::fill(v_cache_half_.begin(), v_cache_half_.end(), 0);
+    std::fill(k_cache_half_.begin() + static_cast<std::ptrdiff_t>(begin),
+              k_cache_half_.begin() + static_cast<std::ptrdiff_t>(end), 0);
+    std::fill(v_cache_half_.begin() + static_cast<std::ptrdiff_t>(begin),
+              v_cache_half_.begin() + static_cast<std::ptrdiff_t>(end), 0);
   } else if (kv_q8_) {
-    std::fill(k_cache_q8_.begin(), k_cache_q8_.end(), 0);
-    std::fill(v_cache_q8_.begin(), v_cache_q8_.end(), 0);
-    std::fill(k_cache_q8_scales_.begin(), k_cache_q8_scales_.end(), 0.0F);
-    std::fill(v_cache_q8_scales_.begin(), v_cache_q8_scales_.end(), 0.0F);
+    std::fill(k_cache_q8_.begin() + static_cast<std::ptrdiff_t>(begin),
+              k_cache_q8_.begin() + static_cast<std::ptrdiff_t>(end), 0);
+    std::fill(v_cache_q8_.begin() + static_cast<std::ptrdiff_t>(begin),
+              v_cache_q8_.begin() + static_cast<std::ptrdiff_t>(end), 0);
+    const std::size_t scale_begin = begin / 32;
+    const std::size_t scale_end = end / 32;
+    std::fill(k_cache_q8_scales_.begin() +
+                  static_cast<std::ptrdiff_t>(scale_begin),
+              k_cache_q8_scales_.begin() +
+                  static_cast<std::ptrdiff_t>(scale_end),
+              0.0F);
+    std::fill(v_cache_q8_scales_.begin() +
+                  static_cast<std::ptrdiff_t>(scale_begin),
+              v_cache_q8_scales_.begin() +
+                  static_cast<std::ptrdiff_t>(scale_end),
+              0.0F);
   } else {
-    std::fill(k_cache_.begin(), k_cache_.end(), 0.0F);
-    std::fill(v_cache_.begin(), v_cache_.end(), 0.0F);
+    std::fill(k_cache_.begin() + static_cast<std::ptrdiff_t>(begin),
+              k_cache_.begin() + static_cast<std::ptrdiff_t>(end), 0.0F);
+    std::fill(v_cache_.begin() + static_cast<std::ptrdiff_t>(begin),
+              v_cache_.begin() + static_cast<std::ptrdiff_t>(end), 0.0F);
   }
 }
 

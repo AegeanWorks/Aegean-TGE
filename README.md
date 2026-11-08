@@ -140,7 +140,7 @@ aegean-tge/
 | kq8d opt-in, `--kq8d head,down` | f32 KV: mean KL 9.711e-4, top-1 390/399 at 399 positions; 2,399 positions top-1 97.67%; default off |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 158 cases, all passing |
+| Tests | 162 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the

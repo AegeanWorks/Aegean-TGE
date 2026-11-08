@@ -839,6 +839,67 @@ TGE_TEST(config_reads_the_yarn_magnitude_scale) {
 /// and the forward smoke test below.
 std::vector<std::uint8_t> build_phi_model();
 
+TGE_TEST(kv_layer_offset_addresses_sequences) {
+  TGE_CHECK(tge::models::Qwen2::kv_layer_offset(0, 0, 2, 16, 8) == 0);
+  TGE_CHECK(tge::models::Qwen2::kv_layer_offset(1, 0, 2, 16, 8) == 256);
+  TGE_CHECK(tge::models::Qwen2::kv_layer_offset(1, 1, 2, 16, 8) == 384);
+}
+
+TGE_TEST(model_forward_addresses_each_sequence) {
+  // `forward` used to write slot 0 while `sequence_count()` advertised more.
+  // Both slots must be independently addressable, an out-of-range slot must
+  // fail loudly, and a per-slot reset must leave the other slot usable.
+  const TempFile temp(build_phi_model(), "tge_gguf_phi_sequences.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16, false, false, false, 2);
+  TGE_REQUIRE(model != nullptr);
+  TGE_CHECK(model->sequence_count() == 2);
+  const int prompt0[] = {1, 2, 3, 4};
+  const int prompt1[] = {5, 6, 7, 8};
+  TGE_REQUIRE(model->prefill(prompt0, 4, 0, 0) != nullptr);
+  TGE_REQUIRE(model->prefill(prompt1, 4, 0, 1) != nullptr);
+  const int vocab = model->vocab_size();
+  const float* out0 = model->forward(0, 9, 4);
+  TGE_REQUIRE(out0 != nullptr);
+  for (int index = 0; index < vocab; ++index) {
+    TGE_CHECK(std::isfinite(out0[index]));
+  }
+  const float* out1 = model->forward(1, 10, 4);
+  TGE_REQUIRE(out1 != nullptr);
+  for (int index = 0; index < vocab; ++index) {
+    TGE_CHECK(std::isfinite(out1[index]));
+  }
+  bool threw = false;
+  try {
+    (void)model->forward(2, 9, 4);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+
+  model->reset_cache(1);
+  TGE_REQUIRE(model->forward(0, 11, 5) != nullptr);
+  threw = false;
+  try {
+    model->reset_cache(2);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+}
+
+TGE_TEST(model_rejects_i8_kv_with_unaligned_kv_dim) {
+  // The i8 cache indexes one scale per 32 values; a kv_dim that is not a
+  // multiple used to truncate silently and mis-index the scale array.
+  const TempFile temp(build_phi_model(), "tge_gguf_phi_i8.gguf");
+  std::string error;
+  const std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16, false, false, true);
+  TGE_CHECK(model == nullptr);
+  TGE_CHECK(error.find("multiple of 32") != std::string::npos);
+}
+
 TGE_TEST(phi_style_fused_tensors_load) {  // One-block phi3-shaped file: fused attn_qkv (dim + 2*kv_dim rows) and a
   // fused ffn_up (2*ffn rows), all tiny Q8_0 so the load is milliseconds.
   // dim = 32, heads = 2, kv heads = 1 -> head_dim 16, kv_dim 16.

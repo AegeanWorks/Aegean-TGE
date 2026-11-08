@@ -139,6 +139,24 @@ TGE_TEST(plan_place_shrink_counts_sessions) {
   TGE_CHECK(single.max_context == 9);
 }
 
+TGE_TEST(plan_place_sessions_share_the_kv_budget) {
+  // Placement must cost every requested slot; the loader used to pass 1 while
+  // allocating `sequences` slots, admitting an over-budget multi-slot load.
+  tge::models::ModelPlan plan;
+  plan.parameter_bytes = 0;
+  plan.decode_bytes_per_token = 0;
+  plan.kv_bytes_per_token = 10;
+  plan.context = 16;
+  const tge::models::PlacementDecision one =
+      tge::models::place(plan, 100, 16, 1);
+  const tge::models::PlacementDecision two =
+      tge::models::place(plan, 100, 16, 2);
+  TGE_CHECK(one.max_context == 10);
+  TGE_CHECK(one.max_sessions == 1);
+  TGE_CHECK(two.max_context == 5);
+  TGE_CHECK(two.max_sessions == 2);
+}
+
 TGE_TEST(budget_release_beyond_reserved_throws) {
   // Over-release used to clamp to zero and hide double-free accounting.
   tge::memory::MemoryBudget budget;

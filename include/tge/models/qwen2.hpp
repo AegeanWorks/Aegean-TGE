@@ -102,10 +102,21 @@ Qwen2Config read_config(const gguf::File& file);
 /// and NeoX-style rotary embedding).
 ///
 /// This exists to produce a real tokens-per-second number on real weights. It is
-/// deliberately narrow: one token at a time, greedy sampling, no tokenizer and
-/// no batching. Prompt tokens are fed through the same single-token path.
+/// deliberately narrow: one token per forward call, greedy by default, with the
+/// tokenizer and batching owned by the caller. Prompt tokens go through the
+/// shared prefill path.
 class Qwen2 {
  public:
+  /// Element offset of one (sequence, layer) KV slot block. Shared by the
+  /// cache writers and the per-slot reset so the two cannot drift apart.
+  static std::size_t kv_layer_offset(int sequence, int layer, int block_count,
+                                     int context, int kv_dim) {
+    return ((static_cast<std::size_t>(sequence) *
+                 static_cast<std::size_t>(block_count) +
+             static_cast<std::size_t>(layer)) *
+            static_cast<std::size_t>(context) *
+            static_cast<std::size_t>(kv_dim));
+  }
   /// `context_limit` caps the KV cache allocation. 0 selects the default; the
   /// result is always the smaller of that and the model's own context length.
   ///
@@ -242,6 +253,10 @@ class Qwen2 {
   /// pointer is owned by the model and valid until the next call.
   const float* forward(int token, int position);
 
+  /// Same, for one explicitly addressed KV slot. `sequence` must be in
+  /// [0, sequence_count()); the two-argument form is sequence 0.
+  const float* forward(int sequence, int token, int position);
+
   /// Decodes one token per sequence in a single weight pass and returns
   /// `count * vocab_size` logits, row `i` for sequence `sequences[i]`.
   const float* forward_batch(const int* tokens, const int* positions, int count,
@@ -284,6 +299,10 @@ class Qwen2 {
                                    int start_position);
 
   void reset_cache();
+
+  /// Clears one KV slot. The all-slots form stays available; a recycled
+  /// continuous-batch slot can now be purged without disturbing the others.
+  void reset_cache(int sequence);
 
   static int argmax(const float* values, int count);
 
