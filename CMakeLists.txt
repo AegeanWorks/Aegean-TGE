@@ -202,7 +202,9 @@ if(TGE_BUILD_TESTS)
     tests/test_io_advice.cpp
     tests/test_norm_rope.cpp
     tests/test_gpu_fallback.cpp
+    tests/test_cli_options.cpp
   )
   target_link_libraries(tge_tests PRIVATE tge_core)
+  target_include_directories(tge_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/apps/cli")
   add_test(NAME tge_tests COMMAND tge_tests)
 endif()

@@ -33,14 +33,17 @@
 #include "tge/models/tokenizer.hpp"
 #include "tge/tensor/ops.hpp"
 
+#include "cli_options.hpp"
+#include "info_json.hpp"
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
 
 constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
 
-void print_usage() {
-  std::printf(
+void print_usage(std::FILE* stream = stdout) {
+  std::fprintf(stream,
       "aegean-tge %s - native hybrid inference engine\n"
       "\n"
       "usage: tge <command> [options]\n"
@@ -85,7 +88,7 @@ void print_usage() {
       "        --tokens \"a b c\"  prompt token ids\n"
       "        --prompt \"text\"   prompt as text, tokenized by the model\n"
       "        --n N            tokens to generate (default 32)\n"
-      "        --threads N      worker threads (default: all logical)\n"
+      "        --threads N      decode workers (default: physical cores)\n"
       "        --prefill-threads N prefill workers (default: all logical)\n"
       "        --pin-threads 1|0  pin decode workers to P-cores (default 0)\n"
       "        --context N      KV cache length (default 4096, capped by model)\n"
@@ -134,6 +137,18 @@ void print_usage() {
       "        --threads N      worker threads (default: all logical)\n"
       "  version              print the engine version\n",
       TGE_VERSION);
+}
+
+/// Recognises `--help`/`-h` anywhere after the command (and subcommand) so a
+/// help request is never parsed as a missing flag value.
+bool wants_help(int argc, char** argv, int start) {
+  for (int index = start; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--help") == 0 ||
+        std::strcmp(argv[index], "-h") == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void fill_deterministic(float* data, std::size_t count, std::uint32_t seed) {
@@ -484,7 +499,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
                      bool speculative, bool vnni, bool kq8, bool kq8d_head,
-                     bool kq8d_down, bool kv_half, bool kv_q8,
+                     bool kq8d_down, bool kv_half, bool kv_q8, bool kv_auto,
                      bool prefetch, int prefill_threads, bool pin_threads,
                      tge::models::SparseConfig sparse,
                      const std::string& gpu_mode, bool disable_fuse = false,
@@ -494,12 +509,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     return 2;
   }
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
-  if (vnni && !cpu.features.avx_vnni) {
-    std::fprintf(stderr, "generate: --vnni needs AVX-VNNI on this CPU\n");
-    return 2;
-  }
-  if (kv_half && !cpu.features.f16c) {
-    std::fprintf(stderr, "generate: --kv f16 needs F16C on this CPU\n");
+  const tge::cli::Preflight preflight{
+      sparse.enabled, sparse.window, sparse.stride, kv_half, kv_q8, vnni,
+      gpu_mode == "on", cpu.features.f16c, cpu.features.avx_vnni};
+  const std::string preflight_error = tge::cli::validate_preflight(preflight);
+  if (!preflight_error.empty()) {
+    std::fprintf(stderr, "generate: %s\n", preflight_error.c_str());
     return 2;
   }
   if (kv_half && kv_q8) {
@@ -565,11 +580,6 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   model->set_kq8(kq8);
   model->set_kq8d(kq8d_head, kq8d_down);
   if (sparse.enabled) {
-    if (kv_q8) {
-      std::fprintf(stderr,
-                   "generate: --sparse needs the f32|f16 KV cache (no --kv i8)\n");
-      return 2;
-    }
     try {
       model->set_sparse_config(sparse);
     } catch (const std::exception& error) {
@@ -587,8 +597,50 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
               gpu_status == tge::gpu::GpuStatus::Ready
                   ? "ready, CPU fallback armed"
                   : tge::gpu::info().name);
+  {
+    const char* attention = "auto";
+    switch (model->attention_mode()) {
+      case tge::models::AttentionMode::Scalar:
+        attention = "scalar";
+        break;
+      case tge::models::AttentionMode::Head:
+        attention = "head";
+        break;
+      case tge::models::AttentionMode::Gqa:
+        attention = "gqa";
+        break;
+      case tge::models::AttentionMode::Auto:
+        break;
+    }
+    tge::cli::Resolved state;
+    state.kv = kv_half ? "f16" : (kv_q8 ? "i8" : "f32");
+    state.kv_source = kv_auto ? "auto" : "requested";
+    state.attention = attention;
+    state.decode_threads = model->decode_threads();
+    state.prefill_threads = model->effective_prefill_threads();
+    state.kernel = model->kq8_effective() ? "kq8" : "float";
+    state.gpu = gpu_status == tge::gpu::GpuStatus::Ready
+                    ? (gpu_mode == "off" ? "off" : "ready")
+                    : "unavailable";
+    if (!speculative) {
+      state.speculation = "off";
+    } else if (sampling.temperature <= 0.0F) {
+      state.speculation = "greedy";
+    } else if (sampling.top_k <= 0 && sampling.top_p >= 1.0F &&
+               sampling.min_p <= 0.0F) {
+      state.speculation = "sampled";
+    } else {
+      state.speculation = "disabled (sampling cuts)";
+    }
+    std::printf("%s\n", tge::cli::format_resolved(state).c_str());
+  }
 
   const tge::models::Qwen2Config& config = model->config();
+  if (config.end_token_ids.empty()) {
+    std::fprintf(stderr,
+                 "generate: warning: model declares no end-of-generation ids; "
+                 "stopping only at --n\n");
+  }
 
   // Reuse the model's arrays when they were loaded, otherwise parse them from a
   // second mapping of the same file.
@@ -1437,6 +1489,13 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
   model->set_prefill_threads(prefill_threads);
   model->set_vnni(vnni);
   const auto load_end = Clock::now();
+  if (prompt_tokens + tokens > model->max_context()) {
+    std::fprintf(stderr,
+                 "bench continuous: prompt-tokens + tokens (%d) exceeds the "
+                 "%d-token context\n",
+                 prompt_tokens + tokens, model->max_context());
+    return 2;
+  }
 
   // Every request uses the same seed prompt, so identical transcripts are the
   // independence check for the per-slot KV cache.
@@ -1543,6 +1602,13 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
       entry.position = prompt_tokens;
       entry.generated.assign(1, first);
       ++admitted;
+      // A one-token request, or a prompt whose first sampled token already
+      // ends the sequence, must finish here rather than decode an extra token.
+      if (tokens <= 1 || model->config().is_end_token(first)) {
+        transcripts[static_cast<std::size_t>(finished)] = entry.generated;
+        ++finished;
+        entry.active = false;
+      }
     }
   }
   const auto finish = Clock::now();
@@ -1698,7 +1764,12 @@ int command_info(bool json) {
   const tge::KernelSet& kernels = tge::kernels();
 
   if (json) {
-    std::printf("%s", tge::cpu::to_json(cpu).c_str());
+    tge::memory::MemoryBudget budget;
+    const std::string payload = tge::cli::info_json(
+        cpu, memory, budget.snapshot(), kernels, tge::gpu::init(),
+        tge::gpu::info(), tge::cpu::resolve_thread_count(0),
+        tge::cpu::resolve_decode_threads());
+    std::printf("%s", payload.c_str());
     return 0;
   }
 
@@ -1973,6 +2044,10 @@ bool prompt_lookup_draft(const std::vector<int>& history, int* draft, int need) 
 }
 
 int run_generate(int argc, char** argv) {
+  if (wants_help(argc, argv, 2)) {
+    std::printf("%s", tge::cli::command_usage("generate").c_str());
+    return 0;
+  }
   std::string model_path;
   std::vector<int> prompt;
   std::string prompt_text;
@@ -2090,24 +2165,14 @@ int run_generate(int argc, char** argv) {
         return 2;
       }
     } else if (std::strcmp(flag, "--kv") == 0) {
-      if (std::strcmp(value, "f16") == 0) {
-        kv_half = true;
-        kv_q8 = false;
-      } else if (std::strcmp(value, "i8") == 0) {
-        kv_q8 = true;
-        kv_half = false;
-      } else if (std::strcmp(value, "f32") == 0) {
-        kv_half = false;
-        kv_q8 = false;
-        kv_auto = false;
-      } else if (std::strcmp(value, "auto") == 0) {
-        kv_auto = true;
-        kv_half = false;
-        kv_q8 = false;
-      } else {
+      tge::cli::KvSelection selection{kv_half, kv_q8, kv_auto};
+      if (!tge::cli::apply_kv(selection, value)) {
         std::fprintf(stderr, "generate: --kv takes f32|f16|i8|auto\n");
         return 2;
       }
+      kv_half = selection.half;
+      kv_q8 = selection.q8;
+      kv_auto = selection.auto_;
     } else if (std::strcmp(flag, "--gpu") == 0) {
       if (std::strcmp(value, "auto") == 0 ||
           std::strcmp(value, "off") == 0 ||
@@ -2169,6 +2234,12 @@ int run_generate(int argc, char** argv) {
     return 2;
   }
   sampling.seed = static_cast<std::uint32_t>(seed);
+  try {
+    tge::models::validate_sampling_params(sampling, nullptr, 0);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "generate: %s\n", error.what());
+    return 2;
+  }
   // Temp-copy compat: the invention harness used TGE_NO_FUSE=1 / TGE_NO_SKIP=1
   // in the same binary for A/B measurement. The shipped CLI keeps the flags
   // above as the documented path; the env vars remain as a fallback so old
@@ -2194,9 +2265,9 @@ int run_generate(int argc, char** argv) {
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
                           vocabulary, attention_mode, speculative, vnni, kq8,
-                          kq8d_head, kq8d_down, kv_half, kv_q8, prefetch,
-                          prefill_threads, pin_threads != 0, sparse, gpu_mode,
-                          disable_fuse, disable_skip);
+                          kq8d_head, kq8d_down, kv_half, kv_q8, kv_auto,
+                          prefetch, prefill_threads, pin_threads != 0, sparse,
+                          gpu_mode, disable_fuse, disable_skip);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -2308,15 +2379,15 @@ int run_mem_bench(int argc, char** argv, int first) {
 int command_fidelity(const std::string& path, const std::string& corpus_path,
                      int context, int max_tokens, int threads, bool vnni,
                      bool kq8, bool kq8d_head, bool kq8d_down, bool kv_half,
-                     bool kv_q8, tge::models::SparseConfig sparse,
+                     bool kv_q8, bool kv_auto, tge::models::SparseConfig sparse,
                      const std::string& gpu_mode) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
-  if (vnni && !cpu.features.avx_vnni) {
-    std::fprintf(stderr, "fidelity: --vnni needs AVX-VNNI on this CPU\n");
-    return 2;
-  }
-  if (kv_half && !cpu.features.f16c) {
-    std::fprintf(stderr, "fidelity: --kv f16 needs F16C on this CPU\n");
+  const tge::cli::Preflight preflight{
+      sparse.enabled, sparse.window, sparse.stride, kv_half, kv_q8, vnni,
+      gpu_mode == "on", cpu.features.f16c, cpu.features.avx_vnni};
+  const std::string preflight_error = tge::cli::validate_preflight(preflight);
+  if (!preflight_error.empty()) {
+    std::fprintf(stderr, "fidelity: %s\n", preflight_error.c_str());
     return 2;
   }
   if (kv_half && kv_q8) {
@@ -2373,12 +2444,21 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   // The candidate may request the GPU; the reference never does, so any KL
   // prices the GPU numerics against the exact scalar oracle.
   candidate->set_use_gpu(gpu_mode != "off");
+  {
+    tge::cli::Resolved state;
+    state.kv = kv_half ? "f16" : (kv_q8 ? "i8" : "f32");
+    state.kv_source = kv_auto ? "auto" : "requested";
+    state.attention = "scalar-oracle vs auto";
+    state.decode_threads = candidate->decode_threads();
+    state.prefill_threads = candidate->effective_prefill_threads();
+    state.kernel = candidate->kq8_effective() ? "kq8" : "float";
+    state.gpu = tge::gpu::init() == tge::gpu::GpuStatus::Ready
+                    ? (gpu_mode == "off" ? "off" : "ready")
+                    : "unavailable";
+    state.speculation = "off";
+    std::printf("%s\n", tge::cli::format_resolved(state).c_str());
+  }
   if (sparse.enabled) {
-    if (kv_q8) {
-      std::fprintf(stderr,
-                   "fidelity: --sparse needs the f32|f16 KV cache (no --kv i8)\n");
-      return 2;
-    }
     try {
       candidate->set_sparse_config(sparse);
     } catch (const std::exception& error) {
@@ -2515,6 +2595,10 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
 }
 
 int run_fidelity(int argc, char** argv) {
+  if (wants_help(argc, argv, 2)) {
+    std::printf("%s", tge::cli::command_usage("fidelity").c_str());
+    return 0;
+  }
   std::string model_path;
   std::string corpus_path;
   int context = 1024;
@@ -2545,23 +2629,14 @@ int run_fidelity(int argc, char** argv) {
         return 2;
       }
       const char* value = argv[++index];
-      if (std::strcmp(value, "f16") == 0) {
-        kv_half = true;
-        kv_q8 = false;
-      } else if (std::strcmp(value, "i8") == 0) {
-        kv_q8 = true;
-        kv_half = false;
-      } else if (std::strcmp(value, "f32") == 0) {
-        kv_half = false;
-        kv_q8 = false;
-      } else if (std::strcmp(value, "auto") == 0) {
-        kv_auto = true;
-        kv_half = false;
-        kv_q8 = false;
-      } else {
+      tge::cli::KvSelection selection{kv_half, kv_q8, kv_auto};
+      if (!tge::cli::apply_kv(selection, value)) {
         std::fprintf(stderr, "fidelity: --kv takes f32|f16|i8|auto\n");
         return 2;
       }
+      kv_half = selection.half;
+      kv_q8 = selection.q8;
+      kv_auto = selection.auto_;
       continue;
     }
     if (std::strcmp(argv[index], "--gpu") == 0) {
@@ -2656,12 +2731,12 @@ int run_fidelity(int argc, char** argv) {
   }
   return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
                           vnni, kq8, kq8d_head, kq8d_down, kv_half, kv_q8,
-                          sparse, gpu_mode);
+                          kv_auto, sparse, gpu_mode);
 }
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int dispatch_main(int argc, char** argv) {
 #if defined(_WIN32)
   // The CRT builds narrow argv from the ANSI code page, which mangles any
   // prompt outside it (CJK arrives as '?', then mistokenizes). Rebuild the
@@ -2703,7 +2778,7 @@ int main(int argc, char** argv) {
   }
 #endif
   if (argc < 2) {
-    print_usage();
+    print_usage(stderr);
     return 2;
   }
 
@@ -2718,6 +2793,10 @@ int main(int argc, char** argv) {
   }
 
   if (command == "info") {
+    if (wants_help(argc, argv, 2)) {
+      std::printf("%s", tge::cli::command_usage("info").c_str());
+      return 0;
+    }
     bool json = false;
     for (int index = 2; index < argc; ++index) {
       if (std::strcmp(argv[index], "--json") == 0) {
@@ -2731,6 +2810,10 @@ int main(int argc, char** argv) {
   }
 
   if (command == "gguf") {
+    if (wants_help(argc, argv, 2)) {
+      std::printf("%s", tge::cli::command_usage("gguf").c_str());
+      return 0;
+    }
     if (argc < 3) {
       std::fprintf(stderr, "gguf: a model path is required\n");
       return 2;
@@ -2763,27 +2846,23 @@ int main(int argc, char** argv) {
           return 2;
         }
         const char* value = argv[++index];
-        if (std::strcmp(value, "f16") == 0) {
-          kv_half = true;
-          kv_q8 = false;
-        } else if (std::strcmp(value, "i8") == 0) {
-          kv_q8 = true;
-          kv_half = false;
-        } else if (std::strcmp(value, "f32") == 0) {
-          kv_half = false;
-          kv_q8 = false;
-        } else if (std::strcmp(value, "auto") == 0) {
-          kv_auto = true;
-          kv_half = false;
-          kv_q8 = false;
-        } else {
-          std::fprintf(stderr, "bench continuous: --kv takes f32|f16|i8|auto\n");
+        tge::cli::KvSelection selection{kv_half, kv_q8, kv_auto};
+        if (!tge::cli::apply_kv(selection, value)) {
+          std::fprintf(stderr,
+                       "bench continuous: --kv takes f32|f16|i8|auto\n");
           return 2;
         }
+        kv_half = selection.half;
+        kv_q8 = selection.q8;
+        kv_auto = selection.auto_;
         continue;
       }
       const char* flag = argv[index];
-      const char* value = index + 1 < argc ? argv[index + 1] : "";
+      if (index + 1 >= argc) {
+        std::fprintf(stderr, "bench continuous: '%s' needs a value\n", flag);
+        return 2;
+      }
+      const char* value = argv[index + 1];
       bool ok = true;
       if (std::strcmp(flag, "--model") == 0) model_path = value;
       else if (std::strcmp(flag, "--requests") == 0) ok = parse_int(value, requests);
@@ -2794,7 +2873,7 @@ int main(int argc, char** argv) {
       else if (std::strcmp(flag, "--prompt-tokens") == 0) ok = parse_int(value, prompt_tokens);
       else if (std::strcmp(flag, "--prefill-threads") == 0) ok = parse_int(value, prefill_threads);
       else { std::fprintf(stderr, "bench continuous: unknown option '%s'\n", flag); return 2; }
-      if (!ok) { std::fprintf(stderr, "bench continuous: invalid value\n"); return 2; }
+      if (!ok) { std::fprintf(stderr, "bench continuous: invalid value for '%s'\n", flag); return 2; }
       ++index;
     }
     if (model_path.empty()) {
@@ -2820,9 +2899,13 @@ int main(int argc, char** argv) {
     bool kv_half = false;
     bool kv_q8 = false;
     bool kv_auto = false;
-    for (int index = 3; index + 1 < argc; index += 2) {
+    for (int index = 3; index < argc; index += 2) {
       const char* flag = argv[index];
-      const char* value = index + 1 < argc ? argv[index + 1] : "";
+      if (index + 1 >= argc) {
+        std::fprintf(stderr, "bench sessions: '%s' needs a value\n", flag);
+        return 2;
+      }
+      const char* value = argv[index + 1];
       bool ok = true;
       if (std::strcmp(flag, "--model") == 0) model_path = value;
       else if (std::strcmp(flag, "--sessions") == 0) ok = parse_int(value, sessions);
@@ -2830,21 +2913,12 @@ int main(int argc, char** argv) {
       else if (std::strcmp(flag, "--threads") == 0) ok = parse_int(value, threads_per_session);
       else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
       else if (std::strcmp(flag, "--kv") == 0) {
-        if (std::strcmp(value, "f16") == 0) {
-          kv_half = true;
-          kv_q8 = false;
-        } else if (std::strcmp(value, "i8") == 0) {
-          kv_q8 = true;
-          kv_half = false;
-        } else if (std::strcmp(value, "f32") == 0) {
-          kv_half = false;
-          kv_q8 = false;
-        } else if (std::strcmp(value, "auto") == 0) {
-          kv_auto = true;
-          kv_half = false;
-          kv_q8 = false;
-        } else {
-          ok = false;
+        tge::cli::KvSelection selection{kv_half, kv_q8, kv_auto};
+        ok = tge::cli::apply_kv(selection, value);
+        if (ok) {
+          kv_half = selection.half;
+          kv_q8 = selection.q8;
+          kv_auto = selection.auto_;
         }
       }
       else if (std::strcmp(flag, "--pin-threads") == 0) {
@@ -2852,7 +2926,7 @@ int main(int argc, char** argv) {
              (pin_threads == 0 || pin_threads == 1);
       }
       else { std::fprintf(stderr, "bench sessions: unknown option '%s'\n", flag); return 2; }
-      if (!ok) { std::fprintf(stderr, "bench sessions: invalid value\n"); return 2; }
+      if (!ok) { std::fprintf(stderr, "bench sessions: invalid value for '%s'\n", flag); return 2; }
     }
     if (model_path.empty()) {
       std::fprintf(stderr, "bench sessions: --model is required\n");
@@ -2872,6 +2946,10 @@ int main(int argc, char** argv) {
   }
 
   if (command == "plan") {
+    if (wants_help(argc, argv, 2)) {
+      std::printf("%s", tge::cli::command_usage("plan").c_str());
+      return 0;
+    }
     std::string model_path;
     int context = 4096;
     int sessions = 1;
@@ -2889,7 +2967,7 @@ int main(int argc, char** argv) {
       else if (std::strcmp(flag, "--sessions") == 0) ok = parse_int(value, sessions);
       else if (std::strcmp(flag, "--bandwidth") == 0) ok = parse_float(value, bandwidth);
       else { std::fprintf(stderr, "plan: unknown option '%s'\n", flag); return 2; }
-      if (!ok) { std::fprintf(stderr, "plan: invalid value\n"); return 2; }
+      if (!ok) { std::fprintf(stderr, "plan: invalid value for '%s'\n", flag); return 2; }
     }
     if (model_path.empty()) {
       std::fprintf(stderr, "plan: --model is required\n");
@@ -2908,6 +2986,10 @@ int main(int argc, char** argv) {
   }
 
   if (command == "bench") {
+    if (wants_help(argc, argv, 2)) {
+      std::printf("%s", tge::cli::command_usage("bench").c_str());
+      return 0;
+    }
     if (argc >= 3 && std::strcmp(argv[2], "batch") == 0) {
       int rows = 4864, cols = 896, tokens = 64, repeat = 5;
       bool use_vnni = false;
@@ -2916,7 +2998,11 @@ int main(int argc, char** argv) {
       int k_format = 0;
       for (int index = 3; index < argc; index += 2) {
         const char* flag = argv[index];
-        const char* value = index + 1 < argc ? argv[index + 1] : "";
+        if (index + 1 >= argc) {
+          std::fprintf(stderr, "bench batch: '%s' needs a value\n", flag);
+          return 2;
+        }
+        const char* value = argv[index + 1];
         bool ok = true;
         if (std::strcmp(flag, "--rows") == 0) ok = parse_int(value, rows);
         else if (std::strcmp(flag, "--cols") == 0) ok = parse_int(value, cols);
@@ -2945,7 +3031,7 @@ int main(int argc, char** argv) {
           }
         }
         else { std::fprintf(stderr, "bench batch: unknown option '%s'\n", flag); return 2; }
-        if (!ok) { std::fprintf(stderr, "bench batch: invalid value\n"); return 2; }
+        if (!ok) { std::fprintf(stderr, "bench batch: invalid value for '%s'\n", flag); return 2; }
       }
       return command_batch_bench(rows, cols, tokens, repeat, use_vnni,
                                  use_kq8, use_kq8d, k_format);
@@ -2956,11 +3042,32 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[2], "gemv") == 0) {
       return run_gemv_bench(argc, argv, 3);
     }
-    const int first = (argc >= 3 && std::strcmp(argv[2], "gemm") == 0) ? 3 : 2;
-    return run_gemm_bench(argc, argv, first);
+    if (argc == 2) {
+      return run_gemm_bench(argc, argv, 2);
+    }
+    if (std::strcmp(argv[2], "gemm") == 0) {
+      return run_gemm_bench(argc, argv, 3);
+    }
+    std::fprintf(stderr, "bench: unknown subcommand '%s'\n", argv[2]);
+    print_usage(stderr);
+    return 2;
   }
 
   std::fprintf(stderr, "unknown command '%s'\n\n", command.c_str());
-  print_usage();
+  print_usage(stderr);
   return 2;
+}
+
+int main(int argc, char** argv) {
+  // Library errors used to escape to std::terminate after a full model load.
+  // A bad flag is a usage error (2); a load or runtime failure is (1).
+  try {
+    return dispatch_main(argc, argv);
+  } catch (const std::invalid_argument& error) {
+    std::fprintf(stderr, "tge: %s\n", error.what());
+    return 2;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "tge: %s\n", error.what());
+    return 1;
+  }
 }

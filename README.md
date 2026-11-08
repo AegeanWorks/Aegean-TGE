@@ -140,7 +140,7 @@ aegean-tge/
 | kq8d opt-in, `--kq8d head,down` | f32 KV: mean KL 9.711e-4, top-1 390/399 at 399 positions; 2,399 positions top-1 97.67%; default off |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 146 cases, all passing |
+| Tests | 158 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
@@ -157,12 +157,17 @@ splitter's optional leading space or punctuation character. Sampling supports
 temperature, top-k, top-p, min-p and repetition penalty; top-p and min-p no
 longer sort the whole vocabulary, and the benchmarks use greedy so they are
 reproducible. CONTROL and USER_DEFINED tokens such as `<|im_start|>` and
-`<tool_call>` are matched from prompt text, omitted from text output when they
-are structural, and `encode(..., false)` opts out for user content. Generation
+`<tool_call>` are matched from prompt text; CONTROL pieces are omitted from
+text output, USER_DEFINED pieces are printed, and `encode(..., false)` opts out
+for user content. Generation
 stops on the model's end-of-generation set (eos, eot, `eos_token_ids`, and
 Qwen's end-of-text id) instead of continuing past it. Decode hands work to a
 spin-then-sleep pool; at long context decode attention runs in grouped-query
 chunks over positions as well as heads, and the prefill stays per-head.
+Every run also prints a `resolved :` line with the effective KV tier (and
+whether it came from `auto`), attention schedule, decode/prefill thread counts,
+kernel path, GPU state and speculation mode. `tge info --json` exposes CPU,
+memory, budget, kernels, threads, GPU and the auto rules as one object.
 Prefill is compute-bound so it takes every logical core on an unpinned pool.
 Prompt chunks are 128 tokens up to 4096 prompt tokens and 64 above: larger
 chunks amortize the weight stream (1.18-1.49x at 2048/4096) while long-context

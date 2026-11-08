@@ -19,8 +19,11 @@ namespace tge::models {
 /// - GPT-2/BPE (`tokenizer.ggml.model` anything but "llama", or a merges
 ///   table present): byte-level pieces plus the merge table.
 /// - SentencePiece ("llama" model with no merges table, e.g. Phi-3): pieces
-///   with scores, tokenized by Viterbi over the best-scoring path.
-/// Decoding is a table lookup per piece in both modes.
+///   with scores; encoding is the llama.cpp SPM-BPE loop (dummy U+2581
+///   prefix, greedy highest-score pair merges over merge ranks), not a
+///   Viterbi pass.
+/// Decoding inverts the byte alphabet for BPE and maps U+2581 to space for
+/// SPM. CONTROL pieces are omitted; USER_DEFINED pieces print.
 class Tokenizer {
  public:
   static std::unique_ptr<Tokenizer> from_gguf(const gguf::File& file,
@@ -53,8 +56,8 @@ class Tokenizer {
   bool llama_bpe() const { return llama_bpe_digits_; }
 
   /// True when the file declares the SentencePiece family: a "llama" model
-  /// with no merges table (Phi-3 and friends). Encoding runs Viterbi over
-  /// piece scores instead of byte-pair merges.
+  /// with no merges table (Phi-3 and friends). Encoding runs the llama.cpp
+  /// SPM-BPE merge loop over piece scores (merge ranks), not Viterbi.
   bool spm() const { return spm_; }
 
   int vocab_size() const { return static_cast<int>(pieces_.size()); }

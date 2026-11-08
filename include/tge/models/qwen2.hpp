@@ -149,6 +149,12 @@ class Qwen2 {
   /// log). Pass --pin-threads 1 to restore P-core pinning.
   void set_pin_threads(bool pin);
 
+  /// Effective worker counts after defaults resolve. Decode falls back to the
+  /// physical-core default; prefill takes every logical core unless the
+  /// override is set. Reported at load so `--threads` is never a black box.
+  int decode_threads() const;
+  int effective_prefill_threads() const;
+
   /// Attention scheduling. See `AttentionMode`.
   void set_attention_mode(AttentionMode mode) { attention_mode_ = mode; }
   AttentionMode attention_mode() const { return attention_mode_; }
@@ -169,7 +175,9 @@ class Qwen2 {
 
     /// Use the AVX-VNNI Q8_0 batch kernel, quantizing each distinct activation
     /// once per layer and reusing it across the matrices that share it.
-    void set_vnni(bool enabled) { vnni_ = enabled; }
+    /// Enabling it on a CPU without AVX-VNNI throws instead of executing an
+    /// unsupported instruction.
+    void set_vnni(bool enabled);
     bool vnni() const { return vnni_; }
 
     /// Use the integer Q4_K/Q6_K x Q8_K batch kernel (per-row Q8 activation
@@ -178,6 +186,10 @@ class Qwen2 {
     /// lands; see measurement-log §54.
     void set_kq8(bool enabled) { kq8_ = enabled; }
     bool kq8() const { return kq8_; }
+    /// True only when the requested integer prefill kernel can actually run on
+    /// this CPU (AVX2 + FMA). The dispatcher uses this, so a non-AVX2 machine
+    /// cannot execute an AVX2 translation unit.
+    bool kq8_effective() const { return kq8_ && avx2_fma_; }
 
     /// Opt-in integer decode kernels for the LM head and the FFN down
     /// projection. Both are lossy on near-tie logits; the measured fidelity
@@ -393,6 +405,7 @@ class Qwen2 {
     bool scalar_kernels_ = false;
     bool vnni_ = false;
     bool kq8_ = true;
+    bool avx2_fma_ = false;
     bool kq8d_head_ = false;
     bool kq8d_down_ = false;
   bool kv_half_ = false;

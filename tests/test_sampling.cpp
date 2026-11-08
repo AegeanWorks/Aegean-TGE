@@ -429,3 +429,23 @@ TGE_TEST(sampling_seed_zero_is_not_degenerate) {
   }
   TGE_CHECK(saw_nonzero);
 }
+
+TGE_TEST(sampling_validator_runs_before_a_model_load) {
+  tge::models::SamplingParams params;
+  bool threw = false;
+  try {
+    tge::models::validate_sampling_params(params, nullptr, 0);
+  } catch (...) {
+    threw = true;
+  }
+  TGE_CHECK(!threw);
+
+  params.top_p = 2.0F;
+  threw = false;
+  try {
+    tge::models::validate_sampling_params(params, nullptr, 0);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+}

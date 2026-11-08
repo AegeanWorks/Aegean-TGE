@@ -570,6 +570,131 @@ TGE_TEST(config_reads_end_token_ids) {  const auto put_uint = [](std::vector<std
 
 namespace {
 
+std::vector<std::uint8_t> build_stop_config(const char* architecture,
+                                            bool string_eos,
+                                            bool with_stop_ids) {
+  const auto put_uint = [](std::vector<std::uint8_t>& out, const char* key,
+                           std::uint32_t value) {
+    put_string(out, key);
+    put_u32(out, 4);
+    put_u32(out, value);
+  };
+  const auto put_float = [](std::vector<std::uint8_t>& out, const char* key,
+                            float value) {
+    put_string(out, key);
+    put_u32(out, 6);
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    put_u32(out, bits);
+  };
+  const std::string prefix = std::string(architecture) + ".";
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);
+  put_u64(out, with_stop_ids ? 13 : 9);
+  put_string(out, "general.architecture");
+  put_u32(out, 8);
+  put_string(out, architecture);
+  put_uint(out, (prefix + "block_count").c_str(), 1);
+  put_uint(out, (prefix + "embedding_length").c_str(), 8);
+  put_uint(out, (prefix + "feed_forward_length").c_str(), 16);
+  put_uint(out, (prefix + "attention.head_count").c_str(), 2);
+  put_uint(out, (prefix + "attention.head_count_kv").c_str(), 1);
+  put_uint(out, (prefix + "context_length").c_str(), 16);
+  put_float(out, (prefix + "layer_norm_rms_epsilon").c_str(), 1e-6F);
+  put_float(out, (prefix + "rope.freq_base").c_str(), 10000.0F);
+  if (with_stop_ids) {
+    if (string_eos) {
+      put_string(out, "tokenizer.ggml.eos_token_id");
+      put_u32(out, 8);
+      put_string(out, "not-a-number");
+    } else {
+      put_uint(out, "tokenizer.ggml.eos_token_id", 151645);
+    }
+    put_uint(out, "tokenizer.ggml.eot_token_id", 151646);
+    put_uint(out, "tokenizer.ggml.bos_token_id", 151643);
+    put_string(out, "tokenizer.ggml.eos_token_ids");
+    put_u32(out, 9);
+    put_u32(out, 4);
+    put_u64(out, 1);
+    put_u32(out, 151647);
+  }
+  return out;
+}
+
+std::vector<std::uint8_t> build_one_tensor(std::uint64_t ne0,
+                                           std::uint32_t type,
+                                           std::uint64_t offset,
+                                           std::size_t data_bytes) {
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 1);
+  put_u64(out, 0);
+  put_string(out, "w");
+  put_u32(out, 2);
+  put_u64(out, ne0);
+  put_u64(out, 1);
+  put_u32(out, type);
+  put_u64(out, offset);
+  while (out.size() % 32 != 0) {
+    out.push_back(0);
+  }
+  out.resize(out.size() + data_bytes, 0);
+  return out;
+}
+
+}  // namespace
+
+TGE_TEST(config_qwen_end_token_is_case_insensitive) {
+  const TempFile temp(build_stop_config("Qwen2", false, true),
+                      "tge_gguf_config_case.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  const tge::models::Qwen2Config config = tge::models::read_config(file);
+  TGE_CHECK(config.is_end_token(151643));  // BOS/end-of-text, capital-Q file
+}
+
+TGE_TEST(config_rejects_a_non_numeric_stop_id) {
+  const TempFile temp(build_stop_config("qwen2", true, true),
+                      "tge_gguf_config_type.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  bool threw = false;
+  try {
+    (void)tge::models::read_config(file);
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  TGE_CHECK(threw);
+}
+
+TGE_TEST(config_can_declare_no_stop_ids) {
+  const TempFile temp(build_stop_config("qwen2", false, false),
+                      "tge_gguf_config_nostop.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  const tge::models::Qwen2Config config = tge::models::read_config(file);
+  TGE_CHECK(config.end_token_ids.empty());
+}
+
+TGE_TEST(gguf_tensor_range_is_wrap_safe) {
+  TGE_CHECK(tge::gguf::tensor_range_fits(96, 0, 68, 164));
+  TGE_CHECK(!tge::gguf::tensor_range_fits(
+      96, std::numeric_limits<std::uint64_t>::max() - 10, 68, 164));
+}
+
+TGE_TEST(gguf_rejects_a_tensor_byte_size_overflow) {
+  // `blocks * 34` wraps to 16 for this shape: before the checked multiply the
+  // parser accepted it as a 16-byte tensor instead of rejecting the file.
+  const std::uint64_t blocks =
+      std::numeric_limits<std::uint64_t>::max() / 34 + 1;
+  const std::uint64_t elements = blocks * 32;
+  const std::vector<std::uint8_t> bytes =
+      build_one_tensor(elements, 8, 0, 64);
+  TGE_CHECK(open_throws(bytes, "tge_gguf_bytes.gguf"));
+}
+
+namespace {
+
 void put_phi_key_u32(std::vector<std::uint8_t>& out, const char* key,
                      std::uint32_t value) {
   put_string(out, key);

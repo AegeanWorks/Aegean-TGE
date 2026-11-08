@@ -70,6 +70,15 @@ struct TensorInfo {
   std::uint64_t elements = 0;
 };
 
+/// Wrap-safe containment test for one tensor's byte range. Written as
+/// subtractions so a hostile offset cannot wrap `data_offset + offset + bytes`
+/// back under the file size.
+inline bool tensor_range_fits(std::uint64_t data_offset, std::uint64_t offset,
+                              std::uint64_t bytes, std::uint64_t size) {
+  return data_offset <= size && offset <= size - data_offset &&
+         bytes <= size - data_offset - offset;
+}
+
 /// A read-only view of a GGUF file mapped into this process.
 ///
 /// Weights are never copied: `data()` points straight at the mapped bytes and

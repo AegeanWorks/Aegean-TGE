@@ -57,6 +57,14 @@ void apply_repeat_penalty(std::vector<float>& scores, int count,
                           const SamplingParams& params, const int* history,
                           int history_size);
 
+/// Throws `std::invalid_argument` for a parameter set that cannot produce a
+/// meaningful draw (NaN temperature, negative cuts, non-positive penalty,
+/// negative window, null history with size > 0). The documented "off"
+/// sentinels pass. Exposed so a caller can reject a bad flag set before a
+/// model load instead of aborting inside the first decode step.
+void validate_sampling_params(const SamplingParams& params, const int* history,
+                              int history_size);
+
 /// One step of the standard distribution-preserving speculation rule for a
 /// one-hot draft distribution (prompt lookup proposes a single token).
 /// Accepts `draft` with probability q[draft]; on rejection returns a token

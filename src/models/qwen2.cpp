@@ -279,10 +279,28 @@ Qwen2Config read_config(const gguf::File& file) {
   }
 
   // The tokenizer metadata names the ids that end a sequence. A file without
-  // them keeps -1, which never matches a real token.
-  const auto read_token_id = [&file](const char* key) {
+  // them keeps -1, which never matches a real token. A key that is present
+  // but not numeric is a malformed contract, not token 0.
+  const auto read_token_id = [&file](const char* key) -> int {
     const gguf::Value* value = file.find(key);
-    return value == nullptr ? -1 : static_cast<int>(value->as_u64());
+    if (value == nullptr) {
+      return -1;
+    }
+    switch (value->type) {
+      case gguf::ValueType::Uint8:
+      case gguf::ValueType::Uint16:
+      case gguf::ValueType::Uint32:
+      case gguf::ValueType::Uint64:
+        return static_cast<int>(value->unsigned_value);
+      case gguf::ValueType::Int8:
+      case gguf::ValueType::Int16:
+      case gguf::ValueType::Int32:
+      case gguf::ValueType::Int64:
+        return static_cast<int>(value->signed_value);
+      default:
+        throw std::runtime_error(std::string("model configuration: ") + key +
+                                 " must be an integer");
+    }
   };
   config.eos_token_id = read_token_id("tokenizer.ggml.eos_token_id");
   config.eot_token_id = read_token_id("tokenizer.ggml.eot_token_id");
@@ -307,8 +325,10 @@ Qwen2Config read_config(const gguf::File& file) {
     }
   }
   // Qwen uses <|endoftext|> as BOS, padding and a valid end-of-text token, so
-  // a generation that emits it has ended even when it is not the eos id.
-  if (architecture.find("qwen") != std::string::npos) {
+  // a generation that emits it has ended even when it is not the eos id. The
+  // same lowercased architecture decides RoPE layout above; `Qwen2` and
+  // `qwen2` must not follow different stop rules.
+  if (arch_lower.find("qwen") != std::string::npos) {
     if (const gguf::Value* bos = file.find("tokenizer.ggml.bos_token_id");
         bos != nullptr) {
       add_end(static_cast<int>(bos->as_u64()));
@@ -372,7 +392,12 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
                                    int context_limit, bool eager_vocabulary,
                                    bool kv_half, bool kv_q8, int sequences) {
   std::unique_ptr<Qwen2> model(new Qwen2());
+  const cpu::Features features = cpu::detect().features;
+  model->avx2_fma_ = features.avx2 && features.fma;
   try {
+    if (kv_half && !features.f16c) {
+      throw std::runtime_error("kv: f16 requires F16C on this CPU");
+    }
     // The body needs no metadata arrays; building the vocabulary here would cost
     // more than mapping the weights. Unless the caller says it will want them.
     model->file_ = gguf::File::open(path, eager_vocabulary);
@@ -732,6 +757,20 @@ void Qwen2::set_pin_threads(bool pin) {
   decode_pool_.reset();
 }
 
+int Qwen2::decode_threads() const {
+  return threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
+}
+
+int Qwen2::effective_prefill_threads() const { return prefill_threads(); }
+
+void Qwen2::set_vnni(bool enabled) {
+  if (enabled && !cpu::detect().features.avx_vnni) {
+    throw std::invalid_argument(
+        "vnni: AVX-VNNI is not available on this CPU");
+  }
+  vnni_ = enabled;
+}
+
 bool Qwen2::wants_gpu_batch(int tokens, gguf::TensorType type) const {
   const bool supported = type == gguf::TensorType::Q8_0 ||
                          type == gguf::TensorType::F32;
@@ -1044,7 +1083,7 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     // forward_batch forces float: mixed decode/prompt batches must use
     // occupancy-invariant math, else identical requests diverge on
     // near-tie flips (continuous-batch LEAK, 2026-11-04).
-    if (kq8_ && !scalar_kernels_ && !float_only && tokens > 1 &&
+    if (kq8_effective() && !scalar_kernels_ && !float_only && tokens > 1 &&
         (kind == cpu::QuantKind::Q4_K || kind == cpu::QuantKind::Q6_K)) {
       cpu::gemv_dequant_batch_kq8_avx2(args, config);
     } else {

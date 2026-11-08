@@ -525,10 +525,14 @@ File File::open(const std::string& path, bool load_large_arrays) {
     }
     const std::uint32_t block = type_block_size(info.type);
     const std::uint32_t block_bytes = type_block_bytes(info.type);
-    info.bytes = block == 0 ? 0 : (info.elements / block) * block_bytes;
     if (block == 0 || info.elements % block != 0) {
       throw std::runtime_error("gguf: unsupported type for tensor " + info.name);
     }
+    const std::uint64_t blocks = info.elements / block;
+    if (block_bytes != 0 && blocks > UINT64_MAX / block_bytes) {
+      throw std::runtime_error("gguf: tensor byte size overflows: " + info.name);
+    }
+    info.bytes = blocks * block_bytes;
     file.tensors_.push_back(std::move(info));
   }
 
@@ -537,7 +541,11 @@ File File::open(const std::string& path, bool load_large_arrays) {
 
   for (std::size_t index = 0; index < file.tensors_.size(); ++index) {
     const TensorInfo& info = file.tensors_[index];
-    if (file.data_offset_ + info.offset + info.bytes > file.size_) {
+    // Wrap-safe containment: data_offset + offset + bytes <= size. The helper
+    // uses subtractions so a hostile offset cannot wrap the sum back under the
+    // limit (the previous form accepted such files).
+    if (!tensor_range_fits(file.data_offset_, info.offset, info.bytes,
+                           file.size_)) {
       throw std::runtime_error("gguf: tensor extends past end of file: " +
                                info.name);
     }
