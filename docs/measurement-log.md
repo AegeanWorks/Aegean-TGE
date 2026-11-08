@@ -3895,3 +3895,16 @@ Before: every prompt was processed in 64-token chunks. After: 128-token chunks w
 | 8180 (pair 2) | 17.8 t/s | 16.6 t/s | 0.934x | identical |
 
 Verdict: kept, span-aware. 128 is faster in 3/4 pairs at 2048 (median ~1.23x) and 2/2 at 4096, but 64 wins both 8192 pairs by 7-11%, so long prompts keep the old chunk. Buffers are sized for 128 rows (logits_batch and scores), which costs about +58 MB at context 4096 and +83 MB at 8192; the default run at 2048 measured 26.7 t/s with repeat ids identical. Tests 146/146, 4/4 gates.
+
+## 2026-11-08 - f16 block attention: widen each K/V row once per key (kept)
+
+Before: `attention_block_head_avx2` converted every f16 K/V row from half to float inside the query loop. A 128-query chunk therefore widened each row 128 times. After: `widen_row` converts the row once into a 256-float aligned stack buffer (heap fallback above 256) and both passes reuse it. The arithmetic order and the float values are unchanged, so output is bit-identical.
+
+| prompt, f16 KV | pairs | attention ratio (median) | prefill ratio (median) | ids |
+|---|---:|---:|---:|---|
+| 2048 tokens | 6 | 1.034, 1.030, 1.034, 1.075, 1.142, 1.178 -> **1.054** | 0.891, 1.022, 1.026, 1.110, 1.170, 1.321 -> **1.068** | identical 6/6 |
+| 4096 tokens | 4 | 0.828, 1.376, 1.250, 0.995 -> **1.123** | 0.855, 1.367, 1.290, 0.927 -> **1.109** | identical 4/4 |
+
+5/6 pairs at 2048 and 3/4 at 4096 favor the hoist; the median is the claim. Fidelity at 399 positions is unchanged: f16 mean KL 3.252e-07, worst 2.709e-05, top-1 399/399; f32 stays 1.020e-11 / 399/399. The block-attention differential test passes.
+
+Also measured and reverted this cycle: adaptive speculative depth/cooldown (8 pairs, median forward ratio 1.006), 256-row prefill chunks (2048 0.946x/0.976x; 4096 1.086x/0.996x), and a Q4_K scale-metadata cache (6-thread 1.16-1.37x, default 16-thread 0.945-1.037x). Details: `reports/idea-cycle-negative-results-2026-11-08.md`. Tests 146/146, `aikit.py check aegean-tge` 4/4.
