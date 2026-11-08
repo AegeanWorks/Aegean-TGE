@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-F16-HOIST",
-    "last_phase": "in_progress",
+    "task_id": "TGE-VALUE-TILE",
+    "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794150620.0815897,
-    "owner": "opencode:f16-hoist",
-    "started_by": "opencode:f16-hoist",
+    "updated_at": 1794157143.2939672,
+    "owner": "commandcode:value-tile",
+    "started_by": "commandcode:value-tile",
     "continuations": [],
-    "completed_at": 1794150620.696499
+    "completed_at": 1794157143.9619188
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-LLAMA-COMPARE-2",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] Comparison done: llama ahead on prefill (TGE 0.49-0.85x); stack decode reaches parity at 512 (0.98-1.06x) and 1.51x over shipped; 2048 decode unresolved (31 tok, loaded); 145/145, 4/4; report reports/llama-cpp-comparison-2026-11-08.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794131699.6477382,
-      "timestamp_str": "2026-11-08 12:54:59",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-LLAMA-COMPARE-2",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-LLAMA-COMPARE-2' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794131700.178885,
-      "timestamp_str": "2026-11-08 12:55:00",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-INTEGRATE-STACK",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/5] Plan: integrate validated stack - q8 full tail, 4 GQA chunks, block prefill f32/f16 as defaults; kq8d head/down as documented opt-in flags",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794131985.4671972,
-      "timestamp_str": "2026-11-08 12:59:45",
-      "agent": "opencode:integrate",
-      "impact_assessment": {
-        "why": "48 idea cycles produced a validated 1.5-1.6x stack and documented kq8d tiers that are still report-only; the user authorized staged integration with opt-in lossy scopes.",
-        "benefits": "Real decode gains on the shipped engine (tail 1.06x, chunks 1.05x, block prefill 1.57x at 8k) and optional kq8d speed with explicit quality guidance.",
-        "risks": "contract: ids and fidelity tiers must hold; dependency: stdlib only, existing kernels; concurrency: decode GQA tasks and prefill head tasks; state: new model flags, CLI parsing, dispatch, docs.",
-        "mitigation": "Per-milestone build and 145/145 tests, 399/1199/2399-position fidelity, id parity, measurement-log entries, README/help/knowledge-base updates, 4/4 gates, local commits only."
-      },
-      "plan_digest": "9700746a7251faa612d5b4adb072d4df1a005176458ce6da45767890582081ab"
-    },
     {
       "task_id": "TGE-INTEGRATE-STACK",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794150620.6965017,
       "timestamp_str": "2026-11-08 18:10:20",
       "agent": "opencode:f16-hoist"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan: adopt and price the in-flight 8-query value-accumulation tile in block prefill attention; baseline vs experiment at 2048/4096 on f32 and f16 KV; drop the temporary TGE_GQA_CHUNKS spike unless it earns a retune",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794154108.536616,
+      "timestamp_str": "2026-11-08 19:08:28",
+      "agent": "commandcode:value-tile",
+      "impact_assessment": {
+        "why": "A prior session left an unrecorded value-tile edit and a TGE_GQA_CHUNKS env spike in the working tree; G-001/G-002 require a baseline, a measured verdict and a log entry before continuing.",
+        "benefits": "The tile keeps 8 x head_dim accumulators in L1 (2-4 KiB) instead of the 128-token block working set (~32-64 KiB); if pass-2 output traffic is the bottleneck it is a free, bit-identical prefill gain.",
+        "risks": "contract: ids and fidelity must stay bit-identical; dependency: block attention kernel only; concurrency: per-head stack scratch 8 x head_dim; state: tile re-streams each value row once per 8-query tile, so large blocks may lose bandwidth.",
+        "mitigation": "Same-source baseline and experiment binaries, interleaved same-binary pairs at 2048/4096 on f32 and f16, ids parity, block differential test, full 146-case suite, revert on no consistent win."
+      },
+      "plan_digest": "31fca18a09a59ae2136b91d00e388e6de76c627f61fa1d73afb44df465420918"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] KEPT: 8-query value tile in block prefill attention; attention faster 10/10 pairs, medians 1.690x f16 / 1.576x f32 at 2049 and 2.09x / 2.006x at 4081; prefill medians ~1.14x / 1.31x; ids identical 10/10; fidelity unchanged (f32 1.020e-11, f16 3.252e-7, 399/399); dropped inert TGE_GQA_CHUNKS spike; 146/146, 4/4; checklists: passed; report reports/idea-invented-value-tile-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794157143.2939672,
+      "timestamp_str": "2026-11-08 19:59:03",
+      "agent": "commandcode:value-tile"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-VALUE-TILE' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794157143.9619212,
+      "timestamp_str": "2026-11-08 19:59:03",
+      "agent": "commandcode:value-tile"
     }
   ]
 }
