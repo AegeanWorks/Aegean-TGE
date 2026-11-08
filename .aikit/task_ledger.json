@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-VALUE-TILE",
+    "task_id": "TGE-VALUE-TILE-16",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794157143.2939672,
-    "owner": "commandcode:value-tile",
-    "started_by": "commandcode:value-tile",
+    "updated_at": 1794159629.4114745,
+    "owner": "commandcode:value-tile16",
+    "started_by": "commandcode:value-tile16",
     "continuations": [],
-    "completed_at": 1794157143.9619188
+    "completed_at": 1794159629.7802055
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-INTEGRATE-STACK",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[5/5] Integrated defaults (q8 tail, 4 GQA chunks, block prefill f32/f16) and opt-in --kq8d head/down with README/log/ADR docs; 146/146, fidelity f32 1.02e-11, f16 3.25e-7, i8 2.33e-4, ids identical; 4/4; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794136247.2183912,
-      "timestamp_str": "2026-11-08 14:10:47",
-      "agent": "opencode:integrate"
-    },
-    {
-      "task_id": "TGE-INTEGRATE-STACK",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-INTEGRATE-STACK' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794136247.5797932,
-      "timestamp_str": "2026-11-08 14:10:47",
-      "agent": "opencode:integrate"
-    },
-    {
-      "task_id": "TGE-HISTORY-ANALYSIS",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Analyze llama.cpp, ik_llama.cpp and vLLM commit histories for performance patterns and map them to TGE",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794138647.5842245,
-      "timestamp_str": "2026-11-08 14:50:47",
-      "agent": "opencode:history-analysis",
-      "impact_assessment": {
-        "why": "The user asked how other inference engines improved performance, to find levers TGE has not tried.",
-        "benefits": "A prioritized transfer list grounded in 10k+ commits; identifies row-interleaved quantized GEMM as the main remaining prefill lever.",
-        "risks": "contract: none (analysis only); dependency: none; concurrency: none; state: one report file.",
-        "mitigation": "Key commits and measured claims cited; no code changed; gates re-run."
-      },
-      "plan_digest": "51fd5d7c8d9e85e253e383622075092913b274ab3b5ba78215fa392760456188"
-    },
     {
       "task_id": "TGE-HISTORY-ANALYSIS",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794157143.9619212,
       "timestamp_str": "2026-11-08 19:59:03",
       "agent": "commandcode:value-tile"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE-16",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan: price a 16-query value tile against the shipped 8-query tile in block prefill attention; 2049/4081 f16 and f32 pairs, ids parity, tests and fidelity; revert on a tie",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794158459.2371578,
+      "timestamp_str": "2026-11-08 20:20:59",
+      "agent": "commandcode:value-tile16",
+      "impact_assessment": {
+        "why": "The kept tile-8 report recorded a 16-query tile as the next lever: it is still L1-resident at head_dim 128 (8 KiB) and halves the value-row re-streams per 128-query chunk.",
+        "benefits": "If pass-2 value-row traffic matters, attention improves again with bit-identical output and no new flag.",
+        "risks": "contract: ids and fidelity must stay bit-identical; dependency: block attention kernel only; concurrency: per-head stack scratch grows from 4 to 8 KiB; state: larger stack frame, fewer tiles.",
+        "mitigation": "Same-source tile-8 vs tile-16 binaries, alternating pairs at 2049/4081 on f16 and f32, ids parity, block differential, 146 tests, fidelity, revert on no consistent win."
+      },
+      "plan_digest": "9c76710d55d6034ba9474978f97e5f2bb64f64fab14dad575018ead97a2ec20a"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE-16",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] REJECTED: 16-query value tile; attention tile16/tile8 median 0.962 at 2049 f16 (4 pairs), 0.890 at 4081 f16 (3 pairs), 0.927 across 7 pairs; ids identical 7/7; reverted to tile 8; matvec favored tile16 in 3/4 2049 pairs so not a window bias; 146/146, 4/4; checklists: passed; log + negative-results report section 4",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794159629.4114745,
+      "timestamp_str": "2026-11-08 20:40:29",
+      "agent": "commandcode:value-tile16"
+    },
+    {
+      "task_id": "TGE-VALUE-TILE-16",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-VALUE-TILE-16' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794159629.7802067,
+      "timestamp_str": "2026-11-08 20:40:29",
+      "agent": "commandcode:value-tile16"
     }
   ]
 }
