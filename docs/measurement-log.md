@@ -3908,3 +3908,16 @@ Before: `attention_block_head_avx2` converted every f16 K/V row from half to flo
 5/6 pairs at 2048 and 3/4 at 4096 favor the hoist; the median is the claim. Fidelity at 399 positions is unchanged: f16 mean KL 3.252e-07, worst 2.709e-05, top-1 399/399; f32 stays 1.020e-11 / 399/399. The block-attention differential test passes.
 
 Also measured and reverted this cycle: adaptive speculative depth/cooldown (8 pairs, median forward ratio 1.006), 256-row prefill chunks (2048 0.946x/0.976x; 4096 1.086x/0.996x), and a Q4_K scale-metadata cache (6-thread 1.16-1.37x, default 16-thread 0.945-1.037x). Details: `reports/idea-cycle-negative-results-2026-11-08.md`. Tests 146/146, `aikit.py check aegean-tge` 4/4.
+
+## 2026-11-08 - Block prefill attention: 8-query value-accumulation tile (kept)
+
+Before: the value pass of `attention_block_head_avx2` held every query's accumulator in `args.out`, so a 128-query chunk kept 128 x head_dim floats live (64 KiB at head_dim 128, 32 KiB at 64) — past L1. Each key iteration read and wrote the full set. After: the pass runs in 8-query tiles whose accumulators (8 x head_dim, 2-4 KiB) live in an aligned stack buffer and are copied to the output when the tile finishes. Key order per query and the FMA order are unchanged, so the result is bit-identical. The trade is re-streaming each value row once per tile instead of once per key.
+
+| prompt / KV | pairs | attention ratio (median) | prefill ratio (median) | ids |
+|---|---:|---|---:|---|
+| 2049 / f16 | 3 | 1.690, 1.986, 1.319 -> **1.690** | 1.304, 1.240, 0.785 | identical 3/3 |
+| 2049 / f32 | 3 | 1.327, 1.576, 1.645 -> **1.576** | 1.118, 1.050, 1.156 -> **1.118** | identical 3/3 |
+| 4081 / f16 | 2 | 2.409, 1.774 -> **2.09** | 1.546, 1.128 | identical 2/2 |
+| 4081 / f32 | 2 | 1.679, 2.333 -> **2.006** | 1.180, 1.443 | identical 2/2 |
+
+Attention is faster in 10/10 pairs; the matvec phase is untouched and drifted 0.71-1.34x across the same runs, so the total-prefill ratios move with the window and the attention phase is the attributable number. Median total prefill is about 1.14x at 2049 and 1.31x at 4081. Fidelity is exactly the pre-change values: f32 mean KL 1.020e-11, f16 3.252e-07, top-1 399/399 both; the block-attention differential test passes. A temporary `TGE_GQA_CHUNKS` decode override left in `src/models/qwen2.cpp` by a prior session was dropped before the commit (inert, no report or ledger trace). Tests 146/146, `aikit.py check aegean-tge` 4/4. Report: `reports/idea-invented-value-tile-keep.md`.
