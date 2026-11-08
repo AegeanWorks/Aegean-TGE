@@ -50,7 +50,22 @@ Ids identical throughout. The 4096 median is ~1.04x, below the keep bar, and the
 
 **Why**: the precompute is a serial per-row pass; with 16 prefill threads the extra metadata traffic and scalar unpack work compete with the dot instead of hiding under it. The 6-thread pool has enough headroom per worker to amortize it. The default is 16 prefill threads, so the cache is not shippable. Reopen only with a vectorized metadata prepack that wins at 16 threads.
 
-## 4. Exact commands (selection)
+## 4. 16-query value tile - KILLED (8-query tile stays)
+
+**Idea**: the kept 8-query value tile keeps its accumulators in L1 (4 KiB at head_dim 128) but re-streams each value row 16 times per 128-query chunk. A 16-query tile is still L1-resident (8 KiB) and halves that to 8 streams.
+
+**What happened**: tile-8 and tile-16 binaries (same source except `kValueTile`) were run in alternating pairs on Llama-3.2-3B-Q4_K_M, `--threads 6 --gpu off`, n=2. Attention ratios below are tile-8 time / tile-16 time, so >1 favors tile-16:
+
+| prompt / KV | pairs | attention ratio (tile16 vs tile8) | ids |
+|---|---|---|---|
+| 2049 / f16 | 4 | 1.056, 0.927, 0.997, 0.845 -> **0.962** | identical 4/4 |
+| 4081 / f16 | 3 | 1.022, 0.890, 0.836 -> **0.890** | identical 3/3 |
+
+Median 0.927 across seven pairs. In the 2049 pairs the untouched matvec phase actually favored the tile-16 arm in 3/4 (1.051-1.109), so the attention shortfall is not a uniform window bias. The predicted row-traffic saving does not pay for the larger accumulator footprint.
+
+**Verdict**: revert to tile 8. Tests 146/146 after the revert; no source change shipped. Detail in `docs/measurement-log.md`.
+
+## 5. Exact commands (selection)
 
 ```text
 # adaptive spec: 8 interleaved fixed-6 vs adaptive pairs on Llama-3.2-3B Q4_K_M

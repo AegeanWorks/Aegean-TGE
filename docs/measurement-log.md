@@ -3921,3 +3921,14 @@ Before: the value pass of `attention_block_head_avx2` held every query's accumul
 | 4081 / f32 | 2 | 1.679, 2.333 -> **2.006** | 1.180, 1.443 | identical 2/2 |
 
 Attention is faster in 10/10 pairs; the matvec phase is untouched and drifted 0.71-1.34x across the same runs, so the total-prefill ratios move with the window and the attention phase is the attributable number. Median total prefill is about 1.14x at 2049 and 1.31x at 4081. Fidelity is exactly the pre-change values: f32 mean KL 1.020e-11, f16 3.252e-07, top-1 399/399 both; the block-attention differential test passes. A temporary `TGE_GQA_CHUNKS` decode override left in `src/models/qwen2.cpp` by a prior session was dropped before the commit (inert, no report or ledger trace). Tests 146/146, `aikit.py check aegean-tge` 4/4. Report: `reports/idea-invented-value-tile-keep.md`.
+
+## 2026-11-08 - 16-query value tile vs the shipped 8-query tile (rejected)
+
+The kept tile-8 report recorded a 16-query tile as the follow-up: still L1-resident at head_dim 128 (8 KiB) and half the value-row re-streams per 128-query chunk. Tile-8 and tile-16 binaries (same source except `kValueTile`) were run in alternating pairs on Llama-3.2-3B-Q4_K_M, `--threads 6 --gpu off`, n=2. Ratios are tile-8 time / tile-16 time, so >1 favors tile-16.
+
+| prompt / KV | pairs | attention ratio (tile16 vs tile8) | ids |
+|---|---:|---|---|
+| 2049 / f16 | 4 | 1.056, 0.927, 0.997, 0.845 -> **0.962** | identical 4/4 |
+| 4081 / f16 | 3 | 1.022, 0.890, 0.836 -> **0.890** | identical 3/3 |
+
+Median 0.927 across seven pairs: the 16-query tile is slower. The predicted row-traffic saving does not pay for the larger accumulator footprint. In the 2049 pairs the untouched matvec phase favored the tile-16 arm in 3/4 (1.051-1.109), so the attention shortfall is not a uniform window bias. Reverted to tile 8; tests 146/146. Details: `reports/idea-cycle-negative-results-2026-11-08.md` §4.
