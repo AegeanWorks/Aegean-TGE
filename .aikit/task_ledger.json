@@ -1,95 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-CHUNK128",
+    "task_id": "TGE-F16-HOIST",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794143146.4300628,
-    "owner": "opencode:chunk128",
-    "started_by": "opencode:chunk128",
+    "updated_at": 1794150620.0815897,
+    "owner": "opencode:f16-hoist",
+    "started_by": "opencode:f16-hoist",
     "continuations": [],
-    "completed_at": 1794143146.6143544
+    "completed_at": 1794150620.696499
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] GQA chunks mixed: attn/mv 0.559/0.531/0.504 for 2/3/4 chunks (5.3%/10.9% faster), raw decode inside noise, ids identical; keep default 2, candidate 4 for quiet retest; 145/145, 4/4; report reports/idea-invented-gqa-chunks-mixed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794126385.3438826,
-      "timestamp_str": "2026-11-08 11:26:25",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-GQA-CHUNKS' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794126385.6845899,
-      "timestamp_str": "2026-11-08 11:26:25",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS2",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] GQA 4-chunk retest at 255 tokens: env override, two 4000/n256 pairs, attn/mv control, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794129060.4294481,
-      "timestamp_str": "2026-11-08 12:11:00",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 47 could not resolve decode over 63-token samples; a 4x longer sample should.",
-        "benefits": "Decides the queued default change with decode-level evidence.",
-        "risks": "contract: ids; dependency: GQA schedule; concurrency: 32 tasks; state: chunk formula + env.",
-        "mitigation": "Interleaved pairs, matvec-normalized attention, id parity, full revert."
-      },
-      "plan_digest": "fb33c53332051fa9609de61843c3d20792f7c3d7ac770e023ce15857411c88f4"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS2",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] 4-chunk confirmed: decode 1.045x/1.251x, attn/mv 0.482->0.421 and 0.479->0.459, ids identical; 6/6 observations favor 4 chunks; keep as default candidate; 145/145, 4/4; report reports/idea-invented-gqa-chunks-confirm.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794129060.8338373,
-      "timestamp_str": "2026-11-08 12:11:00",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS2",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-GQA-CHUNKS2' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794129061.1854448,
-      "timestamp_str": "2026-11-08 12:11:01",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-LLAMA-COMPARE-2",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] TGE vs llama.cpp re-comparison: shipped baseline + validated stack, ABBA at 512/2048, report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794131699.0170476,
-      "timestamp_str": "2026-11-08 12:54:59",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Fresh side-by-side after the idea loop; the shipped tree is unchanged, so the stack arm prices what the validated components deliver.",
-        "benefits": "Tells whether the optimized configuration closes the llama gap.",
-        "risks": "contract: none (measurement); dependency: five spike switches; concurrency: box load; state: code reverted.",
-        "mitigation": "ABBA rounds, same-window ratios, load warning, full revert."
-      },
-      "plan_digest": "f2873b80a6f95c422071e102874a74240f2ee948803cbe59c5fed00dd666425f"
-    },
     {
       "task_id": "TGE-LLAMA-COMPARE-2",
       "phase": "in_progress",
@@ -266,6 +188,84 @@
       "timestamp": 1794143146.6143558,
       "timestamp_str": "2026-11-08 16:05:46",
       "agent": "opencode:chunk128"
+    },
+    {
+      "task_id": "TGE-SPEC-ADAPT",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/4] Plan: adaptive greedy speculation depth (2-6 rows from the last accepted prefix) with same-binary fixed-depth A/B and id/fidelity gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794143606.6783755,
+      "timestamp_str": "2026-11-08 16:13:26",
+      "agent": "opencode:spec-adapt",
+      "impact_assessment": {
+        "why": "Story/prose speculation measured 0.94x at 1.17 accepted/step because every verify pays six rows; repetitive prompts hit 5-6/step and must keep depth 6.",
+        "benefits": "Recover the prose regression while retaining periodic/code speculation gains; less wasted verifier work per accepted token.",
+        "risks": "contract: token ids must stay identical; dependency: existing verify_draft count support 1-6; concurrency: prefill pool; state: adaptive depth + fixed-depth env gate.",
+        "mitigation": "Same-binary A/B, multiple prompt families, ids parity vs no-spec and fixed-6, full tests and 4/4 gates, measurement log entry."
+      },
+      "plan_digest": "a9f8df64563a28b61a7313a2bf5f97ffa3696db17cccfb2856ef8a8ab05d1d32"
+    },
+    {
+      "task_id": "TGE-SPEC-ADAPT",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[2/2] KILLED: adaptive depth + cooldown median forward ratio 1.006 across 8 interleaved pairs, ids identical; reverted with negative-results report; 146/146; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794150551.0230293,
+      "timestamp_str": "2026-11-08 18:09:11",
+      "agent": "opencode:spec-adapt"
+    },
+    {
+      "task_id": "TGE-SPEC-ADAPT",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-SPEC-ADAPT' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794150551.1860392,
+      "timestamp_str": "2026-11-08 18:09:11",
+      "agent": "opencode:spec-adapt"
+    },
+    {
+      "task_id": "TGE-F16-HOIST",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/2] Plan: hoist f16 K/V row widening out of the query loop in block prefill attention; same values and accumulation order, 2048/4096 f16 A/B",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794150551.3542783,
+      "timestamp_str": "2026-11-08 18:09:11",
+      "agent": "opencode:f16-hoist",
+      "impact_assessment": {
+        "why": "Each f16 K/V row was converted once per query in a 128-query chunk, repeating the same 128 half-to-float conversions 128 times.",
+        "benefits": "Removes redundant conversion work from f16 prefill attention with bit-identical output; expected 3-7% attention.",
+        "risks": "contract: ids and fidelity must stay identical; dependency: block kernel only; concurrency: per-head scratch in parallel head tasks; state: stack row buffer + heap fallback.",
+        "mitigation": "Block differential, fidelity f16/f32, six 2048 pairs and four 4096 pairs, ids parity, full gates."
+      },
+      "plan_digest": "4f1565af179ba365588af40fa76ec4cd3b972e62c3bd0c9b8c0ddde00f1c29f2"
+    },
+    {
+      "task_id": "TGE-F16-HOIST",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[2/2] Kept: f16 2048 attention median 1.054x prefill 1.068x (6 pairs), 4096 attention 1.123x prefill 1.109x (4 pairs), ids identical, fidelity unchanged; 146/146, 4/4; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794150620.0815897,
+      "timestamp_str": "2026-11-08 18:10:20",
+      "agent": "opencode:f16-hoist"
+    },
+    {
+      "task_id": "TGE-F16-HOIST",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-F16-HOIST' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794150620.6965017,
+      "timestamp_str": "2026-11-08 18:10:20",
+      "agent": "opencode:f16-hoist"
     }
   ]
 }
