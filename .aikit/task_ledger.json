@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-INTEGRATE-STACK",
+    "task_id": "TGE-HISTORY-ANALYSIS",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794136247.2183912,
-    "owner": "opencode:integrate",
-    "started_by": "opencode:integrate",
+    "updated_at": 1794138648.1151567,
+    "owner": "opencode:history-analysis",
+    "started_by": "opencode:history-analysis",
     "continuations": [],
-    "completed_at": 1794136247.5797892
+    "completed_at": 1794138648.4816275
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-SPEC-KQ8D",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Spec+kq8d killed: head timer 0 ms both arms; verify uses batch_matvec float_only=true by design; ratios 0.939/1.235 are drift; spec decode 60-63% attention; 145/145, 4/4; report reports/idea-invented-spec-kq8d-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794123436.2388015,
-      "timestamp_str": "2026-11-08 10:37:16",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SPEC-KQ8D",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-SPEC-KQ8D' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794123436.4751797,
-      "timestamp_str": "2026-11-08 10:37:16",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SPEC-EQUIV",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Speculative transcript equivalence sweep: 8 prompts, divergence chase, kernel-path cause, no code change",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794123971.712745,
-      "timestamp_str": "2026-11-08 10:46:11",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 43 claimed identical ids on two prompts; a broader sweep and cause analysis protects the usage recommendation.",
-        "benefits": "Documents when spec is transcript-exact and when it is only verifier-exact.",
-        "risks": "contract: ids; dependency: shipped feature; concurrency: per-head verify; state: none.",
-        "mitigation": "Eight prompts, float-vs-kq8 cause matrix, id comparison."
-      },
-      "plan_digest": "49f9b748143b1ccef95231ac09f11efc67533203910939d20c1670f9413ba0c0"
-    },
     {
       "task_id": "TGE-IDEA-SPEC-EQUIV",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794136247.5797932,
       "timestamp_str": "2026-11-08 14:10:47",
       "agent": "opencode:integrate"
+    },
+    {
+      "task_id": "TGE-HISTORY-ANALYSIS",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/2] Analyze llama.cpp, ik_llama.cpp and vLLM commit histories for performance patterns and map them to TGE",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794138647.5842245,
+      "timestamp_str": "2026-11-08 14:50:47",
+      "agent": "opencode:history-analysis",
+      "impact_assessment": {
+        "why": "The user asked how other inference engines improved performance, to find levers TGE has not tried.",
+        "benefits": "A prioritized transfer list grounded in 10k+ commits; identifies row-interleaved quantized GEMM as the main remaining prefill lever.",
+        "risks": "contract: none (analysis only); dependency: none; concurrency: none; state: one report file.",
+        "mitigation": "Key commits and measured claims cited; no code changed; gates re-run."
+      },
+      "plan_digest": "51fd5d7c8d9e85e253e383622075092913b274ab3b5ba78215fa392760456188"
+    },
+    {
+      "task_id": "TGE-HISTORY-ANALYSIS",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[2/2] History analysis shipped: 10463 llama commits (177 CPU perf), 874 ik_llama, 500 vLLM; P1 R8 quantized prefill GEMM, P2 fusion, P3 activation quantizer; 4/4 gates; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794138648.1151567,
+      "timestamp_str": "2026-11-08 14:50:48",
+      "agent": "opencode:history-analysis"
+    },
+    {
+      "task_id": "TGE-HISTORY-ANALYSIS",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-HISTORY-ANALYSIS' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794138648.4816294,
+      "timestamp_str": "2026-11-08 14:50:48",
+      "agent": "opencode:history-analysis"
     }
   ]
 }
