@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-KQ8D-ATTN",
+    "task_id": "TGE-IDEA-KQ8D-FULLSTACK",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794114738.5325751,
+    "updated_at": 1794116295.3945496,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794114738.855617
+    "completed_at": 1794116295.5644603
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-PREFILL-BLOCK",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Prefill block attention kept: 8k attention 1.88x/1.63x, total prefill 1.44x/1.20x, ids identical (2048, 8180, 3x64); neutral at 2048; f32 KV only; 146/146 with test, 145/145 after revert, 4/4; report reports/idea-invented-prefill-block-attention-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794101249.4651031,
-      "timestamp_str": "2026-11-08 04:27:29",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PREFILL-BLOCK",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-PREFILL-BLOCK' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794101249.7120035,
-      "timestamp_str": "2026-11-08 04:27:29",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-BLOCK-F16I8",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Block prefill attention for f16/i8: tier branches, three-tier unit test, 8180 pairs per tier, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794105746.5163808,
-      "timestamp_str": "2026-11-08 05:42:26",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 33's block kernel was f32-only; f16/i8 are the memory-saving tiers and need the same traffic reduction if their working sets exceed cache.",
-        "benefits": "f16 long-context prefill gain without the f32 memory cost; i8 measured for completeness.",
-        "risks": "contract: per-tier numerics/ids; dependency: existing widen kernels; concurrency: per-head tasks; state: args tier fields + branches.",
-        "mitigation": "Three-tier unit test at 1e-4, reverse 8k pairs per tier, id parity, full revert."
-      },
-      "plan_digest": "e591a999c36d6136fa6bebe1d06b01d21cfe0251dab4f8d1c96f2a5c0a278a94"
-    },
     {
       "task_id": "TGE-IDEA-BLOCK-F16I8",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794114738.855619,
       "timestamp_str": "2026-11-08 08:12:18",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-FULLSTACK",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Full kq8d head+down+attn stack: comma scope parser, 1199-pos fidelity, boundary arm head+attn, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794116295.2228172,
+      "timestamp_str": "2026-11-08 08:38:15",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Each kq8d scope passed individually or in pairs; the question is whether all three fit the class budget.",
+        "benefits": "Defines the maximal passing kq8d set for the integration dossier.",
+        "risks": "contract: KL/top-1; dependency: three scope flags; concurrency: decode pool; state: scope parser + flags.",
+        "mitigation": "1199-position corpus, head+attn boundary arm, no speed for failing sets, full revert."
+      },
+      "plan_digest": "b04729c8580680548885e884e1c19aaa275f64660848f6ca2c5828eeb96b2ad0"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-FULLSTACK",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Full stack killed: KL 1.576e-3 passes but top-1 1167/1199 (97.33%) fails; head+attn also fails 1168/1199 (97.41%); head+down 98.00% remains maximal; 145/145, 4/4; report reports/idea-invented-kq8d-full-stack-killed.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794116295.3945496,
+      "timestamp_str": "2026-11-08 08:38:15",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-FULLSTACK",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KQ8D-FULLSTACK' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794116295.5644612,
+      "timestamp_str": "2026-11-08 08:38:15",
       "agent": "opencode:idea-loop"
     }
   ]
