@@ -3853,3 +3853,28 @@ temp `spike-mprefix` (8-seq A/B + FNV) and `spike-batchsnap`
 (MATCH gate) drivers on spike binaries, `git log/status/diff`
 throughout. Verdicts: S1 kill, S2 kill, S3 kill, S4 reject
 (not portable), S5 kill, S6 amend-and-proceed (epic-owned).
+
+## 2026-11-08 - Integration: shipped stack (q8 tail, 4 GQA chunks, block prefill; kq8d opt-in)
+
+Shipped defaults. Before/after are same-window pairs; full evidence in the cycle reports.
+
+| Change | Before | After | Verdict |
+|---|---|---|---|
+| GQA q8 value vector bound (full 128-dim head) | span-4096 kernel best 0.621-0.833 ms/call; attention/matvec 0.482-0.556 | 0.335-0.562 ms/call; attention/matvec 0.421-0.459; decode 1.059x in the matched pair | kept |
+| GQA decode chunks 2 -> 4 at span >= 1024 | attention/matvec 0.482 / 0.479; decode 2.01 / 1.99 t/s | 0.421 / 0.459; decode 2.10 / 2.49 t/s (1.045x / 1.251x) | kept |
+| Query-block prefill attention, f32 KV | 8k prefill 682.7 s / 600.9 s; attention 471.9 s / 406.9 s | 475.0 s / 501.7 s; attention 251.2 s / 249.2 s (1.88x / 1.63x); ids identical | kept |
+| Query-block prefill attention, f16 KV | 8k prefill 544.2 s / 654.6 s; attention 295.7 s / 386.3 s | 401.6 s / 430.9 s; attention 200.8 s / 211.4 s (1.47x / 1.83x); ids identical | kept |
+| Query-block prefill attention, i8 KV | 8k attention 283.5 s / 220.2 s | 276.9 s / 205.6 s (1.02x / 1.07x) | rejected, per-token path kept |
+| Integrated defaults vs HEAD, 4k prompt / 63 tokens | 2.62 t/s (HEAD binary) | 2.95 t/s (1.126x); ids identical at 4k/63 and 1024/32 | kept |
+
+Opt-in decode scopes (`--kq8d`, default off):
+
+| Scope | 399-pos KL / top-1 | 2,399-pos KL / top-1 | Speed | Verdict |
+|---|---|---|---|---|
+| head | 1.874e-4 / 393/399 | 1.915e-4 / 98.83% | head matvec 3.3-3.6x; decode 1.29x at 4k / 63 tok | kept opt-in |
+| head,down | 9.711e-4 / 390/399 | 7.874e-4 / 97.67% (f16 97.79%) | decode 1.29x at 4k; down +10-36% solo | kept opt-in |
+| head,down,attn | 1.576e-3 / 1,167/1,199 (97.33%) | - | - | rejected: top-1 below the 97.6% bar |
+
+`--kq8d` is documented in `tge generate --help`, `tge fidelity --help`, the README and ADR-009. The integrated flags reproduce the spike numbers exactly on the 399-position corpus (off 1.020e-11/399, head 1.874e-4/393, head+down 9.711e-4/390).
+
+Tests 146/146 (new block-attention differential), `aikit.py check aegean-tge` 4/4.

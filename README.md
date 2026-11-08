@@ -132,9 +132,13 @@ aegean-tge/
 | Continuous batching, `bench continuous` | 8 × 32: 69.0 t/s at an 8-token prompt vs 62.3 at 1 and 42.2 sessions; ids identical; 4 slots, mixed prompt+decode |
 | GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
 | f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
+| Decode defaults (q8 full tail + 4 GQA chunks) | 4k prompt, 63 tokens: 2.62 -> 2.95 t/s (1.13x); attention phase 4-13% faster; ids identical |
+| Block prefill attention (f32/f16 KV) | 8k prompt: prefill 682.7 -> 475.0 s and 600.9 -> 501.7 s (1.44x / 1.20x), attention 1.63-1.88x; ids identical |
+| kq8d opt-in, `--kq8d head` | f32 KV: mean KL 1.874e-4, top-1 393/399 at 399 positions; 2,399 positions top-1 98.83%; head matvec 3.3-3.6x |
+| kq8d opt-in, `--kq8d head,down` | f32 KV: mean KL 9.711e-4, top-1 390/399 at 399 positions; 2,399 positions top-1 97.67%; default off |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 123 cases, all passing |
+| Tests | 146 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
@@ -171,12 +175,27 @@ sequential decode agree. It engages for greedy decoding (with or without
 repeat penalty — penalized positions verify against the penalized argmax
 with the same history a sequential decode would see, so ids stay
 byte-identical) and for temperature-only sampling (no top-k/p, no min-p;
-repeat penalty allowed — each position is accepted against the penalized
+repeat penalty allowed - each position is accepted against the penalized
 distribution, preserving it exactly); other sampling cuts fall back to
 single-token decoding. Measured: 1.66-2.00x greedy on a story prompt with
 identical ids, 2.03x sampled at temp 0.1 on repetitive text, 1.88x greedy
 with penalty; sampling-heavy settings are bounded by the softmax cost
-(see the log). `--vnni` selects the AVX-VNNI batch kernels with one activation
+(see the log). Prefill attention for f32/f16 KV runs as a query-block
+kernel: one K/V row feeds the whole 64-token chunk instead of one query,
+which is neutral below ~2k and 1.6-2.3x on the attention phase at 8k
+(ids identical in every test; i8 KV stays on the per-token path because
+its 8k working set is cache-resident). Decode defaults also use the full
+128-dimension vector tail for the i8 value scan and four GQA history
+chunks per KV head above 1k positions. `--kq8d S` is the opt-in lossy
+decode tier: `head` routes the 308 MiB LM-head projection through the
+integer kq8d row kernel, `down` does the same for the FFN down
+projection, `head,down` enables both; the default is off. On f32 KV the
+399-position fidelity is 1.874e-4 mean KL / 393-399 top-1 for `head` and
+9.711e-4 / 390-399 for `head,down`; at 2,399 positions the top-1 is
+98.83% and 97.67% respectively. The gain is decode-only (head matvec
+3.3-3.6x, end-to-end decode about 1.3x at 4k); it changes near-tie
+logits, so it is off by default and priced by `tge fidelity --kq8d`.
+`--vnni` selects the AVX-VNNI batch kernels with one activation
 quantization per distinct vector; it lifts prefill 14-19 percent on the best
 run at the cost of a measured 1.6e-3 KL and 12/497 top-1 flips, so the default
 stays f32 (`--vnni` needs AVX-VNNI). `--kv f16` stores the KV cache as IEEE
