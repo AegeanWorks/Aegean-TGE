@@ -156,8 +156,9 @@ projections with biases, NeoX rotary embedding, grouped-query attention with a
 KV cache, SwiGLU feed-forward, and the output projection.
 
 It exists to make the speed claim measurable rather than to be the finished
-model layer. It is deliberately narrow: one token at a time, greedy sampling, no
-tokenizer, no batching, 2048-token context.
+model layer. The shipped engine runs a full GGUF model with a tokenizer, text
+and id prompts, sampling, continuous batching, and a 4096-token default context
+(up to 32768).
 
 Two correctness details that are easy to get wrong and were not:
 
@@ -192,10 +193,12 @@ every weight once, so processing P tokens one at a time reads them P times. The
 kernel is the same data in the same layout, folded over four activation rows
 before the weight block is dropped.
 
-`Qwen2::prefill` runs a prompt in 64-token chunks. Chunk size is a cache
-decision, not a numerical one: the batch kernel re-reads the activation rows once
-per output row, so the chunk has to stay resident. Attention still runs per
-token, because every token has a different causal prefix.
+`Qwen2::prefill` runs a prompt in 128-token chunks up to 4096 prompt tokens and
+64 above. Chunk size is a cache decision, not a numerical one: the batch kernel
+re-reads the activation rows once per output row, so the chunk has to stay
+resident. Attention uses the query-block kernel for f32/f16 KV, where one K/V
+row feeds the whole chunk; i8 KV keeps the per-token path because its working
+set stays cache-resident.
 
 `models::sample_token` draws from the logits with temperature, top-k, top-p,
 min-p and a repetition penalty. Defaults are greedy, which is what every
@@ -213,11 +216,12 @@ to produce once and reuse across every token in a batch.
 in the same file, so assuming any single layout for the embedding table silently
 decodes garbage.
 
-`models::Tokenizer` converts both ways. GGUF stores vocabulary entries in the
-GPT-2 byte-level representation, so decoding is a table lookup per character.
-Encoding runs the other direction: split the text into pre-tokens, map each byte
-onto the byte-level alphabet, then repeatedly apply the lowest-ranked adjacent
-merge from `tokenizer.ggml.merges`.
+`models::Tokenizer` converts both ways for the two GGUF families. GPT-2/BPE
+entries use the byte-level alphabet and the lowest-ranked adjacent merge from
+`tokenizer.ggml.merges`. SentencePiece entries use merge-rank scores with a
+dummy U+2581 prefix and `<0xNN>` byte fallback. Decoding inverts the byte
+alphabet for BPE and maps U+2581 to space for SPM; CONTROL pieces are omitted
+from text output, USER_DEFINED pieces are printed.
 
 Pre-tokenization is the approximate part. It implements the split rules
 procedurally — contractions, optional leading space with a letter run, single

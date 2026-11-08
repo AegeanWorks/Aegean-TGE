@@ -3945,3 +3945,25 @@ The 8192-token chunk rule (64 rows above 4096) was chosen before the value tile,
 | 4 | 259.8 → 302.5 | 1.164 | 152.1 → 174.1 | 92.1 → 111.0 | identical |
 
 Median 0.958, geometric mean 0.940, but the spread is inside the drift: the identical 64-row arm's matvec phase ranged 152.1-288.9 s (1.90x) across the session, and the phase ratios disagree within pairs. The isolated kernel is the reliable datum: `bench batch --format q4k --kernel kq8 --repeat 10` gives 3.462 ms / 348.9 GFLOPS at 64 tokens vs 7.199 ms / 335.6 GFLOPS at 128 on 3072x3072 (64 is 3.8% better per token), and 9.255 vs 18.559 ms (equal per token) on 8192x3072. Per-token matvec throughput is flat-to-worse at 128, so the chunk count is not the lever. Kept the 64-row cap; ids identical 4/4, tests 146/146 after the revert. Details: `reports/idea-cycle-negative-results-2026-11-08.md` §5.
+
+## 2026-11-08 - State-machine hardening: flags, guards and observability (kept)
+
+Before/after are observable behavior on the same model and flags; no arithmetic or kernel path changed.
+
+| Behavior | Before | After |
+|---|---|---|
+| `--kv auto --kv i8` (generate, fidelity, both benches) | earlier `auto` won; i8 ignored | i8; last flag wins in all four parsers |
+| `--kv auto --kv f32` in fidelity | resolved auto (f16) | f32 |
+| `--top-p 2` | process abort after load + prefill | exit 2 before load, names `--top-p` |
+| `--sparse --kv i8` | exit 2 after the model load (two loads in fidelity) | exit 2 before load |
+| `info --json` | CPU object only | CPU + memory, budget/pools, kernels, threads, gpu, auto rules |
+| generate/fidelity output | resolved schedule invisible | one `resolved :` line (KV + source, attention, threads, kernel, GPU, speculation) |
+| `--speculative --temp 0.8 --top-p 0.9` | speculation silently off | `speculation=disabled (sampling cuts)` in the resolved line |
+| `bench --rows 8` / dangling value / no args | fell into gemm, swallowed or stdout usage | named error on stderr, exit 2 |
+| `generate --help` | `'--help' needs a value` | focused usage, exit 0 |
+| Stop ids | Qwen BOS rule case-sensitive; non-numeric id -> token 0 | lowercased rule; non-integer rejected; empty set warns |
+| `kq8` on a non-AVX2 CPU | unconditional AVX2 call | effective gate; batch dispatcher keeps the float kernel |
+| forged GGUF tensor byte size | wrapped to a small size and accepted | rejected before multiplication |
+| continuous bench first token | decoded one extra token past EOS / `tokens=1` | finishes at admission; prompt+decode checked vs context |
+
+Tests 146 -> **158 cases, 0 failed**. Fidelity at 399 positions is unchanged: f32 mean KL 1.020e-11, worst 2.330e-10, top-1 399/399; f16 mean 3.252e-07, worst 2.709e-05, top-1 399/399. `aikit.py check aegean-tge` 4/4 (test, hygiene, guidelines, secrets). Report: `reports/state-machine-hardening-2026-11-08.md`.
