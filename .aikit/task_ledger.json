@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-CHUNK8K-RETEST",
+    "task_id": "TGE-STATE-HARDENING",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794162847.075645,
-    "owner": "commandcode:chunk8k",
-    "started_by": "commandcode:chunk8k",
+    "updated_at": 1794165243.3838139,
+    "owner": "commandcode:state-hardening",
+    "started_by": "commandcode:state-hardening",
     "continuations": [],
-    "completed_at": 1794162847.422554
+    "completed_at": 1794165243.8842163
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-Q4K-R2G",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] Killed: median 0.99x (0.999/0.985/1.087/0.932), bit-exact; Q4_K dot is madd-chain bound; repacked formats/AVX-512 needed; 146/146, 4/4; checklists: passed; report reports/idea-invented-q4k-r2-gemm-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794139127.6429057,
-      "timestamp_str": "2026-11-08 14:58:47",
-      "agent": "opencode:q4k-r2g"
-    },
-    {
-      "task_id": "TGE-Q4K-R2G",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-Q4K-R2G' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794139127.8544488,
-      "timestamp_str": "2026-11-08 14:58:47",
-      "agent": "opencode:q4k-r2g"
-    },
-    {
-      "task_id": "TGE-CHUNK128",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Span-aware prefill chunk: 128 rows up to 4096 prompt tokens, 64 above; A/B at 2048/4096/8180 with block attention",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794143146.2285347,
-      "timestamp_str": "2026-11-08 16:05:46",
-      "agent": "opencode:chunk128",
-      "impact_assessment": {
-        "why": "Chunk 64 was measured as a 2048 bottleneck pre-block; 128 was never retested with the shipped block kernel.",
-        "benefits": "1.18-1.49x prefill at 2048/4096, no long-context regression.",
-        "risks": "contract: ids; dependency: batch buffers sized for 128; concurrency: prefill pool; state: chunk limit + buffer rows.",
-        "mitigation": "Interleaved pairs at three lengths, ids parity, repeat determinism, full gates."
-      },
-      "plan_digest": "de16d04290d2e7dbaced3a29375a6f1503280a8ebcc97dee496ba967ba416c52"
-    },
     {
       "task_id": "TGE-CHUNK128",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794162847.422556,
       "timestamp_str": "2026-11-08 21:34:07",
       "agent": "commandcode:chunk8k"
+    },
+    {
+      "task_id": "TGE-STATE-HARDENING",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/5] Plan: implement the PASS state-machine proposals P01-P11: KV precedence, pre-load validation, sampling error boundary, resolved-state report, info --json, stop-set guards, ISA gates, GGUF overflow checks, CLI error hygiene, docs, continuous-batch admission",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794164113.1611679,
+      "timestamp_str": "2026-11-08 21:55:13",
+      "agent": "commandcode:state-hardening",
+      "impact_assessment": {
+        "why": "The implicit state-machine audit found silent precedence leaks, missing end-of-generation ids, unguarded ISA calls, and failures that abort after a full model load; these hurt UX, DX and AX without any measured benefit.",
+        "benefits": "Deterministic flag semantics, fail-before-load errors, machine-readable info, and honest resolved state; no arithmetic or performance defaults change.",
+        "risks": "contract: exit codes/output lines; dependency: stdlib/git only; concurrency: none in the changed paths; state: CLI parsers, config read, GGUF bounds, docs.",
+        "mitigation": "Pure helpers with failing-first unit tests, append-only output, full 146+ suite, fidelity unchanged, aikit check 4/4, local commits then authorized push."
+      },
+      "plan_digest": "cf8ecde5616375daebbe8da9404ba46fee759abf510946fd00bc9b5a7cd94deb"
+    },
+    {
+      "task_id": "TGE-STATE-HARDENING",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[5/5] Implemented PASS P01-P11: last-wins --kv in all four parsers, pre-load flag validation, sampling validation + error boundary, resolved-state line, complete info JSON, stop-set case/type guards, ISA effective gates, wrap-safe GGUF tensor checks, CLI help/error hygiene, docs corrections, continuous admission checks; 158/158 tests, fidelity f32 1.020e-11 / f16 3.252e-7 with 399/399, 4/4 gates; checklists: passed; report reports/state-machine-hardening-2026-11-08.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794165243.3838139,
+      "timestamp_str": "2026-11-08 22:14:03",
+      "agent": "commandcode:state-hardening"
+    },
+    {
+      "task_id": "TGE-STATE-HARDENING",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-STATE-HARDENING' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794165243.8842175,
+      "timestamp_str": "2026-11-08 22:14:03",
+      "agent": "commandcode:state-hardening"
     }
   ]
 }
