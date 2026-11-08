@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-VALUE-TILE-16",
+    "task_id": "TGE-CHUNK8K-RETEST",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794159629.4114745,
-    "owner": "commandcode:value-tile16",
-    "started_by": "commandcode:value-tile16",
+    "updated_at": 1794162847.075645,
+    "owner": "commandcode:chunk8k",
+    "started_by": "commandcode:chunk8k",
     "continuations": [],
-    "completed_at": 1794159629.7802055
+    "completed_at": 1794162847.422554
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-HISTORY-ANALYSIS",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] History analysis shipped: 10463 llama commits (177 CPU perf), 874 ik_llama, 500 vLLM; P1 R8 quantized prefill GEMM, P2 fusion, P3 activation quantizer; 4/4 gates; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794138648.1151567,
-      "timestamp_str": "2026-11-08 14:50:48",
-      "agent": "opencode:history-analysis"
-    },
-    {
-      "task_id": "TGE-HISTORY-ANALYSIS",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-HISTORY-ANALYSIS' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794138648.4816294,
-      "timestamp_str": "2026-11-08 14:50:48",
-      "agent": "opencode:history-analysis"
-    },
-    {
-      "task_id": "TGE-Q4K-R2G",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Two-row Q4_K prefill GEMM prototype: share Q8_K chunks across rows, differential test + best-of-3 on 3072x3072x64",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794139127.4604788,
-      "timestamp_str": "2026-11-08 14:58:47",
-      "agent": "opencode:q4k-r2g",
-      "impact_assessment": {
-        "why": "History analysis identified row-interleaved quantized GEMM as the main untried CPU prefill lever.",
-        "benefits": "A 1.3x kernel would justify model wiring; a tie closes the AVX2 tiling line with evidence.",
-        "risks": "contract: bit-exact vs shipped kernel; dependency: existing Q4_K/Q8_K math; concurrency: row-group bands; state: one prototype kernel + temporary bench.",
-        "mitigation": "Differential max-diff check, four best-of-3 runs, full revert."
-      },
-      "plan_digest": "886bc4cde020d5ef639fd479deb2761957276cda79d121041f68e5a644aae2cb"
-    },
     {
       "task_id": "TGE-Q4K-R2G",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794159629.7802067,
       "timestamp_str": "2026-11-08 20:40:29",
       "agent": "commandcode:value-tile16"
+    },
+    {
+      "task_id": "TGE-CHUNK8K-RETEST",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan: retest 128-row prefill chunks vs the shipped 64-row cap above 4096 after the value tile; 8161-token f16 pairs, total prefill and phase ratios, ids parity; revert if 64 still wins",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794159707.5410683,
+      "timestamp_str": "2026-11-08 20:41:47",
+      "agent": "commandcode:chunk8k",
+      "impact_assessment": {
+        "why": "The 8192-token chunk rule was decided before the value tile, when 128-row chunks lost 7-11% to attention working-set cost; the tile removed half that working set, and 128 halves the weight passes.",
+        "benefits": "If 128 now wins at 8k, long-prompt prefill gets the 1.18-1.49x chunk benefit that already applies at 2048/4096, with bit-identical ids.",
+        "risks": "contract: ids and fidelity must stay bit-identical; dependency: buffers are already sized for 128 rows; concurrency: prefill pool; state: one chunk-selection branch.",
+        "mitigation": "Same-source 64 vs 128 binaries, alternating pairs at 8161 tokens on f16, attention/matvec phase split, ids parity, 146 tests, fidelity, revert on no consistent win."
+      },
+      "plan_digest": "f201176e42e15bdeed68693149e2a3f9f6747f96c2091a9eded235b437d7fc40"
+    },
+    {
+      "task_id": "TGE-CHUNK8K-RETEST",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] INCONCLUSIVE, 64 kept: 128 vs 64 at 8161 f16, four alternating pairs total ratios 1.085/0.832/0.743/1.164 (median 0.958) but identical-arm matvec drifted 152-289 s (1.90x); kernel bench 348.9 vs 335.6 GFLOPS at 64/128 tokens (64 3.8% better, FFN equal), so 128 does not reduce per-token matvec work; ids identical 4/4; reverted; 146/146, 4/4; checklists: passed; log + negative-results section 5",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794162847.075645,
+      "timestamp_str": "2026-11-08 21:34:07",
+      "agent": "commandcode:chunk8k"
+    },
+    {
+      "task_id": "TGE-CHUNK8K-RETEST",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-CHUNK8K-RETEST' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794162847.422556,
+      "timestamp_str": "2026-11-08 21:34:07",
+      "agent": "commandcode:chunk8k"
     }
   ]
 }
