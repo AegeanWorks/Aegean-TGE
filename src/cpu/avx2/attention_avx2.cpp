@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -779,64 +780,85 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
     }
   }
 
-  // Pass 2: value accumulation. One value row feeds every query in the block.
-  for (int token = 0; token < tokens; ++token) {
-    float* accumulator = args.out +
-                         static_cast<std::size_t>(token) * args.query_stride +
-                         head_offset;
-    int index = 0;
-    for (; index + 8 <= head_dim; index += 8) {
-      _mm256_storeu_ps(accumulator + index, _mm256_setzero_ps());
-    }
-    for (; index < head_dim; ++index) {
-      accumulator[index] = 0.0F;
-    }
+  // Pass 2: value accumulation. One value row feeds a tile of queries, while
+  // the tile's accumulators stay in L1 (8 x head_dim floats) instead of the
+  // full token-block working set (128 x head_dim, ~64 KiB). Key order per
+  // query is unchanged, so the result is bit-identical.
+  constexpr int kValueTile = 8;
+  alignas(32) float stack_tile[kValueTile * kStackHeadDim];
+  std::vector<float> heap_tile;
+  float* tile_acc = stack_tile;
+  if (head_dim > kStackHeadDim) {
+    heap_tile.resize(static_cast<std::size_t>(kValueTile) * head_dim);
+    tile_acc = heap_tile.data();
   }
-  for (int key_index = 0; key_index <= last_key; ++key_index) {
-    const std::size_t row =
-        static_cast<std::size_t>(key_index) * args.kv_stride;
-    const float* value_f32 = nullptr;
-    const std::uint16_t* value_half = nullptr;
-    if (args.half) {
-      value_half = args.values_half + row + args.kv_head_offset;
-      widen_row(value_half);
-    } else {
-      value_f32 = args.values + row + args.kv_head_offset;
+
+  for (int tile_start = 0; tile_start < tokens; tile_start += kValueTile) {
+    const int tile_end = std::min(tokens, tile_start + kValueTile);
+    const int tile_count = tile_end - tile_start;
+    for (int index = 0; index < tile_count * head_dim; ++index) {
+      tile_acc[index] = 0.0F;
     }
-    const int first_query = std::max(0, key_index - start);
-    for (int token = first_query; token < tokens; ++token) {
-      const float weight =
-          args.scores[static_cast<std::size_t>(token) * args.score_stride +
-                      key_index];
-      if (weight == 0.0F) {
+    for (int key_index = 0; key_index <= last_key; ++key_index) {
+      const std::size_t row =
+          static_cast<std::size_t>(key_index) * args.kv_stride;
+      const float* value_f32 = nullptr;
+      const std::uint16_t* value_half = nullptr;
+      if (args.half) {
+        value_half = args.values_half + row + args.kv_head_offset;
+        widen_row(value_half);
+      } else {
+        value_f32 = args.values + row + args.kv_head_offset;
+      }
+      const int first_query =
+          std::max(tile_start, key_index - start);
+      if (first_query >= tile_end) {
         continue;
       }
-      float* accumulator = args.out +
-                           static_cast<std::size_t>(token) * args.query_stride +
-                           head_offset;
-      const __m256 w = _mm256_set1_ps(weight);
-      int index = 0;
-      if (args.half) {
-        for (; index + 8 <= head_dim; index += 8) {
-          const __m256 value = _mm256_loadu_ps(row_f32 + index);
-          _mm256_storeu_ps(accumulator + index,
-                           _mm256_fmadd_ps(w, value,
-                                           _mm256_loadu_ps(accumulator + index)));
+      for (int token = first_query; token < tile_end; ++token) {
+        const float weight =
+            args.scores[static_cast<std::size_t>(token) * args.score_stride +
+                        key_index];
+        if (weight == 0.0F) {
+          continue;
         }
-        for (; index < head_dim; ++index) {
-          accumulator[index] += weight * row_f32[index];
-        }
-      } else {
-        for (; index + 8 <= head_dim; index += 8) {
-          _mm256_storeu_ps(
-              accumulator + index,
-              _mm256_fmadd_ps(w, _mm256_loadu_ps(value_f32 + index),
-                              _mm256_loadu_ps(accumulator + index)));
-        }
-        for (; index < head_dim; ++index) {
-          accumulator[index] += weight * value_f32[index];
+        float* accumulator = tile_acc +
+                             static_cast<std::size_t>(token - tile_start) *
+                                 head_dim;
+        const __m256 w = _mm256_set1_ps(weight);
+        int index = 0;
+        if (args.half) {
+          for (; index + 8 <= head_dim; index += 8) {
+            const __m256 value = _mm256_loadu_ps(row_f32 + index);
+            _mm256_storeu_ps(
+                accumulator + index,
+                _mm256_fmadd_ps(w, value,
+                                _mm256_loadu_ps(accumulator + index)));
+          }
+          for (; index < head_dim; ++index) {
+            accumulator[index] += weight * row_f32[index];
+          }
+        } else {
+          for (; index + 8 <= head_dim; index += 8) {
+            _mm256_storeu_ps(
+                accumulator + index,
+                _mm256_fmadd_ps(w, _mm256_loadu_ps(value_f32 + index),
+                                _mm256_loadu_ps(accumulator + index)));
+          }
+          for (; index < head_dim; ++index) {
+            accumulator[index] += weight * value_f32[index];
+          }
         }
       }
+    }
+    for (int token = tile_start; token < tile_end; ++token) {
+      float* output = args.out +
+                      static_cast<std::size_t>(token) * args.query_stride +
+                      head_offset;
+      std::memcpy(output,
+                  tile_acc + static_cast<std::size_t>(token - tile_start) *
+                                 head_dim,
+                  sizeof(float) * static_cast<std::size_t>(head_dim));
     }
   }
 }
