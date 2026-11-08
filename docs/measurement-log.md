@@ -3894,4 +3894,4 @@ Before: every prompt was processed in 64-token chunks. After: 128-token chunks w
 | 8180 (pair 1) | 16.5 t/s | 14.9 t/s | 0.903x | identical |
 | 8180 (pair 2) | 17.8 t/s | 16.6 t/s | 0.934x | identical |
 
-Verdict: kept, span-aware. 128 is faster in 3/4 pairs at 2048 (median ~1.23x) and 2/2 at 4096, but 64 wins both 8192 pairs by 7-11%, so long prompts keep the old chunk. Buffers are sized for 128 rows (logits_batch and scores), which costs ~+57 MB at context 4096 and ~+114 MB at 8192; the default run at 2048 measured 26.7 t/s with repeat ids identical. Tests 146/146, 4/4 gates.
+Verdict: kept, span-aware. 128 is faster in 3/4 pairs at 2048 (median ~1.23x) and 2/2 at 4096, but 64 wins both 8192 pairs by 7-11%, so long prompts keep the old chunk. Buffers are sized for 128 rows (logits_batch and scores), which costs about +58 MB at context 4096 and +83 MB at 8192; the default run at 2048 measured 26.7 t/s with repeat ids identical. Tests 146/146, 4/4 gates.
