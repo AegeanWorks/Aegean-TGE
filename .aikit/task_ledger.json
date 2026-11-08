@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-GQA-CHUNKS2",
+    "task_id": "TGE-LLAMA-COMPARE-2",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794129060.8338373,
+    "updated_at": 1794131699.6477382,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794129061.1854424
+    "completed_at": 1794131700.1788828
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-2400",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] 2399-pos frontier: f32 head+down 7.874e-4/2343/2399 (97.666%, ~1.6 flips), f16 97.791%, f32 head-only 1.915e-4/2371 (98.833%); head-only recommended safe default; 145/145, 4/4; report reports/idea-invented-kq8d-frontier-2400-confirm.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794120599.5328734,
-      "timestamp_str": "2026-11-08 09:49:59",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-2400",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-2400' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794120599.8062875,
-      "timestamp_str": "2026-11-08 09:49:59",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-SPEC-BENCH",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Shipped speculative decoding on the standard benchmark: periodic 4096 pairs, natural prompts, ids, no code change",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794121750.8065314,
-      "timestamp_str": "2026-11-08 10:09:10",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Every loop benchmark ran without --speculative although the engine ships prompt-lookup speculation; the periodic prompt is its best case.",
-        "benefits": "Quantifies a large decode mode the benchmark ignored and sets the workload guidance.",
-        "risks": "contract: ids identical (verifier-gated); dependency: shipped feature; concurrency: per-head attention pin; state: none.",
-        "mitigation": "Two opposite-order pairs on the periodic prompt, two natural prompts, id parity."
-      },
-      "plan_digest": "020228cb5d3b76170374a94d458b741a1789ba5828e212e028bd4400099526b0"
-    },
     {
       "task_id": "TGE-IDEA-SPEC-BENCH",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794129061.1854448,
       "timestamp_str": "2026-11-08 12:11:01",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-LLAMA-COMPARE-2",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/2] TGE vs llama.cpp re-comparison: shipped baseline + validated stack, ABBA at 512/2048, report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794131699.0170476,
+      "timestamp_str": "2026-11-08 12:54:59",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Fresh side-by-side after the idea loop; the shipped tree is unchanged, so the stack arm prices what the validated components deliver.",
+        "benefits": "Tells whether the optimized configuration closes the llama gap.",
+        "risks": "contract: none (measurement); dependency: five spike switches; concurrency: box load; state: code reverted.",
+        "mitigation": "ABBA rounds, same-window ratios, load warning, full revert."
+      },
+      "plan_digest": "f2873b80a6f95c422071e102874a74240f2ee948803cbe59c5fed00dd666425f"
+    },
+    {
+      "task_id": "TGE-LLAMA-COMPARE-2",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[2/2] Comparison done: llama ahead on prefill (TGE 0.49-0.85x); stack decode reaches parity at 512 (0.98-1.06x) and 1.51x over shipped; 2048 decode unresolved (31 tok, loaded); 145/145, 4/4; report reports/llama-cpp-comparison-2026-11-08.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794131699.6477382,
+      "timestamp_str": "2026-11-08 12:54:59",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-LLAMA-COMPARE-2",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-LLAMA-COMPARE-2' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794131700.178885,
+      "timestamp_str": "2026-11-08 12:55:00",
       "agent": "opencode:idea-loop"
     }
   ]
