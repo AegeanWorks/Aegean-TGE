@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-KQ8D-DECODE-CONF",
+    "task_id": "TGE-IDEA-KQ8D-ATTN",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794111759.7595696,
+    "updated_at": 1794114738.5325751,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794111759.9865148
+    "completed_at": 1794114738.855617
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-PREFILL-CHUNK",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Prefill chunk mixed: 128 wins 2048 3/3 (median 1.376x) but ties at 8180 (0.995x); 8k prefill 69% attention; keep 64; 145/145, 4/4; report reports/idea-invented-prefill-chunk-mixed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794098235.9981859,
-      "timestamp_str": "2026-11-08 03:37:15",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PREFILL-CHUNK",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-PREFILL-CHUNK' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794098236.1624174,
-      "timestamp_str": "2026-11-08 03:37:16",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PREFILL-BLOCK",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Query-block prefill attention: f32 block kernel + head parallel dispatch, unit test vs per-token, 2048/8180 A/B, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794101249.2167573,
-      "timestamp_str": "2026-11-08 04:27:29",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "8k prefill is 69% attention and per-token keys re-read the full span; a block kernel cuts K/V traffic ~64x.",
-        "benefits": "Large long-context prefill gain if the kernel is traffic-bound; unit + id gates protect correctness.",
-        "risks": "contract: prefill numerics/ids change with summation order; dependency: f32 KV only; concurrency: per-head tasks; state: new kernel + dispatch.",
-        "mitigation": "Unit test vs attention_head_avx2, two reverse 8k pairs, three-prompt id parity, full revert."
-      },
-      "plan_digest": "75707dce62c0e91871e3b6423c9027c491d1d8db6e5f73cbe61f036561b7890b"
-    },
     {
       "task_id": "TGE-IDEA-PREFILL-BLOCK",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794111759.9865162,
       "timestamp_str": "2026-11-08 07:22:39",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-ATTN",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] kq8d attention projections: attn scope, 1199-pos fidelity, kernel bench, direct projection timer, ids, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794114738.1965387,
+      "timestamp_str": "2026-11-08 08:12:18",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 20 sampled the attn scope only at 63 positions; the projections are a large decode matvec share and deserve a large-corpus price.",
+        "benefits": "An additive opt-in scope if fidelity and projection speed hold.",
+        "risks": "contract: KL/top-1/ids; dependency: kq8d row kernel; concurrency: decode pool; state: scope flag + temp timer.",
+        "mitigation": "1199-pos corpus, L3-defeating kernel bench, direct projection timer, id parity, full revert."
+      },
+      "plan_digest": "7553ef95155114dfc938ac0225f1678c7e717aa8aa170a46b48fabc4e29850a3"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-ATTN",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] kq8d attn kept opt-in: 6.951e-4/1173/1199 (97.83%); kernel 2.91x/3.14x cold 151MB; projection 1.84x @512, 1.31x matched 1024; decode ~+5%; ids identical; 145/145, 4/4; report reports/idea-invented-kq8d-attn-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794114738.5325751,
+      "timestamp_str": "2026-11-08 08:12:18",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-ATTN",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KQ8D-ATTN' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794114738.855619,
+      "timestamp_str": "2026-11-08 08:12:18",
       "agent": "opencode:idea-loop"
     }
   ]
