@@ -3932,3 +3932,16 @@ The kept tile-8 report recorded a 16-query tile as the follow-up: still L1-resid
 | 4081 / f16 | 3 | 1.022, 0.890, 0.836 -> **0.890** | identical 3/3 |
 
 Median 0.927 across seven pairs: the 16-query tile is slower. The predicted row-traffic saving does not pay for the larger accumulator footprint. In the 2049 pairs the untouched matvec phase favored the tile-16 arm in 3/4 (1.051-1.109), so the attention shortfall is not a uniform window bias. Reverted to tile 8; tests 146/146. Details: `reports/idea-cycle-negative-results-2026-11-08.md` §4.
+
+## 2026-11-08 - 128-row chunks above 4096 retested after the value tile (inconclusive, 64 kept)
+
+The 8192-token chunk rule (64 rows above 4096) was chosen before the value tile, when a 128-query chunk's 64 KiB value-accumulator set lost 7-11%. The tile cut that set to 4 KiB, so 128 was retested. Shipped binary vs a same-source 128-everywhere binary, alternating pairs at 8161 tokens, f16 KV, Llama-3.2-3B-Q4_K_M, `--threads 6 --gpu off`, n=2. Ratios are 128/64; <1 favors 128.
+
+| pair | total 64 → 128 (s) | ratio | matvec 64 → 128 (s) | attention 64 → 128 (s) | ids |
+|---:|---|---:|---|---|---|
+| 1 | 308.8 → 335.1 | 1.085 | 170.4 → 184.5 | 121.3 → 131.7 | identical |
+| 2 | 482.1 → 401.3 | 0.832 | 288.9 → 222.3 | 173.3 → 159.2 | identical |
+| 3 | 421.5 → 313.4 | 0.743 | 257.8 → 185.8 | 144.2 → 109.6 | identical |
+| 4 | 259.8 → 302.5 | 1.164 | 152.1 → 174.1 | 92.1 → 111.0 | identical |
+
+Median 0.958, geometric mean 0.940, but the spread is inside the drift: the identical 64-row arm's matvec phase ranged 152.1-288.9 s (1.90x) across the session, and the phase ratios disagree within pairs. The isolated kernel is the reliable datum: `bench batch --format q4k --kernel kq8 --repeat 10` gives 3.462 ms / 348.9 GFLOPS at 64 tokens vs 7.199 ms / 335.6 GFLOPS at 128 on 3072x3072 (64 is 3.8% better per token), and 9.255 vs 18.559 ms (equal per token) on 8192x3072. Per-token matvec throughput is flat-to-worse at 128, so the chunk count is not the lever. Kept the 64-row cap; ids identical 4/4, tests 146/146 after the revert. Details: `reports/idea-cycle-negative-results-2026-11-08.md` §5.

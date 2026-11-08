@@ -65,7 +65,31 @@ Median 0.927 across seven pairs. In the 2049 pairs the untouched matvec phase ac
 
 **Verdict**: revert to tile 8. Tests 146/146 after the revert; no source change shipped. Detail in `docs/measurement-log.md`.
 
-## 5. Exact commands (selection)
+## 5. 128-row chunks above 4096 after the value tile - INCONCLUSIVE, 64 kept
+
+**Idea**: the 8192-token chunk rule (64 rows above 4096) was chosen before the value tile, when a 128-query chunk's 64 KiB value-accumulator set lost 7-11%. The tile cut that set to 4 KiB, so 128 might now win and halve the number of chunks.
+
+**What happened**: shipped binary (64 above 4096) vs a same-source binary with 128 everywhere, alternating pairs at 8161 tokens, f16 KV, Llama-3.2-3B-Q4_K_M, `--threads 6 --gpu off`, n=2. Ratios are 128/64; <1 favors 128.
+
+| pair | total 64 → 128 (s) | ratio | matvec 64 → 128 (s) | attention 64 → 128 (s) | ids |
+|---:|---|---:|---|---|---|
+| 1 | 308.8 → 335.1 | 1.085 | 170.4 → 184.5 | 121.3 → 131.7 | identical |
+| 2 | 482.1 → 401.3 | 0.832 | 288.9 → 222.3 | 173.3 → 159.2 | identical |
+| 3 | 421.5 → 313.4 | 0.743 | 257.8 → 185.8 | 144.2 → 109.6 | identical |
+| 4 | 259.8 → 302.5 | 1.164 | 152.1 → 174.1 | 92.1 → 111.0 | identical |
+
+Median 0.958, geometric mean 0.940, but the spread (0.743-1.164) is smaller than the drift: the identical 64-row arm's matvec phase alone ranged **152.1-288.9 s (1.90x)** across the session. The phase ratios disagree within pairs, so the model-level pairs cannot resolve a ~5% effect.
+
+The isolated kernel is the reliable datum. On the real prefill shape (`bench batch --format q4k --kernel kq8`, 10 repeats):
+
+| shape | 64 tokens | 128 tokens | per-token |
+|---|---|---:|---:|
+| 3072x3072 (attention projections) | 3.462 ms, 348.9 GFLOPS | 7.199 ms, 335.6 GFLOPS | 64 is 3.8% better |
+| 8192x3072 (FFN) | 9.255 ms, 348.0 GFLOPS | 18.559 ms, 347.1 GFLOPS | equal |
+
+Per-token throughput is flat-to-slightly-worse at 128, so halving the chunk count does not reduce the dominant matvec work. **Verdict: keep the 64-row cap.** Ids identical 4/4; tests 146/146 after the revert. Reopen only on a quiet box (identical-arm matvec spread <10%) with at least six pairs, or after a matvec kernel that scales better at 128 tokens.
+
+## 6. Exact commands (selection)
 
 ```text
 # adaptive spec: 8 interleaved fixed-6 vs adaptive pairs on Llama-3.2-3B Q4_K_M
