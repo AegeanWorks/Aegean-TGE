@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-STACK-CONFIRM",
+    "task_id": "TGE-IDEA-KQ8D-DECODE-CONF",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794110779.3834522,
+    "updated_at": 1794111759.7595696,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794110779.5776684
+    "completed_at": 1794111759.9865148
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-KQ8D-CORPUS",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] Large-corpus keep: f32 8.283e-4/1175/1199 (98.00%), f16 8.034e-4/1172 (97.75%), i8 1.093e-3/1173 (97.83%); 3/3 prompts x64 ids identical; f32 primary, f16/i8 thin; 145/145, 4/4; report reports/idea-invented-kq8d-combo-largecorpus-keep.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794092291.2591088,
-      "timestamp_str": "2026-11-08 01:58:11",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-KQ8D-CORPUS",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-KQ8D-CORPUS' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794092291.64053,
-      "timestamp_str": "2026-11-08 01:58:11",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-PREFILL-CHUNK",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Prefill chunk-size sweep: env override, 16/32/64/128/256 at 2048, 64-vs-128 at 8180, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794098235.8348284,
-      "timestamp_str": "2026-11-08 03:37:15",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "kPrefillChunk=64 was last tuned at 510 tokens; halving weight passes may help at longer prompts.",
-        "benefits": "A context-appropriate chunk default if the gain holds at 8k; otherwise keeps 64 with evidence.",
-        "risks": "contract: ids/accumulation order; dependency: batch buffers; concurrency: prefill pool; state: env override + buffer sizing.",
-        "mitigation": "Two sweep rounds, three alternating 2048 pairs, controlled reverse 8180 pair, full revert."
-      },
-      "plan_digest": "3d6c92b559c6943a61bc675217ea2a3ea280ae7c8fa01f86c4df9731e8147f04"
-    },
     {
       "task_id": "TGE-IDEA-PREFILL-CHUNK",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794110779.5776699,
       "timestamp_str": "2026-11-08 07:06:19",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DECODE-CONF",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] kq8d decode at 63 tokens/4k: head+down plumbing, two alternating pairs, ids, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794111759.5470822,
+      "timestamp_str": "2026-11-08 07:22:39",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "8k pairs had only 7 decode tokens and were unmeasurable; a 63-token sample at 4k can settle the decode gain.",
+        "benefits": "Confirms the decode component of the integration stack with a measurable sample.",
+        "risks": "contract: ids; dependency: kq8d recipes; concurrency: decode pool; state: two flags only.",
+        "mitigation": "Two alternating pairs, attention drift control, 64-token id parity, full revert."
+      },
+      "plan_digest": "b39c1257c234ee01c15d46ed8d971cf4162abbf14a88a62b02d5d8f52b6a17b6"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DECODE-CONF",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] kq8d decode confirmed: pair1 3.36->4.33 t/s (1.289x), matvec 1.470x, attention control 1.077x, ids identical; pair2 drift-normalized 1.32x; 145/145, 4/4; report reports/idea-invented-kq8d-decode-4k-confirm.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794111759.7595696,
+      "timestamp_str": "2026-11-08 07:22:39",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-KQ8D-DECODE-CONF",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-KQ8D-DECODE-CONF' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794111759.9865162,
+      "timestamp_str": "2026-11-08 07:22:39",
       "agent": "opencode:idea-loop"
     }
   ]
