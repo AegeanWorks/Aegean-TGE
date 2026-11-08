@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-Q4K-R2G",
+    "task_id": "TGE-CHUNK128",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794139127.6429057,
-    "owner": "opencode:q4k-r2g",
-    "started_by": "opencode:q4k-r2g",
+    "updated_at": 1794143146.4300628,
+    "owner": "opencode:chunk128",
+    "started_by": "opencode:chunk128",
     "continuations": [],
-    "completed_at": 1794139127.8544476
+    "completed_at": 1794143146.6143544
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-BLOCK-PROFILE",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] Block profile: value 67.8%, QK 29.5%, softmax 2.8% (2853.8 s thread-time, 12.4 effective threads); value is store-bound and structural; close the optimization line; 145/145, 4/4; report reports/idea-invented-block-profile-analysis.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794124596.789514,
-      "timestamp_str": "2026-11-08 10:56:36",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-BLOCK-PROFILE",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-BLOCK-PROFILE' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794124597.032448,
-      "timestamp_str": "2026-11-08 10:56:37",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-CHUNKS",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] GQA decode chunk tuning: env override, 2/3/4 chunk pairs at 4096/n64, ids, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794126385.0375023,
-      "timestamp_str": "2026-11-08 11:26:25",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "16 decode tasks on 6 threads leaves the last wave 2 workers idle; more chunks may balance.",
-        "benefits": "A few percent decode attention if the balance gain survives noise.",
-        "risks": "contract: ids/merge order; dependency: existing GQA schedule; concurrency: 24-32 tasks; state: chunk formula + env.",
-        "mitigation": "Interleaved pairs, matvec-normalized attention, id parity, full revert."
-      },
-      "plan_digest": "691bcd397512e15650f6990dcea9238a35dcc82c6928177fcc5b340021778e80"
-    },
     {
       "task_id": "TGE-IDEA-GQA-CHUNKS",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794139127.8544488,
       "timestamp_str": "2026-11-08 14:58:47",
       "agent": "opencode:q4k-r2g"
+    },
+    {
+      "task_id": "TGE-CHUNK128",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/2] Span-aware prefill chunk: 128 rows up to 4096 prompt tokens, 64 above; A/B at 2048/4096/8180 with block attention",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794143146.2285347,
+      "timestamp_str": "2026-11-08 16:05:46",
+      "agent": "opencode:chunk128",
+      "impact_assessment": {
+        "why": "Chunk 64 was measured as a 2048 bottleneck pre-block; 128 was never retested with the shipped block kernel.",
+        "benefits": "1.18-1.49x prefill at 2048/4096, no long-context regression.",
+        "risks": "contract: ids; dependency: batch buffers sized for 128; concurrency: prefill pool; state: chunk limit + buffer rows.",
+        "mitigation": "Interleaved pairs at three lengths, ids parity, repeat determinism, full gates."
+      },
+      "plan_digest": "de16d04290d2e7dbaced3a29375a6f1503280a8ebcc97dee496ba967ba416c52"
+    },
+    {
+      "task_id": "TGE-CHUNK128",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[2/2] Kept span-aware: 2048 3/4 pairs median ~1.23x, 4096 1.18x/1.49x, 8180 128 slower 0.90x/0.93x -> 64 above; ids identical; 146/146, 4/4; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794143146.4300628,
+      "timestamp_str": "2026-11-08 16:05:46",
+      "agent": "opencode:chunk128"
+    },
+    {
+      "task_id": "TGE-CHUNK128",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-CHUNK128' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794143146.6143558,
+      "timestamp_str": "2026-11-08 16:05:46",
+      "agent": "opencode:chunk128"
     }
   ]
 }

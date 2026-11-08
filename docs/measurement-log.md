@@ -3878,3 +3878,20 @@ Opt-in decode scopes (`--kq8d`, default off):
 `--kq8d` is documented in `tge generate --help`, `tge fidelity --help`, the README and ADR-009. The integrated flags reproduce the spike numbers exactly on the 399-position corpus (off 1.020e-11/399, head 1.874e-4/393, head+down 9.711e-4/390).
 
 Tests 146/146 (new block-attention differential), `aikit.py check aegean-tge` 4/4.
+
+## 2026-11-08 - Prefill chunk default: 128 rows up to 4096 prompt tokens (kept)
+
+Before: every prompt was processed in 64-token chunks. After: 128-token chunks when the prompt is <= 4096 tokens, 64 above. Same block-attention kernel, same accumulation order per chunk.
+
+| prompt | 64-token chunks | 128-token chunks | ratio | ids |
+|---|---|---|---|---|
+| 2048 (pair 1) | 30.2 t/s | 30.1 t/s | 0.997x | identical |
+| 2048 (pair 2) | 23.8 t/s | 32.5 t/s | 1.366x | identical |
+| 2048 (pair 3) | 13.6 t/s | 26.8 t/s | 1.971x | identical |
+| 2048 (pair 4) | 21.9 t/s | 24.0 t/s | 1.096x | identical |
+| 4096 (pair 1) | 23.1 t/s | 27.2 t/s | 1.177x | identical |
+| 4096 (pair 2) | 20.0 t/s | 29.8 t/s | 1.490x | identical |
+| 8180 (pair 1) | 16.5 t/s | 14.9 t/s | 0.903x | identical |
+| 8180 (pair 2) | 17.8 t/s | 16.6 t/s | 0.934x | identical |
+
+Verdict: kept, span-aware. 128 is faster in 3/4 pairs at 2048 (median ~1.23x) and 2/2 at 4096, but 64 wins both 8192 pairs by 7-11%, so long prompts keep the old chunk. Buffers are sized for 128 rows (logits_batch and scores), which costs ~+57 MB at context 4096 and ~+114 MB at 8192; the default run at 2048 measured 26.7 t/s with repeat ids identical. Tests 146/146, 4/4 gates.

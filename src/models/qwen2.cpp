@@ -30,7 +30,12 @@ constexpr int kHardMaxContext = 32768;
 // of the widest activation (4864 floats) is about 1.2 MiB per worker. Aligning
 // it to the kernel's six-token group was measured and was slightly worse, so
 // the tail is left to the single-token path.
-constexpr int kPrefillChunk = 64;
+// Prefill chunk rows. Larger chunks amortize the weight stream over more
+// tokens, which measured 1.18-1.49x at 2048/4096 tokens, but at 8192 the
+// extra attention work per chunk outweighs it (64 was 7-11% faster in both
+// orders). The loop therefore uses 128 rows up to 4096 prompt tokens and 64
+// above; the buffers are sized for the larger chunk.
+constexpr int kPrefillChunk = 128;
 
 // Cross-sequence shared-prefix table. Up to four start-0 f32|f16 prefills
 // with >=16 tokens populate slots (tokens plus per-layer K/V rows, up to the
@@ -2201,8 +2206,9 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     }
   }
   int last_rows = 0;
+  const int chunk_limit = count <= 4096 ? capacity : std::min(capacity, 64);
   while (consumed < count) {
-    const int chunk = std::min(capacity, count - consumed);
+    const int chunk = std::min(chunk_limit, count - consumed);
     const int* chunk_tokens = tokens + consumed;
     const int chunk_start = start_position + consumed;
     last_rows = chunk;

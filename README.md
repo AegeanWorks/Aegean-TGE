@@ -162,6 +162,9 @@ Qwen's end-of-text id) instead of continuing past it. Decode hands work to a
 spin-then-sleep pool; at long context decode attention runs in grouped-query
 chunks over positions as well as heads, and the prefill stays per-head.
 Prefill is compute-bound so it takes every logical core on an unpinned pool.
+Prompt chunks are 128 tokens up to 4096 prompt tokens and 64 above: larger
+chunks amortize the weight stream (1.18-1.49x at 2048/4096) while long-context
+attention makes 128 slower at 8192 (64 won both pairs by 7-11%).
 Decode workers are likewise unpinned by default (thread placement left to
 the OS beat pinned P-cores on mean and variance here); `--pin-threads 1`
 restores P-core pinning, and `--threads N` sizes the decode pool —
