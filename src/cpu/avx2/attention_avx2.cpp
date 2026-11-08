@@ -608,7 +608,7 @@ void attention_group_avx2(const AttentionGroupArgs& args) {
           const float* vscales = args.values_q8_scales +
                                  static_cast<std::size_t>(token) * scale_stride;
           int index = 0;
-          for (; index + 32 <= head_dim; index += 8) {
+          for (; index + 8 <= head_dim; index += 8) {
             const __m256 v = _mm256_mul_ps(
                 widen_i8(value + index),
                 _mm256_set1_ps(vscales[index / 32]));
@@ -652,6 +652,170 @@ void attention_group_avx2(const AttentionGroupArgs& args) {
 
     args.maxima[head] = maximum;
     args.sums[head] = sum;
+  }
+}
+
+void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
+  if (args.queries == nullptr || args.scores == nullptr || args.out == nullptr ||
+      args.tokens <= 0 || args.head_dim <= 0 || args.head_dim % 8 != 0 ||
+      args.context <= 0 || head < 0) {
+    return;
+  }
+  if (args.half) {
+    if (args.keys_half == nullptr || args.values_half == nullptr) {
+      return;
+    }
+  } else if (args.keys == nullptr || args.values == nullptr) {
+    return;
+  }
+
+  const int head_dim = args.head_dim;
+  const int tokens = args.tokens;
+  const int start = args.start_position;
+  const int last_key = start + tokens - 1;
+  const std::size_t head_offset =
+      static_cast<std::size_t>(head) * static_cast<std::size_t>(head_dim);
+
+  // Pass 1: QK scores. One key row feeds every query in the block that can
+  // attend to it, so the row is loaded once instead of once per query.
+  for (int key_index = 0; key_index <= last_key; ++key_index) {
+    const std::size_t row =
+        static_cast<std::size_t>(key_index) * args.kv_stride;
+    const float* key_f32 = nullptr;
+    const std::uint16_t* key_half = nullptr;
+    if (args.half) {
+      key_half = args.keys_half + row + args.kv_head_offset;
+    } else {
+      key_f32 = args.keys + row + args.kv_head_offset;
+    }
+    const int first_query = std::max(0, key_index - start);
+    for (int token = first_query; token < tokens; ++token) {
+      const float* query =
+          args.queries +
+          static_cast<std::size_t>(token) * args.query_stride + head_offset;
+      float score = 0.0F;
+      if (args.half) {
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+        int index = 0;
+        for (; index + 16 <= head_dim; index += 16) {
+          const __m256 k0 = _mm256_cvtph_ps(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key_half + index)));
+          const __m256 k1 = _mm256_cvtph_ps(_mm_loadu_si128(
+              reinterpret_cast<const __m128i*>(key_half + index + 8)));
+          acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k0, acc0);
+          acc1 =
+              _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 8), k1, acc1);
+        }
+        for (; index + 8 <= head_dim; index += 8) {
+          const __m256 k = _mm256_cvtph_ps(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key_half + index)));
+          acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k, acc0);
+        }
+        score = horizontal_sum(_mm256_add_ps(acc0, acc1));
+        for (; index < head_dim; ++index) {
+          score += query[index] * half_to_float(key_half[index]);
+        }
+        score *= args.scale;
+      } else {
+        score = dot_avx2(query, key_f32, head_dim) * args.scale;
+      }
+      args.scores[static_cast<std::size_t>(token) * args.score_stride +
+                  key_index] = score;
+    }
+  }
+
+  // Softmax per query over its causal prefix; the max/exp form mirrors
+  // attention_head so the two paths agree to summation-order noise.
+  for (int token = 0; token < tokens; ++token) {
+    float* scores = args.scores +
+                    static_cast<std::size_t>(token) * args.score_stride;
+    const int span = start + token + 1;
+    float maximum = -INFINITY;
+    for (int index = 0; index < span; ++index) {
+      maximum = std::max(maximum, scores[index]);
+    }
+    const __m256 vmax = _mm256_set1_ps(maximum);
+    __m256 vsum = _mm256_setzero_ps();
+    int index = 0;
+    const int blocked = span & ~7;
+    for (; index < blocked; index += 8) {
+      const __m256 shifted = _mm256_sub_ps(_mm256_loadu_ps(scores + index), vmax);
+      const __m256 e = exp_avx2(shifted);
+      _mm256_storeu_ps(scores + index, e);
+      vsum = _mm256_add_ps(vsum, e);
+    }
+    float total = horizontal_sum(vsum);
+    for (; index < span; ++index) {
+      const float e = std::exp(scores[index] - maximum);
+      scores[index] = e;
+      total += e;
+    }
+    const float inverse = 1.0F / total;
+    for (index = 0; index < span; ++index) {
+      scores[index] *= inverse;
+    }
+  }
+
+  // Pass 2: value accumulation. One value row feeds every query in the block.
+  for (int token = 0; token < tokens; ++token) {
+    float* accumulator = args.out +
+                         static_cast<std::size_t>(token) * args.query_stride +
+                         head_offset;
+    int index = 0;
+    for (; index + 8 <= head_dim; index += 8) {
+      _mm256_storeu_ps(accumulator + index, _mm256_setzero_ps());
+    }
+    for (; index < head_dim; ++index) {
+      accumulator[index] = 0.0F;
+    }
+  }
+  for (int key_index = 0; key_index <= last_key; ++key_index) {
+    const std::size_t row =
+        static_cast<std::size_t>(key_index) * args.kv_stride;
+    const float* value_f32 = nullptr;
+    const std::uint16_t* value_half = nullptr;
+    if (args.half) {
+      value_half = args.values_half + row + args.kv_head_offset;
+    } else {
+      value_f32 = args.values + row + args.kv_head_offset;
+    }
+    const int first_query = std::max(0, key_index - start);
+    for (int token = first_query; token < tokens; ++token) {
+      const float weight =
+          args.scores[static_cast<std::size_t>(token) * args.score_stride +
+                      key_index];
+      if (weight == 0.0F) {
+        continue;
+      }
+      float* accumulator = args.out +
+                           static_cast<std::size_t>(token) * args.query_stride +
+                           head_offset;
+      const __m256 w = _mm256_set1_ps(weight);
+      int index = 0;
+      if (args.half) {
+        for (; index + 8 <= head_dim; index += 8) {
+          const __m256 value = _mm256_cvtph_ps(_mm_loadu_si128(
+              reinterpret_cast<const __m128i*>(value_half + index)));
+          _mm256_storeu_ps(accumulator + index,
+                           _mm256_fmadd_ps(w, value,
+                                           _mm256_loadu_ps(accumulator + index)));
+        }
+        for (; index < head_dim; ++index) {
+          accumulator[index] += weight * half_to_float(value_half[index]);
+        }
+      } else {
+        for (; index + 8 <= head_dim; index += 8) {
+          _mm256_storeu_ps(
+              accumulator + index,
+              _mm256_fmadd_ps(w, _mm256_loadu_ps(value_f32 + index),
+                              _mm256_loadu_ps(accumulator + index)));
+        }
+        for (; index < head_dim; ++index) {
+          accumulator[index] += weight * value_f32[index];
+        }
+      }
+    }
   }
 }
 

@@ -699,3 +699,123 @@ TGE_TEST(attention_rejects_bad_shapes) {
     TGE_CHECK(throws_both(args));
   }
 }
+
+TGE_TEST(attention_block_matches_head_path) {
+  constexpr int kTokens = 4;
+  constexpr int kStart = 4;
+  constexpr int kContext = 16;
+  constexpr int kHeads = 2;
+  constexpr int kDim = 32;
+  constexpr int kQueryStride = kHeads * kDim;
+  constexpr int kScoreStride = kHeads * kContext;
+  std::uint32_t state = 777u;
+  const auto next = [&]() {
+    state = state * 1664525u + 1013904223u;
+    return (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F - 1.0F) * 0.5F;
+  };
+  std::vector<float> queries(static_cast<std::size_t>(kTokens) * kQueryStride);
+  std::vector<float> keys(static_cast<std::size_t>(kContext) * kDim);
+  std::vector<float> values(static_cast<std::size_t>(kContext) * kDim);
+  for (float& value : queries) value = next();
+  for (float& value : keys) value = next();
+  for (float& value : values) value = next();
+  std::vector<std::uint16_t> keys_half(keys.size());
+  std::vector<std::uint16_t> values_half(values.size());
+  for (std::size_t index = 0; index < keys.size(); ++index) {
+    keys_half[index] = tge::cpu::float_to_half(keys[index]);
+    values_half[index] = tge::cpu::float_to_half(values[index]);
+  }
+
+  const auto run_case = [&](bool half) {
+    std::vector<float> ref_scores(
+        static_cast<std::size_t>(kTokens) * kHeads * kContext, 0.0F);
+    std::vector<float> ref_out(
+        static_cast<std::size_t>(kTokens) * kQueryStride, 0.0F);
+    for (int token = 0; token < kTokens; ++token) {
+      for (int head = 0; head < kHeads; ++head) {
+        tge::cpu::AttentionArgs args;
+        args.query = queries.data() +
+                     static_cast<std::size_t>(token) * kQueryStride +
+                     static_cast<std::size_t>(head) * kDim;
+        args.kv_stride = kDim;
+        args.span = kStart + token + 1;
+        args.head_dim = kDim;
+        args.scale = 1.0F / std::sqrt(static_cast<float>(kDim));
+        args.scores = ref_scores.data() +
+                      static_cast<std::size_t>(token * kHeads + head) *
+                          kContext;
+        args.out = ref_out.data() +
+                   static_cast<std::size_t>(token) * kQueryStride +
+                   static_cast<std::size_t>(head) * kDim;
+        if (half) {
+          args.half = true;
+          args.keys_half = keys_half.data();
+          args.values_half = values_half.data();
+        } else {
+          args.keys = keys.data();
+          args.values = values.data();
+        }
+        tge::cpu::attention_head_avx2(args);
+      }
+    }
+
+    std::vector<float> blk_scores(
+        static_cast<std::size_t>(kTokens) * kHeads * kContext, 0.0F);
+    std::vector<float> blk_out(
+        static_cast<std::size_t>(kTokens) * kQueryStride, 0.0F);
+    tge::cpu::AttentionBlockArgs block;
+    block.queries = queries.data();
+    if (half) {
+      block.half = true;
+      block.keys_half = keys_half.data();
+      block.values_half = values_half.data();
+    } else {
+      block.keys = keys.data();
+      block.values = values.data();
+    }
+    block.tokens = kTokens;
+    block.start_position = kStart;
+    block.head_dim = kDim;
+    block.kv_stride = kDim;
+    block.kv_head_offset = 0;
+    block.query_stride = kQueryStride;
+    block.score_stride = kScoreStride;
+    block.context = kContext;
+    block.scale = 1.0F / std::sqrt(static_cast<float>(kDim));
+    block.scores = blk_scores.data();
+    block.out = blk_out.data();
+    for (int head = 0; head < kHeads; ++head) {
+      tge::cpu::AttentionBlockArgs per_head = block;
+      per_head.scores =
+          block.scores + static_cast<std::size_t>(head) * kContext;
+      tge::cpu::attention_block_head_avx2(per_head, head);
+    }
+
+    for (int token = 0; token < kTokens; ++token) {
+      const int span = kStart + token + 1;
+      for (int head = 0; head < kHeads; ++head) {
+        const std::size_t score_base =
+            static_cast<std::size_t>(token * kHeads + head) * kContext;
+        float ref_sum = 0.0F;
+        for (int index = 0; index < span; ++index) {
+          ref_sum += ref_scores[score_base + index];
+        }
+        TGE_CHECK(ref_sum > 0.0F);
+        for (int index = 0; index < span; ++index) {
+          TGE_CHECK_NEAR(blk_scores[score_base + index],
+                         ref_scores[score_base + index] / ref_sum, 1e-4F);
+        }
+        const std::size_t out_base =
+            static_cast<std::size_t>(token) * kQueryStride +
+            static_cast<std::size_t>(head) * kDim;
+        for (int index = 0; index < kDim; ++index) {
+          TGE_CHECK_NEAR(blk_out[out_base + index], ref_out[out_base + index],
+                         1e-4F);
+        }
+      }
+    }
+  };
+
+  run_case(false);
+  run_case(true);
+}

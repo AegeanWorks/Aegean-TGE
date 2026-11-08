@@ -287,6 +287,35 @@ using AttentionGroupFn = void (*)(const AttentionGroupArgs& args);
 void attention_group_scalar(const AttentionGroupArgs& args);
 void attention_group_avx2(const AttentionGroupArgs& args);
 
+/// One query head of the prefill block kernel: a block of `tokens` queries
+/// attends to the causal prefix [0, start_position + tokens). Each K/V row is
+/// loaded once and used for every query in the block, instead of once per
+/// query. Supports f32 and f16 KV; callers keep i8 on the per-token path.
+/// `scores` addresses this head's first token slice and is strided by
+/// `score_stride` (= heads * context). Runs one head; the caller spreads heads
+/// over the pool.
+struct AttentionBlockArgs {
+  const float* queries = nullptr;  // tokens x (heads * head_dim)
+  const float* keys = nullptr;     // f32 rows of kv_stride
+  const float* values = nullptr;
+  const std::uint16_t* keys_half = nullptr;
+  const std::uint16_t* values_half = nullptr;
+  bool half = false;
+  int tokens = 0;
+  int start_position = 0;
+  int head_dim = 0;
+  int kv_stride = 0;
+  int kv_head_offset = 0;  // kv_head * head_dim
+  int query_stride = 0;    // heads * head_dim
+  int score_stride = 0;    // heads * context
+  int context = 0;
+  float scale = 1.0F;
+  float* scores = nullptr;  // this head's scores, tokens x score_stride
+  float* out = nullptr;     // tokens x (heads * head_dim)
+};
+
+void attention_block_head_avx2(const AttentionBlockArgs& args, int head);
+
 /// Bytes occupied by one Q8_0 block: 2-byte scale plus 32 signed bytes.
 inline constexpr std::size_t kQ8BlockBytes = 34;
 inline constexpr int kQ8BlockElements = 32;

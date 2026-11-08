@@ -777,7 +777,8 @@ const float* Qwen2::output_logits(float* hidden) {
   }
   const cpu::Q8Quantized q_out =
       vnni_ ? quantize_activations(hidden, 1, dim) : cpu::Q8Quantized{};
-  matvec(output_, hidden, logits_.data(), vnni_ ? &q_out : nullptr);
+  matvec(output_, hidden, logits_.data(), vnni_ ? &q_out : nullptr,
+         kq8d_head_);
   return logits_.data();
 }
 
@@ -884,7 +885,8 @@ const float* Qwen2::vector(const char* name, int expected) const {
 }
 
 void Qwen2::matvec(const Matrix& weight, const float* input,
-                   float* output, const cpu::Q8Quantized* quantized) const {
+                   float* output, const cpu::Q8Quantized* quantized,
+                   bool allow_kq8d) const {
   const std::uint64_t t0 = clock_ns();
   // Decode is memory-bound and synchronisation-sensitive, so it uses the
   // decode pool rather than one worker per logical processor. Sizing each call
@@ -929,6 +931,14 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
     args.input = input;
     args.tokens = 1;
     args.out = output;
+    const bool kq8d_kind =
+        kind == cpu::QuantKind::Q4_K || kind == cpu::QuantKind::Q6_K;
+    if (allow_kq8d && !scalar_kernels_ && kq8d_kind &&
+        cpu::detect().features.avx2) {
+      cpu::gemv_dequant_kq8_row_avx2(args, config);
+      phase_matvec_ns_ += clock_ns() - t0;
+      return;
+    }
     kernels().gemv_dequant_batch(args, config);
     phase_matvec_ns_ += clock_ns() - t0;
     return;
@@ -1330,9 +1340,16 @@ void Qwen2::attention_gqa(int sequence, int layer, int position,
   const int group = heads / kv_heads;
   const int span = position + 1;
   const int threads = threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
-  const int chunks =
+  // Splitting each KV head into four history chunks balances the last decode
+  // wave (16 tasks on 6 workers leaves two idle; 4 chunks is 4-13% faster on
+  // the attention phase in the measured 4k-8k windows). Short spans keep the
+  // previous split so the extra merge states never dominate a tiny workload.
+  const int base_chunks =
       std::min(kMaxGqaChunks,
                std::max(1, (threads * 2 + kv_heads - 1) / kv_heads));
+  const int chunks =
+      span >= 1024 ? std::min(kMaxGqaChunks, std::max(4, base_chunks))
+                   : base_chunks;
   const int chunk_size = (span + chunks - 1) / chunks;
   const int actual_chunks = (span + chunk_size - 1) / chunk_size;
   const std::size_t layer_base =
@@ -1465,6 +1482,47 @@ void Qwen2::attention_batch(int sequence, int layer, int start_position,
 
   core::ThreadPool& pool = prefill_pool();
   const int workers = prefill_threads();
+  // Query-block attention for the f32/f16 KV tiers: one K/V row feeds the
+  // whole prompt chunk instead of one query. i8 stays on the per-token path
+  // (its 8k working set is cache-resident, measured neutral).
+  if (!kv_q8_ && !sparse_.enabled &&
+      attention_mode_ != AttentionMode::Scalar && tokens > 0) {
+    const int group = heads / config_.head_count_kv;
+    const int kv_dim = config_.kv_dim();
+    const std::size_t cache_base =
+        (static_cast<std::size_t>(sequence) * config_.block_count +
+         static_cast<std::size_t>(layer)) *
+        static_cast<std::size_t>(context_) * static_cast<std::size_t>(kv_dim);
+    cpu::AttentionBlockArgs block;
+    block.queries = batch_q_.data();
+    if (kv_half_) {
+      block.half = true;
+      block.keys_half = k_cache_half_.data() + cache_base;
+      block.values_half = v_cache_half_.data() + cache_base;
+    } else {
+      block.keys = k_cache_.data() + cache_base;
+      block.values = v_cache_.data() + cache_base;
+    }
+    block.tokens = tokens;
+    block.start_position = start_position;
+    block.head_dim = head_dim;
+    block.kv_stride = kv_dim;
+    block.query_stride = dim;
+    block.score_stride = heads * context_;
+    block.context = context_;
+    block.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+    block.scores = scores_.data();
+    block.out = batch_attn_.data();
+    pool.parallel_for(heads, 1, [&](int head) {
+      cpu::AttentionBlockArgs per_head = block;
+      per_head.kv_head_offset = (head / group) * head_dim;
+      per_head.scores =
+          block.scores + static_cast<std::size_t>(head) * context_;
+      cpu::attention_block_head_avx2(per_head, head);
+    });
+    phase_attn_ns_ += clock_ns() - t0;
+    return;
+  }
   // Short prompts leave workers idle when parallelising over tokens alone
   // (4 tokens on 6 workers). Split to token x head so every worker has work;
   // each task gets its own score slice. Long prompts keep the token path so
@@ -1998,7 +2056,7 @@ const float* Qwen2::forward(int token, int position) {
     const cpu::Q8Quantized q_down =
         vnni_ ? quantize_activations(gate_.data(), 1, ffn) : cpu::Q8Quantized{};
     matvec(layer.w_down, gate_.data(), h_.data(),
-           vnni_ ? &q_down : nullptr);
+           vnni_ ? &q_down : nullptr, kq8d_down_);
     for (int axis = 0; axis < dim; ++axis) {
       x_[static_cast<std::size_t>(axis)] += h_[axis];
     }

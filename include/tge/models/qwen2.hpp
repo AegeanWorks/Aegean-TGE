@@ -179,6 +179,16 @@ class Qwen2 {
     void set_kq8(bool enabled) { kq8_ = enabled; }
     bool kq8() const { return kq8_; }
 
+    /// Opt-in integer decode kernels for the LM head and the FFN down
+    /// projection. Both are lossy on near-tie logits; the measured fidelity
+    /// tiers and usage guidance are in the README and measurement log.
+    void set_kq8d(bool head, bool down) {
+      kq8d_head_ = head;
+      kq8d_down_ = down;
+    }
+    bool kq8d_head() const { return kq8d_head_; }
+    bool kq8d_down() const { return kq8d_down_; }
+
   /// True when the KV cache is stored as IEEE half.
   bool kv_half() const { return kv_half_; }
 
@@ -312,7 +322,8 @@ class Qwen2 {
   Matrix matrix_slice(const char* name, int row_begin, int rows) const;
   const float* vector(const char* name, int expected) const;
   void matvec(const Matrix& weight, const float* input, float* output,
-              const cpu::Q8Quantized* quantized = nullptr) const;
+              const cpu::Q8Quantized* quantized = nullptr,
+              bool allow_kq8d = false) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
                     int tokens, const cpu::Q8Quantized* quantized = nullptr,
                     bool float_only = false) const;
@@ -382,6 +393,8 @@ class Qwen2 {
     bool scalar_kernels_ = false;
     bool vnni_ = false;
     bool kq8_ = true;
+    bool kq8d_head_ = false;
+    bool kq8d_down_ = false;
   bool kv_half_ = false;
   bool kv_q8_ = false;
   bool use_gpu_requested_ = false;
