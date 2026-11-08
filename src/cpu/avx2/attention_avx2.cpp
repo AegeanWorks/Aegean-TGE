@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
+#include <vector>
 
 #include <immintrin.h>
 
@@ -676,6 +677,29 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
   const std::size_t head_offset =
       static_cast<std::size_t>(head) * static_cast<std::size_t>(head_dim);
 
+  // f16 K/V rows are converted once per key row, then reused for every query
+  // in the block. The old loop converted the same row inside each query.
+  constexpr int kStackHeadDim = 256;
+  alignas(32) float stack_row[kStackHeadDim];
+  std::vector<float> heap_row;
+  float* row_f32 = stack_row;
+  if (head_dim > kStackHeadDim) {
+    heap_row.resize(static_cast<std::size_t>(head_dim));
+    row_f32 = heap_row.data();
+  }
+  const auto widen_row = [&](const std::uint16_t* source) {
+    int index = 0;
+    for (; index + 8 <= head_dim; index += 8) {
+      _mm256_storeu_ps(
+          row_f32 + index,
+          _mm256_cvtph_ps(_mm_loadu_si128(
+              reinterpret_cast<const __m128i*>(source + index))));
+    }
+    for (; index < head_dim; ++index) {
+      row_f32[index] = half_to_float(source[index]);
+    }
+  };
+
   // Pass 1: QK scores. One key row feeds every query in the block that can
   // attend to it, so the row is loaded once instead of once per query.
   for (int key_index = 0; key_index <= last_key; ++key_index) {
@@ -685,6 +709,7 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
     const std::uint16_t* key_half = nullptr;
     if (args.half) {
       key_half = args.keys_half + row + args.kv_head_offset;
+      widen_row(key_half);
     } else {
       key_f32 = args.keys + row + args.kv_head_offset;
     }
@@ -699,22 +724,19 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
         __m256 acc1 = _mm256_setzero_ps();
         int index = 0;
         for (; index + 16 <= head_dim; index += 16) {
-          const __m256 k0 = _mm256_cvtph_ps(
-              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key_half + index)));
-          const __m256 k1 = _mm256_cvtph_ps(_mm_loadu_si128(
-              reinterpret_cast<const __m128i*>(key_half + index + 8)));
+          const __m256 k0 = _mm256_loadu_ps(row_f32 + index);
+          const __m256 k1 = _mm256_loadu_ps(row_f32 + index + 8);
           acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k0, acc0);
           acc1 =
               _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 8), k1, acc1);
         }
         for (; index + 8 <= head_dim; index += 8) {
-          const __m256 k = _mm256_cvtph_ps(
-              _mm_loadu_si128(reinterpret_cast<const __m128i*>(key_half + index)));
+          const __m256 k = _mm256_loadu_ps(row_f32 + index);
           acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k, acc0);
         }
         score = horizontal_sum(_mm256_add_ps(acc0, acc1));
         for (; index < head_dim; ++index) {
-          score += query[index] * half_to_float(key_half[index]);
+          score += query[index] * row_f32[index];
         }
         score *= args.scale;
       } else {
@@ -777,6 +799,7 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
     const std::uint16_t* value_half = nullptr;
     if (args.half) {
       value_half = args.values_half + row + args.kv_head_offset;
+      widen_row(value_half);
     } else {
       value_f32 = args.values + row + args.kv_head_offset;
     }
@@ -795,14 +818,13 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
       int index = 0;
       if (args.half) {
         for (; index + 8 <= head_dim; index += 8) {
-          const __m256 value = _mm256_cvtph_ps(_mm_loadu_si128(
-              reinterpret_cast<const __m128i*>(value_half + index)));
+          const __m256 value = _mm256_loadu_ps(row_f32 + index);
           _mm256_storeu_ps(accumulator + index,
                            _mm256_fmadd_ps(w, value,
                                            _mm256_loadu_ps(accumulator + index)));
         }
         for (; index < head_dim; ++index) {
-          accumulator[index] += weight * half_to_float(value_half[index]);
+          accumulator[index] += weight * row_f32[index];
         }
       } else {
         for (; index + 8 <= head_dim; index += 8) {
