@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-IDEA-PREFILL-BLOCK",
+    "task_id": "TGE-IDEA-BLOCK-F16I8",
     "last_phase": "in_progress",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794101249.4651031,
+    "updated_at": 1794105746.7456353,
     "owner": "opencode:idea-loop",
     "started_by": "opencode:idea-loop",
     "continuations": [],
-    "completed_at": 1794101249.7120018
+    "completed_at": 1794105746.9475546
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-IDEA-VNNI-ATTN-S2",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[3/3] VNNI wiring killed: fidelity 4.396e-4/394/399 in class, ids identical; 8k decode raw 1.51x/1.10x tracks matvec 1.55x/1.07x, normalized attention +6%/-7%; 145/145, 4/4; report reports/idea-invented-vnni-attn-wiring-killed.md",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794084148.0533183,
-      "timestamp_str": "2026-11-07 23:42:28",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-VNNI-ATTN-S2",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-IDEA-VNNI-ATTN-S2' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794084148.673642,
-      "timestamp_str": "2026-11-07 23:42:28",
-      "agent": "opencode:idea-loop"
-    },
-    {
-      "task_id": "TGE-IDEA-GQA-REUSE",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/3] Token-outer GQA i8 attention: K/V row reuse across group heads, 8k/4k stage-1 A/B, equivalence, revert + report",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794084700.4541163,
-      "timestamp_str": "2026-11-07 23:51:40",
-      "agent": "opencode:idea-loop",
-      "impact_assessment": {
-        "why": "Cycle 27 showed the attention phase dominates long-context i8 decode; the 3-head GQA group re-reads the same K/V rows per head.",
-        "benefits": "A >=1.4x kernel would justify model wiring; otherwise close the loop-inversion direction.",
-        "risks": "contract: per-head math must match head-outer; dependency: AVX2/FMA; concurrency: kernel runs per decode task; state: one new kernel + temp test.",
-        "mitigation": "8k and 4k spans, 4/3 runs, maxrel <1e-5, full revert."
-      },
-      "plan_digest": "d30b2af20c6d2f8cfa4d6325f50f37ced5f54b8dbdb716a4cdfafda954ab5a4b"
-    },
     {
       "task_id": "TGE-IDEA-GQA-REUSE",
       "phase": "in_progress",
@@ -265,6 +226,45 @@
       "status": "completed",
       "timestamp": 1794101249.7120035,
       "timestamp_str": "2026-11-08 04:27:29",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-BLOCK-F16I8",
+      "phase": "in_progress",
+      "phase_num": 2,
+      "description": "[1/3] Block prefill attention for f16/i8: tier branches, three-tier unit test, 8180 pairs per tier, ids, revert + report",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794105746.5163808,
+      "timestamp_str": "2026-11-08 05:42:26",
+      "agent": "opencode:idea-loop",
+      "impact_assessment": {
+        "why": "Cycle 33's block kernel was f32-only; f16/i8 are the memory-saving tiers and need the same traffic reduction if their working sets exceed cache.",
+        "benefits": "f16 long-context prefill gain without the f32 memory cost; i8 measured for completeness.",
+        "risks": "contract: per-tier numerics/ids; dependency: existing widen kernels; concurrency: per-head tasks; state: args tier fields + branches.",
+        "mitigation": "Three-tier unit test at 1e-4, reverse 8k pairs per tier, id parity, full revert."
+      },
+      "plan_digest": "e591a999c36d6136fa6bebe1d06b01d21cfe0251dab4f8d1c96f2a5c0a278a94"
+    },
+    {
+      "task_id": "TGE-IDEA-BLOCK-F16I8",
+      "phase": "in_progress",
+      "phase_num": 4,
+      "description": "[3/3] Block f16/i8: f16 attention 1.47x/1.83x, total 1.36x/1.52x, ids identical; i8 attention only 1.02x/1.07x (16 MB working set fits L3); keep f32/f16, i8 per-token; 146/146 test, 145/145 after revert, 4/4; report reports/idea-invented-prefill-block-f16-i8-keep.md",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794105746.7456353,
+      "timestamp_str": "2026-11-08 05:42:26",
+      "agent": "opencode:idea-loop"
+    },
+    {
+      "task_id": "TGE-IDEA-BLOCK-F16I8",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-IDEA-BLOCK-F16I8' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794105746.9475574,
+      "timestamp_str": "2026-11-08 05:42:26",
       "agent": "opencode:idea-loop"
     }
   ]
