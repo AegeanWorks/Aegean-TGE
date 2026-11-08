@@ -3967,3 +3967,17 @@ Before/after are observable behavior on the same model and flags; no arithmetic 
 | continuous bench first token | decoded one extra token past EOS / `tokens=1` | finishes at admission; prompt+decode checked vs context |
 
 Tests 146 -> **158 cases, 0 failed**. Fidelity at 399 positions is unchanged: f32 mean KL 1.020e-11, worst 2.330e-10, top-1 399/399; f16 mean 3.252e-07, worst 2.709e-05, top-1 399/399. `aikit.py check aegean-tge` 4/4 (test, hygiene, guidelines, secrets). Report: `reports/state-machine-hardening-2026-11-08.md`.
+
+## 2026-11-08 - Deferred state items: sequence-aware forward, per-slot reset, placement sessions (kept)
+
+The audit's two safe deferred items are now closed. No arithmetic path changed: the two-argument `forward` delegates to sequence 0, whose slot offset and attention call expand to exactly the previous expression.
+
+| Behavior | Before | After |
+|---|---|---|
+| `Qwen2::forward(sequence, token, position)` | no such API; every call wrote slot 0 | explicitly addresses any slot; out-of-range throws |
+| `reset_cache(sequence)` | only all-slots reset | one slot can be purged; others keep their rows |
+| Slot arithmetic | duplicated in the writer | shared `Qwen2::kv_layer_offset` used by writer and reset |
+| `Qwen2::load(..., sequences=N)` placement | validated one KV slot | validates all N slots; doc shows 2 sessions halve the admitted context at a fixed budget |
+| `--kv i8` with `kv_dim % 32 != 0` | silently truncated the scale index | fails loudly at load |
+
+Tests **162 cases, 0 failed** (4 new: slot offset, two-slot forward/reset on the synthetic phi model, i8 alignment rejection, plan session scaling). The existing phi determinism test still passes, and the single-sequence fidelity values are unchanged (f32 1.020e-11, f16 3.252e-07, 399/399). `aikit.py check aegean-tge` 4/4.

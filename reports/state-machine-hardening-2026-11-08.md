@@ -2,7 +2,7 @@
 
 - **Scope**: `projects/aegean-tge` only. The audit covered the CLI front end, model/generation core, memory/GPU/threading, and tokenizer/GGUF/error contracts.
 - **Method**: four parallel code surveys, then a second independent read of every claim that became a proposal. No arithmetic or kernel change is included.
-- **Result**: 11 PASS proposals implemented; 6 higher-risk proposals deferred with evidence. Tests 146 -> 158; `aikit.py check aegean-tge` 4/4.
+- **Result**: 11 PASS proposals implemented, plus the two safe deferred items (D1, D2a) in a follow-up; 6 higher-risk proposals remain deferred with evidence. Tests 146 -> 162; `aikit.py check aegean-tge` 4/4.
 
 ## 1. Implicit state machines found
 
@@ -68,7 +68,7 @@ A newly admitted request whose first token is an end id, or a one-token request,
 
 ## 3. Verification
 
-- `scripts\test.cmd`: **158 cases, 0 failed** (146 before; 12 new).
+- `scripts\test.cmd`: **162 cases, 0 failed** (146 before the audit; 158 after the PASS package; 162 after the D1/D2a follow-up).
 - `python aikit.py check aegean-tge`: **4/4** (test, hygiene, guidelines, secrets).
 - Fidelity at 399 positions, Llama-3.2-3B-Q4_K_M: f32 mean KL **1.020e-11**, worst 2.330e-10, top-1 **399/399**; f16 mean **3.252e-07**, top-1 **399/399** — the same values as before the change.
 - Manual matrix:
@@ -93,7 +93,28 @@ A newly admitted request whose first token is an end id, or a one-token request,
 - **Tokenizer strict decode / true SPM round-trip**: a product decision on round-trip identity.
 - **JSON envelopes for every command**: P05 covers the highest-value one.
 
-## 5. Commands
+## 5. Follow-up: the safe deferred items are now closed
+
+- **D1 - sequence-aware `forward` and per-slot reset**: added
+  `forward(sequence, token, position)` (the two-argument form delegates to
+  sequence 0) and `reset_cache(sequence)`. Both validate the sequence and throw
+  outside `[0, sequence_count)`. The slot arithmetic is shared through
+  `Qwen2::kv_layer_offset`, so the writers and the reset cannot drift apart.
+  Tests cover the offset, both slots on the synthetic phi model with
+  `sequences=2`, out-of-range throws, and a per-slot reset that leaves the other
+  slot usable.
+- **D2a - placement costs every requested slot**: `load` now passes
+  `max(1, sequences)` to `place`, the same number of slots it allocates. A plan
+  test proves two requested sessions halve the admitted context at a fixed
+  budget instead of over-admitting.
+- **i8 KV alignment**: a cache whose `kv_dim` is not a multiple of 32 now fails
+  loudly at load instead of truncating the scale index.
+
+These add 4 cases (158 -> 162) and do not touch the arithmetic path: the
+single-sequence `forward` expands to the same slot offset and attention call as
+before.
+
+## 6. Commands
 
 ```text
 cmake --preset release; cmake --build --preset release

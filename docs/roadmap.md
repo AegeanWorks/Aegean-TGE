@@ -109,11 +109,6 @@ management (0.3) cannot be deferred behind GPU work (0.4).
 These are deliberate gaps recorded by the state-machine audit; they are not
 regressions in the shipped paths:
 
-- `Qwen2::forward` addresses sequence 0 only. Continuous batching uses
-  `forward_batch` for multi-slot work; a per-sequence `forward` overload and a
-  per-slot reset need an API decision.
-- Placement costs one KV slot (`place(..., sessions=1)`) while `load` allocates
-  `sequences` slots, so a multi-slot load can exceed the plan it validated.
 - `--kv auto` resolves from the requested context before the model loads, not
   from the model's clamped context.
 - The multi-prefix table is process-global and tagged by geometry and KV tier,
