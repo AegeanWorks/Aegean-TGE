@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-STATE-HARDENING",
+    "task_id": "TGE-STATE-DEFERRED",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794165243.3838139,
-    "owner": "commandcode:state-hardening",
-    "started_by": "commandcode:state-hardening",
+    "updated_at": 1794166449.987115,
+    "owner": "commandcode:state-deferred",
+    "started_by": "commandcode:state-deferred",
     "continuations": [],
-    "completed_at": 1794165243.8842163
+    "completed_at": 1794166450.6442382
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-CHUNK128",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] Kept span-aware: 2048 3/4 pairs median ~1.23x, 4096 1.18x/1.49x, 8180 128 slower 0.90x/0.93x -> 64 above; ids identical; 146/146, 4/4; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794143146.4300628,
-      "timestamp_str": "2026-11-08 16:05:46",
-      "agent": "opencode:chunk128"
-    },
-    {
-      "task_id": "TGE-CHUNK128",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-CHUNK128' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794143146.6143558,
-      "timestamp_str": "2026-11-08 16:05:46",
-      "agent": "opencode:chunk128"
-    },
-    {
-      "task_id": "TGE-SPEC-ADAPT",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/4] Plan: adaptive greedy speculation depth (2-6 rows from the last accepted prefix) with same-binary fixed-depth A/B and id/fidelity gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794143606.6783755,
-      "timestamp_str": "2026-11-08 16:13:26",
-      "agent": "opencode:spec-adapt",
-      "impact_assessment": {
-        "why": "Story/prose speculation measured 0.94x at 1.17 accepted/step because every verify pays six rows; repetitive prompts hit 5-6/step and must keep depth 6.",
-        "benefits": "Recover the prose regression while retaining periodic/code speculation gains; less wasted verifier work per accepted token.",
-        "risks": "contract: token ids must stay identical; dependency: existing verify_draft count support 1-6; concurrency: prefill pool; state: adaptive depth + fixed-depth env gate.",
-        "mitigation": "Same-binary A/B, multiple prompt families, ids parity vs no-spec and fixed-6, full tests and 4/4 gates, measurement log entry."
-      },
-      "plan_digest": "a9f8df64563a28b61a7313a2bf5f97ffa3696db17cccfb2856ef8a8ab05d1d32"
-    },
     {
       "task_id": "TGE-SPEC-ADAPT",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794165243.8842175,
       "timestamp_str": "2026-11-08 22:14:03",
       "agent": "commandcode:state-hardening"
+    },
+    {
+      "task_id": "TGE-STATE-DEFERRED",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan: implement the two deferred state items that are additive and testable: sequence-aware forward + per-slot reset, and placement that costs all requested KV slots at load",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794166075.1115453,
+      "timestamp_str": "2026-11-08 22:27:55",
+      "agent": "commandcode:state-deferred",
+      "impact_assessment": {
+        "why": "The audit's D1/D2a gaps are real API/admission lies: the model reports sequence_count but forward addresses slot 0, and load validates one slot while allocating sequences.",
+        "benefits": "A truthful multi-sequence API and a load decision that cannot be admitted over the KV budget it allocates.",
+        "risks": "contract: additive overloads; placement may clamp context for multi-session loads (correctly); dependency: none; concurrency: single per-instance assumption unchanged; state: KV slot indexing and reset range.",
+        "mitigation": "Synthetic phi model with sequences=2, slot-offset unit test, plan session test, full suite, fidelity unchanged, roadmap update, local commit then push."
+      },
+      "plan_digest": "13531b821f2f9533b6c77427efa08d7a3df589eab2d3447cb23399bf672a7cb9"
+    },
+    {
+      "task_id": "TGE-STATE-DEFERRED",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Closed D1/D2a: forward(sequence,token,position) and reset_cache(sequence) share kv_layer_offset and validate range; load placement costs max(1,sequences); i8 kv_dim%32 guard; 162/162 tests, fidelity f32 1.020e-11 with 399/399, 4/4; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794166449.987115,
+      "timestamp_str": "2026-11-08 22:34:09",
+      "agent": "commandcode:state-deferred"
+    },
+    {
+      "task_id": "TGE-STATE-DEFERRED",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-STATE-DEFERRED' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794166450.6442404,
+      "timestamp_str": "2026-11-08 22:34:10",
+      "agent": "commandcode:state-deferred"
     }
   ]
 }
