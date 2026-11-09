@@ -1,56 +1,17 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-STATE-DEFERRED",
+    "task_id": "TGE-KEEPGRADE-INTEGRATION",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794166449.987115,
-    "owner": "commandcode:state-deferred",
-    "started_by": "commandcode:state-deferred",
+    "updated_at": 1794251246.1051533,
+    "owner": "commandcode:integrate-keep",
+    "started_by": "commandcode:integrate-keep",
     "continuations": [],
-    "completed_at": 1794166450.6442382
+    "completed_at": 1794251246.6968207
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-SPEC-ADAPT",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] KILLED: adaptive depth + cooldown median forward ratio 1.006 across 8 interleaved pairs, ids identical; reverted with negative-results report; 146/146; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794150551.0230293,
-      "timestamp_str": "2026-11-08 18:09:11",
-      "agent": "opencode:spec-adapt"
-    },
-    {
-      "task_id": "TGE-SPEC-ADAPT",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-SPEC-ADAPT' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794150551.1860392,
-      "timestamp_str": "2026-11-08 18:09:11",
-      "agent": "opencode:spec-adapt"
-    },
-    {
-      "task_id": "TGE-F16-HOIST",
-      "phase": "in_progress",
-      "phase_num": 2,
-      "description": "[1/2] Plan: hoist f16 K/V row widening out of the query loop in block prefill attention; same values and accumulation order, 2048/4096 f16 A/B",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794150551.3542783,
-      "timestamp_str": "2026-11-08 18:09:11",
-      "agent": "opencode:f16-hoist",
-      "impact_assessment": {
-        "why": "Each f16 K/V row was converted once per query in a 128-query chunk, repeating the same 128 half-to-float conversions 128 times.",
-        "benefits": "Removes redundant conversion work from f16 prefill attention with bit-identical output; expected 3-7% attention.",
-        "risks": "contract: ids and fidelity must stay identical; dependency: block kernel only; concurrency: per-head scratch in parallel head tasks; state: stack row buffer + heap fallback.",
-        "mitigation": "Block differential, fidelity f16/f32, six 2048 pairs and four 4096 pairs, ids parity, full gates."
-      },
-      "plan_digest": "4f1565af179ba365588af40fa76ec4cd3b972e62c3bd0c9b8c0ddde00f1c29f2"
-    },
     {
       "task_id": "TGE-F16-HOIST",
       "phase": "in_progress",
@@ -266,6 +227,45 @@
       "timestamp": 1794166450.6442404,
       "timestamp_str": "2026-11-08 22:34:10",
       "agent": "commandcode:state-deferred"
+    },
+    {
+      "task_id": "TGE-KEEPGRADE-INTEGRATION",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/4] Verify and integrate the three keep-grade performance recipes (AVX2 argmax, top-p AVX2 exp, radix top-p sort) one at a time, re-running each A/B on the current tree; add the slot property tests if they still hold",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794249996.1678286,
+      "timestamp_str": "2026-11-09 21:46:36",
+      "agent": "commandcode:integrate-keep",
+      "impact_assessment": {
+        "why": "The loop measured four keep-grade ideas but reverted the spike code; the user asked to re-verify the performance on the current tree and implement only what persists.",
+        "benefits": "Exact kernel wins (22x argmax, 1.68x top-p sampler, 2.56x large-nucleus sort) become shipped code instead of report-only recipes; durable slot tests close the coverage gap.",
+        "risks": "contract: ids and fidelity; dependency: one new AVX2 TU and CMake entry; concurrency: none; state: sampler branch, model argmax, tests.",
+        "mitigation": "Re-run each kernel and end-to-end A/B on the current tree, full suite, aikit check 4/4, one conventional commit per item, no push without approval."
+      },
+      "plan_digest": "b932cc6a35d201a34c8db5e128efd0dd2ef74f75bb02fca59754b26fa7d26a69"
+    },
+    {
+      "task_id": "TGE-KEEPGRADE-INTEGRATION",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Verified and integrated all four keep-grade items: AVX2 argmax 147.5->7.7 us (19.2x), top-p AVX2 exp 787->628 us (1.25x peaked), radix top-p sort 13.51->3.86 ms (3.50x large nucleus), slot tests 165/165 with mutation caught; end-to-end top-p +2.5% 0.5B, flat +4.8%/+5.0%, ids identical; 165/165, 4/4; checklists: passed",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1794251246.1051533,
+      "timestamp_str": "2026-11-09 22:07:26",
+      "agent": "commandcode:integrate-keep"
+    },
+    {
+      "task_id": "TGE-KEEPGRADE-INTEGRATION",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-KEEPGRADE-INTEGRATION' completed successfully.",
+      "status": "completed",
+      "timestamp": 1794251246.696823,
+      "timestamp_str": "2026-11-09 22:07:26",
+      "agent": "commandcode:integrate-keep"
     }
   ]
 }
