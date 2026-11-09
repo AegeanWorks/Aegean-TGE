@@ -1,8 +1,11 @@
 #include "tge/models/sampling.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <numeric>
 #include <stdexcept>
 #include <unordered_set>
@@ -180,6 +183,53 @@ SpeculativeVerdict speculative_accept(const float* probabilities, int count,
   return verdict;
 }
 
+namespace {
+
+/// Stable LSD radix sort of candidate token indices by descending probability.
+/// Positive fp32 bit patterns order like their values, so flipping the bits
+/// makes ascending key order equal descending probability. Four 8-bit passes;
+/// ties keep the candidate-scan order (index order).
+void sort_candidates_by_score(std::vector<int>& order,
+                              const std::vector<float>& scores) {
+  const std::size_t count = order.size();
+  if (count < 2) {
+    return;
+  }
+  std::vector<std::uint32_t> keys(count);
+  std::vector<std::uint32_t> keys_tmp(count);
+  std::vector<int> order_tmp(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    std::uint32_t bits = 0;
+    const float value = scores[static_cast<std::size_t>(order[index])];
+    std::memcpy(&bits, &value, sizeof(bits));
+    keys[index] = ~bits;
+  }
+  std::array<int, 256> offsets{};
+  for (int pass = 0; pass < 4; ++pass) {
+    const int shift = pass * 8;
+    offsets.fill(0);
+    for (std::size_t index = 0; index < count; ++index) {
+      ++offsets[(keys[index] >> shift) & 0xFFu];
+    }
+    int running = 0;
+    for (int bucket = 0; bucket < 256; ++bucket) {
+      const int size = offsets[static_cast<std::size_t>(bucket)];
+      offsets[static_cast<std::size_t>(bucket)] = running;
+      running += size;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+      const std::uint32_t bucket = (keys[index] >> shift) & 0xFFu;
+      const int position = offsets[bucket]++;
+      order_tmp[static_cast<std::size_t>(position)] = order[index];
+      keys_tmp[static_cast<std::size_t>(position)] = keys[index];
+    }
+    std::swap(order, order_tmp);
+    std::swap(keys, keys_tmp);
+  }
+}
+
+}  // namespace
+
 int sample_token(const float* logits, int count, const SamplingParams& params,
                  const int* history, int history_size,
                  std::vector<float>& scores, std::vector<int>& order,
@@ -289,7 +339,7 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
       return maximum_index;
     }
 
-    std::sort(order.begin(), order.end(), better);
+    sort_candidates_by_score(order, scores);
 
     float total = total_all;
     if (min_filter) {
