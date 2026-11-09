@@ -196,6 +196,13 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
   apply_repeat_penalty(scores, count, params, history, history_size);
 
   if (params.temperature <= 0.0F) {
+    static const bool use_avx2 = [] {
+      const cpu::Features features = cpu::detect().features;
+      return features.avx2 && features.fma;
+    }();
+    if (use_avx2) {
+      return cpu::argmax_avx2(scores.data(), count);
+    }
     int best = 0;
     for (int index = 1; index < count; ++index) {
       if (scores[static_cast<std::size_t>(index)] >

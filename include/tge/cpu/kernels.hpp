@@ -385,6 +385,11 @@ inline std::uint16_t float_to_half(float value) {
   return static_cast<std::uint16_t>(sign | (half + round));
 }
 
+/// First-index argmax for finite values. AVX2 max reduction plus a first-equal
+/// scan; ties keep the earliest index, matching the scalar strict-greater loop.
+/// Returns 0 for a null pointer or count < 1.
+int argmax_avx2(const float* values, int count);
+
 /// Streaming kernels used to measure the memory bandwidth ceiling.
 using CopyStreamFn = void (*)(float* dst, const float* src, std::size_t count);
 using SumStreamFn = float (*)(const float* src, std::size_t count);

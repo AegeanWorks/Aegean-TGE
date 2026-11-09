@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -448,4 +449,44 @@ TGE_TEST(sampling_validator_runs_before_a_model_load) {
     threw = true;
   }
   TGE_CHECK(threw);
+}
+
+TGE_TEST(argmax_avx2_matches_scalar_first_index) {
+  const int sizes[] = {1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+                       257};
+  std::uint32_t state = 0x13579BDFu;
+  const auto next = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return static_cast<float>((state >> 8) & 0xFFFFu) / 65536.0F;
+  };
+  for (const int count : sizes) {
+    std::vector<float> values(static_cast<std::size_t>(count));
+    for (float& value : values) {
+      value = next();
+    }
+    const auto scalar = [&values]() {
+      int best = 0;
+      for (int index = 1; index < static_cast<int>(values.size()); ++index) {
+        if (values[static_cast<std::size_t>(index)] >
+            values[static_cast<std::size_t>(best)]) {
+          best = index;
+        }
+      }
+      return best;
+    };
+    TGE_CHECK(tge::cpu::argmax_avx2(values.data(), count) == scalar());
+
+    std::fill(values.begin(), values.end(), 1.0F);
+    TGE_CHECK(tge::cpu::argmax_avx2(values.data(), count) == 0);
+
+    std::fill(values.begin(), values.end(), 0.0F);
+    values[static_cast<std::size_t>(count / 2)] = 2.0F;
+    values[static_cast<std::size_t>(count - 1)] = 2.0F;
+    TGE_CHECK(tge::cpu::argmax_avx2(values.data(), count) == count / 2);
+
+    for (int index = 0; index < count; ++index) {
+      values[static_cast<std::size_t>(index)] = static_cast<float>(index);
+    }
+    TGE_CHECK(tge::cpu::argmax_avx2(values.data(), count) == count - 1);
+  }
 }

@@ -67,6 +67,7 @@ add_library(tge_core STATIC
   src/cpu/avx2/dequant_batch_kq8_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/attention_avx2.cpp
+  src/cpu/avx2/argmax_avx2.cpp
   src/cpu/avx2/norm_rope_avx2.cpp
   src/cpu/avx2/sampler_exp_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp
@@ -92,6 +93,7 @@ tge_set_isa_flags(AVX2
   src/cpu/avx2/dequant_batch_kq8_avx2.cpp
   src/cpu/avx2/dequant_avx2.cpp
   src/cpu/avx2/attention_avx2.cpp
+  src/cpu/avx2/argmax_avx2.cpp
   src/cpu/avx2/norm_rope_avx2.cpp
   src/cpu/avx2/sampler_exp_avx2.cpp
   src/cpu/avx2/mem_bandwidth_avx2.cpp)

@@ -2580,6 +2580,13 @@ int Qwen2::argmax(const float* values, int count) {
   if (values == nullptr || count <= 0) {
     throw std::invalid_argument("argmax: null values or empty count");
   }
+  static const bool use_avx2 = [] {
+    const cpu::Features features = cpu::detect().features;
+    return features.avx2 && features.fma;
+  }();
+  if (use_avx2) {
+    return cpu::argmax_avx2(values, count);
+  }
   int best = 0;
   float best_value = values[0];
   for (int index = 1; index < count; ++index) {
