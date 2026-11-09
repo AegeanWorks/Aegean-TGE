@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <vector>
 
 #include "harness.hpp"
@@ -488,5 +489,218 @@ TGE_TEST(argmax_avx2_matches_scalar_first_index) {
       values[static_cast<std::size_t>(index)] = static_cast<float>(index);
     }
     TGE_CHECK(tge::cpu::argmax_avx2(values.data(), count) == count - 1);
+  }
+}
+
+TGE_TEST(sampling_cuts_match_the_reference_set) {
+  constexpr int kCount = 1024;
+  std::vector<float> logits(kCount);
+  std::uint32_t state = 0x2468ACE0u;
+  for (float& value : logits) {
+    state = state * 1664525u + 1013904223u;
+    value =
+        (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F - 1.0F) * 2.0F;
+  }
+
+  const auto check = [&](tge::models::SamplingParams params) {
+    std::vector<float> probabilities(kCount);
+    tge::models::softmax_probabilities(logits.data(), kCount, params.temperature,
+                                       probabilities.data());
+    if (params.top_k <= 0 && params.top_p >= 1.0F && params.min_p <= 0.0F) {
+      std::vector<float> uncut = probabilities;
+      std::vector<int> scratch;
+      tge::models::apply_sampling_cuts(uncut, kCount, params, scratch);
+      for (int index = 0; index < kCount; ++index) {
+        TGE_CHECK(uncut[static_cast<std::size_t>(index)] ==
+                  probabilities[static_cast<std::size_t>(index)]);
+      }
+      return;
+    }
+
+    std::vector<int> order;
+    const bool min_filter = params.min_p > 0.0F;
+    float total_all = 0.0F;
+    for (const float probability : probabilities) {
+      total_all += probability;
+    }
+    float total = total_all;
+    if (params.top_k > 0) {
+      order.resize(kCount);
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](int left, int right) {
+        return probabilities[static_cast<std::size_t>(left)] >
+               probabilities[static_cast<std::size_t>(right)];
+      });
+      order.resize(static_cast<std::size_t>(
+          std::min(params.top_k, kCount)));
+      total = 0.0F;
+      for (const int token : order) {
+        total += probabilities[static_cast<std::size_t>(token)];
+      }
+    } else {
+      float threshold =
+          std::min(min_filter ? params.min_p : 2.0F,
+                   params.top_p < 1.0F ? 1.0F - params.top_p : 2.0F);
+      for (;;) {
+        order.clear();
+        float mass = 0.0F;
+        for (int index = 0; index < kCount; ++index) {
+          if (probabilities[static_cast<std::size_t>(index)] >= threshold) {
+            order.push_back(index);
+            mass += probabilities[static_cast<std::size_t>(index)];
+          }
+        }
+        if (min_filter || params.top_p >= 1.0F ||
+            mass >= params.top_p * total_all || threshold <= 0.0F) {
+          break;
+        }
+        threshold *= 0.5F;
+      }
+    }
+    if (order.empty()) {
+      int maximum = 0;
+      for (int index = 1; index < kCount; ++index) {
+        if (probabilities[static_cast<std::size_t>(index)] >
+            probabilities[static_cast<std::size_t>(maximum)]) {
+          maximum = index;
+        }
+      }
+      order.push_back(maximum);
+    }
+    std::sort(order.begin(), order.end(), [&](int left, int right) {
+      return probabilities[static_cast<std::size_t>(left)] >
+             probabilities[static_cast<std::size_t>(right)];
+    });
+    if (min_filter) {
+      const float floor_value =
+          params.min_p * probabilities[static_cast<std::size_t>(order[0])];
+      std::size_t kept = 0;
+      total = 0.0F;
+      for (const int token : order) {
+        if (probabilities[static_cast<std::size_t>(token)] >= floor_value) {
+          order[kept++] = token;
+          total += probabilities[static_cast<std::size_t>(token)];
+        }
+      }
+      order.resize(kept);
+    }
+    if (params.top_p < 1.0F && total > 0.0F) {
+      float cumulative = 0.0F;
+      int limit = static_cast<int>(order.size());
+      for (int index = 0; index < limit; ++index) {
+        cumulative += probabilities[static_cast<std::size_t>(
+                         order[static_cast<std::size_t>(index)])] /
+                     total;
+        if (cumulative >= params.top_p) {
+          limit = index + 1;
+          break;
+        }
+      }
+      order.resize(static_cast<std::size_t>(limit));
+    }
+    std::vector<char> expected(kCount, 0);
+    for (const int token : order) {
+      expected[static_cast<std::size_t>(token)] = 1;
+    }
+
+    std::vector<float> actual = probabilities;
+    std::vector<int> scratch;
+    tge::models::apply_sampling_cuts(actual, kCount, params, scratch);
+    for (int index = 0; index < kCount; ++index) {
+      if (expected[static_cast<std::size_t>(index)] != 0) {
+        TGE_CHECK(actual[static_cast<std::size_t>(index)] ==
+                  probabilities[static_cast<std::size_t>(index)]);
+      } else {
+        TGE_CHECK(actual[static_cast<std::size_t>(index)] == 0.0F);
+      }
+    }
+
+    int outside = -1;
+    for (int index = 0; index < kCount && outside < 0; ++index) {
+      if (expected[static_cast<std::size_t>(index)] == 0) {
+        outside = index;
+      }
+    }
+    if (outside >= 0) {
+      std::uint32_t rng = 12345u;
+      const tge::models::SpeculativeVerdict verdict =
+          tge::models::speculative_accept(actual.data(), kCount, outside, rng);
+      TGE_CHECK(!verdict.accepted);
+      if (verdict.token >= 0 && verdict.token < kCount) {
+        TGE_CHECK(actual[static_cast<std::size_t>(verdict.token)] > 0.0F);
+      }
+    }
+  };
+
+  tge::models::SamplingParams params;
+  params.temperature = 0.8F;
+  params.top_k = 40;
+  check(params);
+
+  params = tge::models::SamplingParams{};
+  params.temperature = 0.8F;
+  params.top_p = 0.9F;
+  check(params);
+
+  params = tge::models::SamplingParams{};
+  params.temperature = 0.8F;
+  params.min_p = 0.05F;
+  check(params);
+
+  params = tge::models::SamplingParams{};
+  params.temperature = 0.8F;
+  params.top_k = 40;
+  params.top_p = 0.9F;
+  check(params);
+
+  params = tge::models::SamplingParams{};
+  params.temperature = 0.8F;
+  params.top_k = 10;
+  params.min_p = 0.1F;
+  params.top_p = 0.95F;
+  check(params);
+
+  params = tge::models::SamplingParams{};
+  params.temperature = 0.8F;
+  check(params);
+}
+
+TGE_TEST(speculative_accept_preserves_the_truncated_distribution) {
+  constexpr int kCount = 8;
+  std::vector<float> probabilities = {0.35F, 0.25F, 0.15F, 0.10F,
+                                      0.06F, 0.04F, 0.03F, 0.02F};
+  tge::models::SamplingParams params;
+  params.temperature = 1.0F;
+  params.top_p = 0.75F;
+  std::vector<float> cut = probabilities;
+  std::vector<int> scratch;
+  tge::models::apply_sampling_cuts(cut, kCount, params, scratch);
+  float mass = 0.0F;
+  for (const float probability : cut) {
+    mass += probability;
+  }
+  TGE_CHECK(mass > 0.0F);
+  std::vector<double> expected(kCount);
+  for (int index = 0; index < kCount; ++index) {
+    expected[static_cast<std::size_t>(index)] =
+        cut[static_cast<std::size_t>(index)] / mass;
+  }
+
+  constexpr int kTrials = 40000;
+  const int draft = 0;
+  std::uint32_t rng = 0xC0FFEEu;
+  std::vector<int> counts(kCount, 0);
+  for (int trial = 0; trial < kTrials; ++trial) {
+    const tge::models::SpeculativeVerdict verdict =
+        tge::models::speculative_accept(cut.data(), kCount, draft, rng);
+    TGE_CHECK(verdict.token >= 0 && verdict.token < kCount);
+    TGE_CHECK(cut[static_cast<std::size_t>(verdict.token)] > 0.0F);
+    ++counts[static_cast<std::size_t>(verdict.token)];
+  }
+  for (int index = 0; index < kCount; ++index) {
+    const double observed =
+        static_cast<double>(counts[static_cast<std::size_t>(index)]) / kTrials;
+    TGE_CHECK(std::fabs(observed - expected[static_cast<std::size_t>(index)]) <
+              0.01);
   }
 }

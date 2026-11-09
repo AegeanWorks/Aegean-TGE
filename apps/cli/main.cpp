@@ -626,11 +626,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
       state.speculation = "off";
     } else if (sampling.temperature <= 0.0F) {
       state.speculation = "greedy";
-    } else if (sampling.top_k <= 0 && sampling.top_p >= 1.0F &&
-               sampling.min_p <= 0.0F) {
-      state.speculation = "sampled";
     } else {
-      state.speculation = "disabled (sampling cuts)";
+      state.speculation = "sampled";
     }
     std::printf("%s\n", tge::cli::format_resolved(state).c_str());
   }
@@ -747,14 +744,13 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   // deterministic, so verifying penalized argmaxes keeps output identical.
   // (Sampled paths handle the penalty separately below.)
   const bool speculate = speculative && sampling.temperature <= 0.0F;
-  // Sampled speculation needs the full target distribution: temperature-only
-  // sampling, no top-k/p or min-p cuts. Repeat penalty is allowed: it is
+  // Sampled speculation targets the same distribution plain sampling draws,
+  // including the top-k/top-p/min-p cuts (the cut is applied to every row
+  // before the accept rule). Repeat penalty is allowed: it is
   // history-deterministic, so the accept rule stays exact, and each position
   // below is penalized with the history as of that position.
   const bool speculate_sampled =
-      speculative && sampling.temperature > 0.0F &&
-      sampling.top_k <= 0 && sampling.top_p >= 1.0F &&
-      sampling.min_p <= 0.0F;
+      speculative && sampling.temperature > 0.0F;
   int position = static_cast<int>(prompt.size());
   long long spec_steps = 0;
   long long spec_accepted = 0;
@@ -1085,7 +1081,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         // Penalized softmax of one row with the history as of this position:
         // the copy keeps the model's row intact, the penalty makes the
         // target exactly what plain sampling would draw, and the in-place
-        // softmax is safe (each lane reads then writes its own element).
+        // softmax is safe (each lane reads then writes its own element). The
+        // active top-k/top-p/min-p cut is applied after the softmax so the
+        // accept rule and the bonus draw see the same truncated distribution
+        // as `sample_token`.
         auto penalized_softmax = [&](const float* row) {
           std::memcpy(scores.data(), row,
                       sizeof(float) * static_cast<std::size_t>(vocab_size));
@@ -1095,6 +1094,11 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
           tge::models::softmax_probabilities(scores.data(), vocab_size,
                                              sampling.temperature,
                                              scores.data());
+          if (sampling.top_k > 0 || sampling.top_p < 1.0F ||
+              sampling.min_p > 0.0F) {
+            tge::models::apply_sampling_cuts(scores, vocab_size, sampling,
+                                             order);
+          }
         };
         const auto st0 = Clock::now();
         penalized_softmax(logits);

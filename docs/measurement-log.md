@@ -3994,3 +3994,18 @@ The idea loop's keep-grade recipes were re-verified against the post-hardening t
 | non-zero-fixture slot tests | 165/165; forcing `forward` to slot 0 fails both tests; restored green | n/a | n/a | kept |
 
 The large-nucleus sampler (high temperature/top_p) is the clearest end-to-end win; the argmax share is sub-percent at 3B and below the box drift, but the change is exact and strictly less work. Tests 162 -> **165** (argmax differential + two slot property tests); `aikit.py check aegean-tge` 4/4.
+
+## 2026-11-09 - Keep-grade integration: sampled speculation under top-k/top-p/min-p (kept)
+
+`--speculative` no longer disables itself when a sampling cut is active. `apply_sampling_cuts` mirrors `sample_token`'s selection (top-k partial sort; the absolute threshold prefilter for top-p/min-p; the relative min-p floor; the radix top-p prefix) and zeroes non-kept probabilities. `speculative_accept` already divides by the row total, so the verifier emits exactly the truncated distribution. The cut is applied in `penalized_softmax`, so the first verdict, every verify row and the bonus draw all see the same row.
+
+Re-verified on the integrated tree after re-applying the recipe, best-of-pairs, temp 0.8, seed 7, n=64, repetitive prompt, `--gpu off --threads 6`:
+
+| Config | plain t/s | sampled spec t/s | gain | accepted/step |
+|---|---:|---:|---:|---:|
+| 0.5B Q8_0, top-p 0.9 (4 pairs) | 69.17 | 306.74 | **4.44x** | 1.62 |
+| 0.5B Q8_0, top-k 40 (3 pairs) | 65.48 | 208.56 | **3.19x** | 1.30 |
+| 0.5B Q8_0, min-p 0.05 (2 pairs) | 59.86 | 118.06 | **1.97x** | 0.90 |
+| 3B Q4_K_M, top-p 0.9 (2 pairs) | 8.42 | 27.68 | **3.29x** | 2.41 |
+
+The first helper sorted all 128k candidates on every verified row and regressed the 0.5B by 5-7%; the threshold prefilter is required, not an optimization detail. Quote the paired ratio, not absolute t/s: this box's 3B baseline moved 3.35 -> 5.11 -> 8.42 t/s across sessions. Sampled speculation does not reproduce a sequential draw's ids (the accept rule consumes randomness differently); the distribution is preserved. The resolved line now reports `speculation=sampled` for every temperature setting. Tests 165 -> **167** (six-config cut-set reference; 40k-draw truncated-distribution gate); `aikit.py check aegean-tge` 4/4 with the generated map refreshed. Report: `reports/idea-invented-sampled-speculation-cuts-keep.md`.

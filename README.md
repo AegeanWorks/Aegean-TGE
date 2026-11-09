@@ -184,13 +184,16 @@ speculative decoding; it pins the per-head schedule so the verifier and a
 sequential decode agree. It engages for greedy decoding (with or without
 repeat penalty — penalized positions verify against the penalized argmax
 with the same history a sequential decode would see, so ids stay
-byte-identical) and for temperature-only sampling (no top-k/p, no min-p;
-repeat penalty allowed - each position is accepted against the penalized
-distribution, preserving it exactly); other sampling cuts fall back to
-single-token decoding. Measured: 1.66-2.00x greedy on a story prompt with
-identical ids, 2.03x sampled at temp 0.1 on repetitive text, 1.88x greedy
-with penalty; sampling-heavy settings are bounded by the softmax cost
-(see the log). Prefill attention for f32/f16 KV runs as a query-block
+byte-identical) and for any temperature sampling, including top-k/top-p/
+min-p cuts: every verifier row is truncated with the same cut `sample_token`
+uses, so the accept rule preserves the truncated distribution exactly (ids
+differ from a sequential draw because the rule consumes randomness
+differently, but the distribution is identical; repeat penalty is allowed and
+applied per position). Measured: 1.66-2.00x greedy on a story prompt with
+identical ids; sampled: 4.4x top-p 0.9, 3.2x top-k 40, 2.0x min-p 0.05 on
+0.5B, 3.3x top-p on 3B (best-of-pairs, quiet box; 1.5-1.6x when loaded).
+Sampling-heavy settings are bounded by the softmax/cut cost (see the log).
+Prefill attention for f32/f16 KV runs as a query-block
 kernel: one K/V row feeds the whole 64-token chunk instead of one query,
 which is neutral below ~2k and 1.6-2.3x on the attention phase at 8k
 (ids identical in every test; i8 KV stays on the per-token path because

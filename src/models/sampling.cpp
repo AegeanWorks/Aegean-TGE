@@ -230,6 +230,121 @@ void sort_candidates_by_score(std::vector<int>& order,
 
 }  // namespace
 
+void apply_sampling_cuts(std::vector<float>& probabilities, int count,
+                         const SamplingParams& params,
+                         std::vector<int>& scratch) {
+  if (count <= 0 ||
+      (params.top_k <= 0 && params.top_p >= 1.0F && params.min_p <= 0.0F)) {
+    return;
+  }
+  const bool min_filter = params.min_p > 0.0F;
+  float total_all = 0.0F;
+  for (int index = 0; index < count; ++index) {
+    total_all += probabilities[static_cast<std::size_t>(index)];
+  }
+  if (!(total_all > 0.0F)) {
+    return;
+  }
+
+  float total = total_all;
+  if (params.top_k > 0) {
+    const int keep_k = std::min(params.top_k, count);
+    scratch.resize(static_cast<std::size_t>(count));
+    std::iota(scratch.begin(), scratch.end(), 0);
+    std::partial_sort(scratch.begin(), scratch.begin() + keep_k, scratch.end(),
+                      [&probabilities](int left, int right) {
+                        return probabilities[static_cast<std::size_t>(left)] >
+                               probabilities[static_cast<std::size_t>(right)];
+                      });
+    scratch.resize(static_cast<std::size_t>(keep_k));
+    total = 0.0F;
+    for (const int token : scratch) {
+      total += probabilities[static_cast<std::size_t>(token)];
+    }
+  } else {
+    // Same threshold halving as the top-p branch of sample_token: the radix
+    // sort then only sees the nucleus candidates instead of the whole vocab.
+    float threshold =
+        std::min(min_filter ? params.min_p : 2.0F,
+                 params.top_p < 1.0F ? 1.0F - params.top_p : 2.0F);
+    for (;;) {
+      scratch.resize(static_cast<std::size_t>(count));
+      std::size_t kept = 0;
+      float mass = 0.0F;
+      for (int index = 0; index < count; ++index) {
+        const float probability = probabilities[static_cast<std::size_t>(index)];
+        if (probability >= threshold) {
+          scratch[kept++] = index;
+          mass += probability;
+        }
+      }
+      scratch.resize(kept);
+      if (min_filter || params.top_p >= 1.0F ||
+          mass >= params.top_p * total_all || threshold <= 0.0F) {
+        break;
+      }
+      threshold *= 0.5F;
+    }
+  }
+  if (scratch.empty()) {
+    int maximum = 0;
+    for (int index = 1; index < count; ++index) {
+      if (probabilities[static_cast<std::size_t>(index)] >
+          probabilities[static_cast<std::size_t>(maximum)]) {
+        maximum = index;
+      }
+    }
+    scratch.push_back(maximum);
+  }
+
+  float best = 0.0F;
+  for (const int token : scratch) {
+    best = std::max(best, probabilities[static_cast<std::size_t>(token)]);
+  }
+  if (min_filter) {
+    const float floor_value = params.min_p * best;
+    std::size_t kept = 0;
+    total = 0.0F;
+    for (const int token : scratch) {
+      const float probability = probabilities[static_cast<std::size_t>(token)];
+      if (probability >= floor_value) {
+        scratch[kept++] = token;
+        total += probability;
+      }
+    }
+    scratch.resize(kept);
+  }
+  if (!(total > 0.0F)) {
+    return;
+  }
+  if (params.top_p < 1.0F) {
+    sort_candidates_by_score(scratch, probabilities);
+    float cumulative = 0.0F;
+    int limit = static_cast<int>(scratch.size());
+    for (int index = 0; index < limit; ++index) {
+      cumulative +=
+          probabilities[static_cast<std::size_t>(
+              scratch[static_cast<std::size_t>(index)])] /
+          total;
+      if (cumulative >= params.top_p) {
+        limit = index + 1;
+        break;
+      }
+    }
+    scratch.resize(static_cast<std::size_t>(limit));
+  }
+
+  std::vector<std::uint8_t> keep(static_cast<std::size_t>(count), 0);
+  for (const int token : scratch) {
+    keep[static_cast<std::size_t>(token)] = 1;
+  }
+  for (int index = 0; index < count; ++index) {
+    if (keep[static_cast<std::size_t>(index)] == 0) {
+      probabilities[static_cast<std::size_t>(index)] = 0.0F;
+    }
+  }
+}
+
 int sample_token(const float* logits, int count, const SamplingParams& params,
                  const int* history, int history_size,
                  std::vector<float>& scores, std::vector<int>& order,

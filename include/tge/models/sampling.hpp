@@ -80,4 +80,13 @@ struct SpeculativeVerdict {
 SpeculativeVerdict speculative_accept(const float* probabilities, int count,
                                       int draft, std::uint32_t& random_state);
 
+/// Applies the top-k/top-p/min-p cuts to a probability row in place: entries
+/// outside the kept set become zero; kept entries keep their values
+/// (unnormalized). `scratch` is reusable index storage. Used by sampled
+/// speculative decoding so its verifier targets exactly the truncated
+/// distribution plain sampling would draw.
+void apply_sampling_cuts(std::vector<float>& probabilities, int count,
+                         const SamplingParams& params,
+                         std::vector<int>& scratch);
+
 }  // namespace tge::models
