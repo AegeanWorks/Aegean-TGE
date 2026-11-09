@@ -836,8 +836,9 @@ TGE_TEST(config_reads_the_yarn_magnitude_scale) {
 }
 
 /// Zero-weight one-block phi3-shaped model bytes shared by the load test
-/// and the forward smoke test below.
-std::vector<std::uint8_t> build_phi_model();
+/// and the forward smoke test below. `patterned` fills the tensors with
+/// deterministic non-zero values so cross-slot KV corruption is observable.
+std::vector<std::uint8_t> build_phi_model(bool patterned = false);
 
 TGE_TEST(kv_layer_offset_addresses_sequences) {
   TGE_CHECK(tge::models::Qwen2::kv_layer_offset(0, 0, 2, 16, 8) == 0);
@@ -900,6 +901,135 @@ TGE_TEST(model_rejects_i8_kv_with_unaligned_kv_dim) {
   TGE_CHECK(error.find("multiple of 32") != std::string::npos);
 }
 
+TGE_TEST(model_sequence_slots_are_independent) {
+  // Abstract property: with deterministic non-zero weights, the history in
+  // slot 1 must be exactly the history a fresh single-slot model sees. Any
+  // cross-slot write, slot-offset mistake, or CoW row mismatch breaks the
+  // bit-for-bit comparison; the zero-weight fixture cannot see it.
+  const TempFile temp(build_phi_model(true), "tge_gguf_phi_slots.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16, false, false, false, 2);
+  TGE_REQUIRE(model != nullptr);
+  const int vocab = model->config().vocab_size;
+  TGE_REQUIRE(vocab == 64);
+  const int prompt[] = {1, 2, 3, 4};
+  const int decode[] = {9, 10, 11, 12};
+  const int decode1[] = {13, 14, 15, 16};
+  std::vector<std::vector<float>> seq0(4, std::vector<float>(vocab));
+  std::vector<std::vector<float>> seq1(4, std::vector<float>(vocab));
+  std::vector<std::vector<float>> fresh(4, std::vector<float>(vocab));
+
+  TGE_REQUIRE(model->prefill(prompt, 4, 0, 0) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(0, decode[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    std::memcpy(seq0[static_cast<std::size_t>(step)].data(), out,
+                sizeof(float) * static_cast<std::size_t>(vocab));
+  }
+
+  // Same prompt (exercises the CoW hit path) but a different decode history,
+  // so a wrong-slot read in slot 1 sees different K/V rows and diverges.
+  TGE_REQUIRE(model->prefill(prompt, 4, 0, 1) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(1, decode1[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    std::memcpy(seq1[static_cast<std::size_t>(step)].data(), out,
+                sizeof(float) * static_cast<std::size_t>(vocab));
+  }
+
+  std::unique_ptr<tge::models::Qwen2> single =
+      tge::models::Qwen2::load(temp.path(), error, 16);
+  TGE_REQUIRE(single != nullptr);
+  TGE_REQUIRE(single->prefill(prompt, 4, 0) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = single->forward(decode[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    std::memcpy(fresh[static_cast<std::size_t>(step)].data(), out,
+                sizeof(float) * static_cast<std::size_t>(vocab));
+  }
+  for (int step = 0; step < 4; ++step) {
+    for (int index = 0; index < vocab; ++index) {
+      TGE_CHECK(seq0[static_cast<std::size_t>(step)]
+                       [static_cast<std::size_t>(index)] ==
+                fresh[static_cast<std::size_t>(step)]
+                     [static_cast<std::size_t>(index)]);
+    }
+  }
+
+  single->reset_cache();
+  TGE_REQUIRE(single->prefill(prompt, 4, 0) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = single->forward(decode1[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    for (int index = 0; index < vocab; ++index) {
+      TGE_CHECK(seq1[static_cast<std::size_t>(step)]
+                       [static_cast<std::size_t>(index)] ==
+                out[index]);
+    }
+  }
+}
+
+TGE_TEST(model_reset_one_slot_leaves_other_slots_intact) {
+  // Abstract property: resetting slot 1 must not disturb slot 0's rows, and
+  // slot 1 must replay exactly like a fresh slot afterwards.
+  const TempFile temp(build_phi_model(true), "tge_gguf_phi_reset.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16, false, false, false, 2);
+  TGE_REQUIRE(model != nullptr);
+  const int vocab = model->config().vocab_size;
+  const int prompt0[] = {1, 2, 3, 4};
+  const int decode0[] = {9, 10, 11, 12};
+  const int prompt1[] = {5, 6, 7, 8};
+  const int decode1[] = {13, 14, 15, 16};
+
+  TGE_REQUIRE(model->prefill(prompt0, 4, 0, 0) != nullptr);
+  std::vector<float> slot0_snapshot(vocab);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(0, decode0[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    if (step == 3) {
+      std::memcpy(slot0_snapshot.data(), out,
+                  sizeof(float) * static_cast<std::size_t>(vocab));
+    }
+  }
+  TGE_REQUIRE(model->prefill(prompt1, 4, 0, 1) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    TGE_REQUIRE(model->forward(1, decode1[step], 4 + step) != nullptr);
+  }
+
+  model->reset_cache(1);
+  const float* replay = model->forward(0, decode0[3], 7);
+  TGE_REQUIRE(replay != nullptr);
+  for (int index = 0; index < vocab; ++index) {
+    TGE_CHECK(replay[index] == slot0_snapshot[static_cast<std::size_t>(index)]);
+  }
+
+  TGE_REQUIRE(model->prefill(prompt1, 4, 0, 1) != nullptr);
+  std::vector<std::vector<float>> reset1(4, std::vector<float>(vocab));
+  for (int step = 0; step < 4; ++step) {
+    const float* out = model->forward(1, decode1[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    std::memcpy(reset1[static_cast<std::size_t>(step)].data(), out,
+                sizeof(float) * static_cast<std::size_t>(vocab));
+  }
+
+  std::unique_ptr<tge::models::Qwen2> single =
+      tge::models::Qwen2::load(temp.path(), error, 16);
+  TGE_REQUIRE(single != nullptr);
+  TGE_REQUIRE(single->prefill(prompt1, 4, 0) != nullptr);
+  for (int step = 0; step < 4; ++step) {
+    const float* out = single->forward(decode1[step], 4 + step);
+    TGE_REQUIRE(out != nullptr);
+    for (int index = 0; index < vocab; ++index) {
+      TGE_CHECK(reset1[static_cast<std::size_t>(step)]
+                        [static_cast<std::size_t>(index)] ==
+                out[index]);
+    }
+  }
+}
+
 TGE_TEST(phi_style_fused_tensors_load) {  // One-block phi3-shaped file: fused attn_qkv (dim + 2*kv_dim rows) and a
   // fused ffn_up (2*ffn rows), all tiny Q8_0 so the load is milliseconds.
   // dim = 32, heads = 2, kv heads = 1 -> head_dim 16, kv_dim 16.
@@ -959,7 +1089,7 @@ TGE_TEST(phi_model_forward_is_finite_and_deterministic) {
 }
 /// Zero-weight one-block phi3-shaped model bytes shared by the load test
 /// and the forward smoke test below.
-std::vector<std::uint8_t> build_phi_model() {
+std::vector<std::uint8_t> build_phi_model(bool patterned) {
   std::vector<std::uint8_t> out;
   put_u32(out, 0x46554747u);  // "GGUF"
   put_u32(out, 3);
@@ -1011,8 +1141,42 @@ std::vector<std::uint8_t> build_phi_model() {
   while (out.size() % 32 != 0) {
     out.push_back(0);
   }
-  for (std::uint64_t index = 0; index < offset; ++index) {
-    out.push_back(0);
+  if (!patterned) {
+    for (std::uint64_t index = 0; index < offset; ++index) {
+      out.push_back(0);
+    }
+    return out;
+  }
+  std::uint32_t state = 0x9E3779B9u;
+  const auto next = [&state]() {
+    state = state * 1664525u + 1013904223u;
+    return state;
+  };
+  for (const Entry& entry : entries) {
+    const std::size_t start = out.size();
+    if (entry.f32) {
+      const int count = static_cast<int>(entry.bytes / 4);
+      const bool rope = std::strcmp(entry.name, "rope_factors_short.weight") == 0;
+      for (int index = 0; index < count; ++index) {
+        const float value = rope ? 1.0F : 0.5F + 0.05F * (index % 7);
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        put_u32(out, bits);
+      }
+    } else {
+      const int blocks = static_cast<int>(entry.bytes / 34);
+      for (int block = 0; block < blocks; ++block) {
+        out.push_back(0x00);  // fp16 scale 0x2C00 = 0.0625, little endian
+        out.push_back(0x2C);
+        for (int quant = 0; quant < 32; ++quant) {
+          const int value = static_cast<int>((next() >> 24) % 17) - 8;
+          out.push_back(static_cast<std::uint8_t>(static_cast<std::int8_t>(value)));
+        }
+      }
+    }
+    while ((out.size() - start) % 32 != 0) {
+      out.push_back(0);
+    }
   }
   return out;
 }
