@@ -214,10 +214,16 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
   }
 
   // The maximum is needed for numerical stability and by min-p. It is found
-  // once, without disturbing the order of the scores.
+  // once, without disturbing the order of the scores; the index feeds the
+  // degenerate-cut fallback.
   float maximum = scores[0];
+  int maximum_index = 0;
   for (int index = 1; index < count; ++index) {
-    maximum = std::max(maximum, scores[static_cast<std::size_t>(index)]);
+    const float value = scores[static_cast<std::size_t>(index)];
+    if (value > maximum) {
+      maximum = value;
+      maximum_index = index;
+    }
   }
   const float inverse_temperature = 1.0F / params.temperature;
 
@@ -247,20 +253,11 @@ int sample_token(const float* logits, int count, const SamplingParams& params,
   if (params.top_k <= 0 && (params.top_p < 1.0F || params.min_p > 0.0F)) {
     const bool min_filter = params.min_p > 0.0F;
 
-    float total_all = 0.0F;
-    float maximum_probability = -1.0F;
-    int maximum_index = 0;
-    for (int index = 0; index < count; ++index) {
-      const float probability = std::exp(
-          (scores[static_cast<std::size_t>(index)] - maximum) *
-          inverse_temperature);
-      scores[static_cast<std::size_t>(index)] = probability;
-      total_all += probability;
-      if (probability > maximum_probability) {
-        maximum_probability = probability;
-        maximum_index = index;
-      }
-    }
+    // Same AVX2 exp kernel as the no-cut path. The maximum probability is 1.0
+    // by construction (exp(0) at the argmax), which the degenerate fallbacks
+    // below use via maximum_index.
+    const float total_all = softmax_probabilities(
+        scores.data(), count, params.temperature, scores.data());
 
     const float min_floor = min_filter ? params.min_p : 2.0F;
     const float nucleus_floor =
