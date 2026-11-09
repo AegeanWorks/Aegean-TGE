@@ -3981,3 +3981,16 @@ The audit's two safe deferred items are now closed. No arithmetic path changed: 
 | `--kv i8` with `kv_dim % 32 != 0` | silently truncated the scale index | fails loudly at load |
 
 Tests **162 cases, 0 failed** (4 new: slot offset, two-slot forward/reset on the synthetic phi model, i8 alignment rejection, plan session scaling). The existing phi determinism test still passes, and the single-sequence fidelity values are unchanged (f32 1.020e-11, f16 3.252e-07, 399/399). `aikit.py check aegean-tge` 4/4.
+
+## 2026-11-08 - Keep-grade integration: AVX2 argmax, top-p AVX2 exp, radix top-p sort, slot tests (kept)
+
+The idea loop's keep-grade recipes were re-verified against the post-hardening tree and integrated one commit at a time. Each item was re-measured against the tree immediately before it, with the temporary bench removed before the commit; nothing was pushed.
+
+| Change | Re-verified kernel result | End to end (best-of, seed 7) | ids | Verdict |
+|---|---|---|---|---|
+| AVX2 first-index argmax | 147.5 -> 7.7 us per 128k call (**19.2x**), same result sink; differential tie test | speculative decode below this box's drift (best-of moved both ways across sessions) | identical | kept |
+| top-p AVX2 exp | 787.4 -> 628.0 us (**1.25x**) peaked; 14.82 -> 14.01 ms large-nucleus; same sinks | 0.5B top-p +2.5%, 3B neutral | identical | kept |
+| radix top-p candidate sort | 579.5 -> 560.9 us peaked; 13.51 -> 3.86 ms large nucleus (**3.50x**); same sinks | 0.5B flat +4.8%, 3B flat +5.0% | identical | kept |
+| non-zero-fixture slot tests | 165/165; forcing `forward` to slot 0 fails both tests; restored green | n/a | n/a | kept |
+
+The large-nucleus sampler (high temperature/top_p) is the clearest end-to-end win; the argmax share is sub-percent at 3B and below the box drift, but the change is exact and strictly less work. Tests 162 -> **165** (argmax differential + two slot property tests); `aikit.py check aegean-tge` 4/4.
