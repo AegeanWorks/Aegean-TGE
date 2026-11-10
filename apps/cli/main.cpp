@@ -79,7 +79,8 @@ void print_usage(std::FILE* stream = stdout) {
       "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --pin-threads 1|0  pin decode workers to P-cores (default 0)\n"
       "  bench continuous [opts] continuous batching over N KV slots\n"
-      "        --model PATH --requests N --tokens N --threads N --sequences N\n"
+      "        --model PATH --requests N --tokens N --threads N\n"
+      "        --sequences N|auto  KV slots; auto sizes from live headroom\n"
       "        --prompt-tokens N   prompt length batched with the decodes\n"
       "        --prefill-threads N prefill workers (default: all logical)\n"
       "        --vnni | --kv f16   optional VNNI / half-KV trades\n"
@@ -1473,11 +1474,54 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
                              int threads, int sequences, int context,
                              int prompt_tokens, bool vnni, bool kv_half,
                              bool kv_q8, int prefill_threads) {
-  if (requests <= 0 || tokens <= 0 || sequences <= 0 || prompt_tokens <= 0) {
+  if (requests <= 0 || tokens <= 0 || prompt_tokens <= 0) {
     std::fprintf(stderr,
-                 "bench continuous: requests, tokens, sequences and "
-                 "prompt-tokens must be positive\n");
+                 "bench continuous: requests, tokens and prompt-tokens must "
+                 "be positive\n");
     return 2;
+  }
+  if (sequences <= 0) {
+    // `--sequences auto`: size the slots from live headroom at full context.
+    // place().max_sessions is not used here because it preserves the session
+    // count by shrinking context first.
+    const int plan_context = context > 0 ? context : 4096;
+    const tge::gguf::File file = tge::gguf::File::open(path, false);
+    const tge::models::ModelPlan plan =
+        tge::models::analyse(file, plan_context);
+    const tge::memory::BudgetSnapshot snapshot =
+        tge::memory::MemoryBudget{}.snapshot();
+    const std::int64_t reserve = std::max<std::int64_t>(
+        static_cast<std::int64_t>(snapshot.total_physical / 16),
+        1024LL * 1024 * 1024);
+    const std::int64_t live = std::max<std::int64_t>(
+        0, static_cast<std::int64_t>(snapshot.available_physical) - reserve);
+    const std::int64_t usable = std::min<std::int64_t>(
+        static_cast<std::int64_t>(snapshot.usable), live);
+    const std::int64_t headroom = usable - plan.parameter_bytes;
+    if (headroom <= 0 || plan.kv_bytes_per_session <= 0) {
+      std::fprintf(stderr,
+                   "bench continuous: auto cannot fit the weights and one KV "
+                   "session\n");
+      return 2;
+    }
+    sequences = static_cast<int>(headroom / plan.kv_bytes_per_session);
+    if (sequences < 1) {
+      sequences = 1;
+    }
+    if (sequences > 8) {
+      sequences = 8;
+    }
+    if (sequences < 4) {
+      std::fprintf(stderr,
+                   "bench continuous: budget fits only %d slots\n", sequences);
+    }
+    std::printf("auto     : %d slots (usable %.1f GiB, headroom %.1f GiB, "
+                "KV/session %.0f MiB)\n",
+                sequences,
+                static_cast<double>(usable) / (1024.0 * 1024.0 * 1024.0),
+                static_cast<double>(headroom) / (1024.0 * 1024.0 * 1024.0),
+                static_cast<double>(plan.kv_bytes_per_session) /
+                    (1024.0 * 1024.0));
   }
   if (sequences > 64 || prompt_tokens + sequences > 64) {
     std::fprintf(stderr,
@@ -2889,7 +2933,13 @@ int dispatch_main(int argc, char** argv) {
       else if (std::strcmp(flag, "--requests") == 0) ok = parse_int(value, requests);
       else if (std::strcmp(flag, "--tokens") == 0) ok = parse_int(value, tokens);
       else if (std::strcmp(flag, "--threads") == 0) ok = parse_int(value, threads);
-      else if (std::strcmp(flag, "--sequences") == 0) ok = parse_int(value, sequences);
+      else if (std::strcmp(flag, "--sequences") == 0) {
+        if (std::strcmp(value, "auto") == 0) {
+          sequences = 0;
+        } else {
+          ok = parse_int(value, sequences);
+        }
+      }
       else if (std::strcmp(flag, "--context") == 0) ok = parse_int(value, context);
       else if (std::strcmp(flag, "--prompt-tokens") == 0) ok = parse_int(value, prompt_tokens);
       else if (std::strcmp(flag, "--prefill-threads") == 0) ok = parse_int(value, prefill_threads);
