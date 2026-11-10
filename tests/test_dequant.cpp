@@ -508,6 +508,41 @@ TGE_TEST(dequant_batch_matches_scalar_reference) {
   }
 }
 
+TGE_TEST(dequant_q4k_fused_row_matches_batch) {
+  // The fused decode dot must equal dequantise-then-dot bit for bit, not
+  // merely closely: the only delta is the scratch round trip it removes.
+  constexpr int kRows = 2;
+  for (const int cols : {512, 3072}) {
+    const std::vector<std::uint8_t> q4k =
+        make_q4_k_matrix(kRows * cols / kBlockElements, 0x47114711u);
+    std::vector<float> input(static_cast<std::size_t>(cols));
+    std::uint32_t state = 0x1234ABCDu;
+    for (float& value : input) {
+      state = state * 1664525u + 1013904223u;
+      value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+    }
+    std::vector<float> reference(kRows, 0.0F);
+    std::vector<float> fused(kRows, 0.0F);
+
+    tge::cpu::DequantBatchArgs args;
+    args.data = q4k.data();
+    args.kind = tge::cpu::QuantKind::Q4_K;
+    args.rows = kRows;
+    args.cols = cols;
+    args.input = input.data();
+    args.tokens = 1;
+    const tge::cpu::GemvConfig config{2};
+
+    args.out = reference.data();
+    tge::cpu::gemv_dequant_batch_avx2(args, config);
+    args.out = fused.data();
+    tge::cpu::gemv_q4k_fused_avx2(args, config);
+
+    TGE_CHECK(std::memcmp(reference.data(), fused.data(),
+                          reference.size() * sizeof(float)) == 0);
+  }
+}
+
 TGE_TEST(q4k_avx2_nibble_halves_are_distinct) {
   // A row where every low nibble is 0 and every high nibble is 15. If the two
   // halves were taken from the wrong byte range, or swapped, the block would

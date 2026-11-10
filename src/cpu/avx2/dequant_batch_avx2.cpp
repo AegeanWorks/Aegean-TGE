@@ -52,6 +52,45 @@ inline float dot_f32(const float* left, const float* right, int count) {
 
 }  // namespace
 
+void gemv_q4k_fused_avx2(const DequantBatchArgs& args,
+                         const GemvConfig& config) {
+  if (args.kind != QuantKind::Q4_K || args.tokens != 1) {
+    gemv_dequant_batch_avx2(args, config);
+    return;
+  }
+  if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {
+    return;
+  }
+  if (args.data == nullptr || args.input == nullptr || args.out == nullptr) {
+    throw std::invalid_argument("gemv_q4k_fused: null data/input/out");
+  }
+
+  const std::size_t row_bytes = quant_row_bytes(args.kind, args.cols);
+  const int rows = args.rows;
+  const int cols = args.cols;
+
+  const int threads = resolve_thread_count(config.threads);
+  core::ThreadPool& pool =
+      config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
+
+  int band_rows = rows / (threads * 4);
+  if (band_rows < 1) {
+    band_rows = 1;
+  }
+  const int bands = (rows + band_rows - 1) / band_rows;
+
+  pool.parallel_for(bands, 1, [&](int band) {
+    const int begin = band * band_rows;
+    const int end = std::min(rows, begin + band_rows);
+    const std::uint8_t* row =
+        args.data + static_cast<std::size_t>(begin) * row_bytes;
+    for (int index = begin; index < end; ++index) {
+      args.out[index] = dot_q4k_row_avx2(row, args.input, cols);
+      row += row_bytes;
+    }
+  });
+}
+
 void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
                              const GemvConfig& config) {
   if (args.rows <= 0 || args.cols <= 0 || args.tokens <= 0) {

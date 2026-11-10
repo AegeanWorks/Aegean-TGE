@@ -63,6 +63,53 @@ inline void write32(const std::uint8_t* quants, bool high_nibble, float scale,
   }
 }
 
+/// Dequantises 32 packed nibbles in registers and FMAs them with the
+/// activation at the same lane offsets `write32`/`dot_f32` use. The dequant
+/// stays multiply-then-subtract (no FMA) so the fused dot is bit-identical to
+/// the dequantise-then-dot path.
+inline void fma32(const std::uint8_t* quants, bool high_nibble, float scale,
+                  float offset, const float* input, __m256* accumulators) {
+  const __m256i bytes =
+      _mm256_loadu_si256(reinterpret_cast<const __m256i*>(quants));
+  const __m256i nibbles =
+      high_nibble
+          ? _mm256_and_si256(_mm256_srli_epi16(bytes, 4), _mm256_set1_epi8(0x0F))
+          : _mm256_and_si256(bytes, _mm256_set1_epi8(0x0F));
+
+  const __m256 factor = _mm256_set1_ps(scale);
+  const __m256 base = _mm256_set1_ps(offset);
+
+  const __m128i first = _mm256_castsi256_si128(nibbles);
+  const __m128i second = _mm256_extracti128_si256(nibbles, 1);
+
+  const __m256 lanes[4] = {
+      _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(first)),
+      _mm256_cvtepi32_ps(
+          _mm256_cvtepi8_epi32(_mm_srli_si128(first, 8))),
+      _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(second)),
+      _mm256_cvtepi32_ps(
+          _mm256_cvtepi8_epi32(_mm_srli_si128(second, 8))),
+  };
+  for (int lane = 0; lane < 4; ++lane) {
+    const __m256 scaled =
+        _mm256_sub_ps(_mm256_mul_ps(lanes[lane], factor), base);
+    accumulators[lane] = _mm256_fmadd_ps(
+        scaled, _mm256_loadu_ps(input + lane * 8), accumulators[lane]);
+  }
+}
+
+/// Reduces four 8-lane accumulators exactly like `dot_f32`.
+inline float reduce_accumulators(const __m256* accumulators) {
+  const __m256 sum01 = _mm256_add_ps(accumulators[0], accumulators[1]);
+  const __m256 sum23 = _mm256_add_ps(accumulators[2], accumulators[3]);
+  const __m256 sum = _mm256_add_ps(sum01, sum23);
+  __m128 total = _mm_add_ps(_mm256_castps256_ps128(sum),
+                            _mm256_extractf128_ps(sum, 1));
+  total = _mm_add_ps(total, _mm_movehl_ps(total, total));
+  total = _mm_add_ss(total, _mm_shuffle_ps(total, total, 1));
+  return _mm_cvtss_f32(total);
+}
+
 void dequantize_q4_k_avx2(const std::uint8_t* source, float* destination,
                           int cols) {
   const int blocks = cols / kKBlockElements;
@@ -103,6 +150,49 @@ void dequantize_q4_k_avx2(const std::uint8_t* source, float* destination,
 }
 
 }  // namespace
+
+/// Fused Q4_K single-row dot: dequantise each 32-value group in registers and
+/// FMA it with the activation immediately. The nibble extraction, lane map,
+/// multiply-then-subtract and four-accumulator reduction are exactly the
+/// stored path's, so the result is bit-identical to dequantise-then-dot.
+float dot_q4k_row_avx2(const std::uint8_t* source, const float* input,
+                       int cols) {
+  const int blocks = cols / kKBlockElements;
+  __m256 accumulators[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(),
+                            _mm256_setzero_ps(), _mm256_setzero_ps()};
+  for (int block = 0; block < blocks; ++block) {
+    const std::uint8_t* entry = source + block * kQ4_KBlockBytes;
+    std::uint16_t scale_bits = 0;
+    std::uint16_t minimum_bits = 0;
+    std::memcpy(&scale_bits, entry, sizeof(scale_bits));
+    std::memcpy(&minimum_bits, entry + 2, sizeof(minimum_bits));
+    const float d = half_to_float(scale_bits);
+    const float dmin = half_to_float(minimum_bits);
+
+    const std::uint8_t* scales = entry + 4;
+    const std::uint8_t* quants = entry + 16;
+    const float* in = input + block * kKBlockElements;
+
+    int scale_index = 0;
+    for (int chunk = 0; chunk < kKBlockElements; chunk += 64) {
+      std::uint8_t sc = 0;
+      std::uint8_t m = 0;
+      unpack_scale_min(scale_index + 0, scales, sc, m);
+      const float d1 = d * sc;
+      const float m1 = dmin * m;
+      unpack_scale_min(scale_index + 1, scales, sc, m);
+      const float d2 = d * sc;
+      const float m2 = dmin * m;
+
+      fma32(quants, /*high_nibble=*/false, d1, m1, in + chunk, accumulators);
+      fma32(quants, /*high_nibble=*/true, d2, m2, in + chunk + 32,
+            accumulators);
+      quants += 32;
+      scale_index += 2;
+    }
+  }
+  return reduce_accumulators(accumulators);
+}
 
 /// Q6_K super-block: 128 low bytes + 64 high bytes + 16 int8 scales + fp16 d.
 /// Each 6-bit weight is 4 bits from `low` plus 2 bits from `high`, minus 32,

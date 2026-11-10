@@ -182,6 +182,15 @@ using DequantBatchFn = void (*)(const DequantBatchArgs& args,
 
 void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
                               const GemvConfig& config);
+
+/// Single-row fused K-quant decode dots: dequantise in registers and FMA with
+/// the activation immediately, bit-identical to dequantise-then-dot. Decode
+/// only; `gemv_*_fused_avx2` falls back to the batch kernel for tokens > 1.
+float dot_q4k_row_avx2(const std::uint8_t* source, const float* input,
+                       int cols);
+void gemv_q4k_fused_avx2(const DequantBatchArgs& args,
+                         const GemvConfig& config);
+
 void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
                                const GemvConfig& config);
 
