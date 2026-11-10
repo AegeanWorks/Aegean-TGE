@@ -1065,16 +1065,34 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     // draft that differs from the argmax is still worth verifying.
     //
     // Positions: the current `logits` cover draft[0]; verify row i covers
-    // draft[i + 1] (row i is the distribution after feed[i]), and row 4
+    // draft[i + 1] (row i is the distribution after feed[i]), and row 5
     // feeds the bonus token. Draft[0] is judged before verifying, so a
     // first-position rejection skips the weight pass entirely.
     if (speculate_sampled && position + tge::models::Qwen2::kSpeculativeBatch <=
                                  model->max_context()) {
-      // Sampled path keeps the historical five-deep draft shape: proposals
-      // and verify rows are byte-identical to before this change, so the
-      // distribution-preserving accept loop is untouched.
-      int draft[5];
+      // Sampled path: the first five proposals match the historical shape
+      // exactly (same matcher call), and the sixth slot uses the token that
+      // followed the most recent earlier copy of the five-token window, or
+      // draft[4] when no copy exists. Row 5 is computed either way, so this
+      // only adds the chance to accept it.
+      int draft[6];
       if (prompt_lookup_draft(history, draft, 5)) {
+        draft[5] = draft[4];
+        for (int start = static_cast<int>(history.size()) - 6; start >= 0;
+             --start) {
+          bool match = true;
+          for (int index = 0; index < 5; ++index) {
+            if (history[static_cast<std::size_t>(start + index)] !=
+                draft[index]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            draft[5] = history[static_cast<std::size_t>(start + 5)];
+            break;
+          }
+        }
         if (static_cast<int>(scores.size()) < vocab_size) {
           scores.assign(static_cast<std::size_t>(vocab_size), 0.0F);
         }
@@ -1125,10 +1143,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         if (!stopped && first.accepted &&
             static_cast<int>(generated.size()) < count) {
           int feed[tge::models::Qwen2::kSpeculativeBatch];
-          for (int index = 0; index < 5; ++index) {
+          for (int index = 0; index < 6; ++index) {
             feed[index] = draft[index];
           }
-          feed[5] = 0;
           const auto v0 = Clock::now();
           const float* verify_logits = model->verify_draft_logits(
               feed, tge::models::Qwen2::kSpeculativeBatch, position);
@@ -1136,7 +1153,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
           fwd_seconds += std::chrono::duration<double>(v1 - v0).count();
 
           bool done = false;
-          for (int index = 1; index < 5 && !done; ++index) {
+          for (int index = 1; index < 6 && !done; ++index) {
             if (static_cast<int>(generated.size()) >= count) {
               stopped = true;
               break;
@@ -1163,7 +1180,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
           if (!done && !stopped &&
               static_cast<int>(generated.size()) < count) {
             penalized_softmax(verify_logits +
-                              static_cast<std::size_t>(4) * vocab_size);
+                              static_cast<std::size_t>(5) * vocab_size);
             const int bonus = tge::models::categorical_sample(
                 scores.data(), vocab_size, random_state);
             generated.push_back(bonus);
