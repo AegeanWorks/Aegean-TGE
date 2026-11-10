@@ -543,6 +543,39 @@ TGE_TEST(dequant_q4k_fused_row_matches_batch) {
   }
 }
 
+TGE_TEST(dequant_q6k_fused_row_matches_batch) {
+  constexpr int kRows = 2;
+  for (const int cols : {512, 3072}) {
+    const std::vector<std::uint8_t> q6k =
+        make_q6_k_matrix(kRows * cols / kBlockElements, 0x66666666u);
+    std::vector<float> input(static_cast<std::size_t>(cols));
+    std::uint32_t state = 0x4321FEDCu;
+    for (float& value : input) {
+      state = state * 1664525u + 1013904223u;
+      value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+    }
+    std::vector<float> reference(kRows, 0.0F);
+    std::vector<float> fused(kRows, 0.0F);
+
+    tge::cpu::DequantBatchArgs args;
+    args.data = q6k.data();
+    args.kind = tge::cpu::QuantKind::Q6_K;
+    args.rows = kRows;
+    args.cols = cols;
+    args.input = input.data();
+    args.tokens = 1;
+    const tge::cpu::GemvConfig config{2};
+
+    args.out = reference.data();
+    tge::cpu::gemv_dequant_batch_avx2(args, config);
+    args.out = fused.data();
+    tge::cpu::gemv_q6k_fused_avx2(args, config);
+
+    TGE_CHECK(std::memcmp(reference.data(), fused.data(),
+                          reference.size() * sizeof(float)) == 0);
+  }
+}
+
 TGE_TEST(q4k_avx2_nibble_halves_are_distinct) {
   // A row where every low nibble is 0 and every high nibble is 15. If the two
   // halves were taken from the wrong byte range, or swapped, the block would

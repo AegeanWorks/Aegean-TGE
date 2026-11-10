@@ -190,6 +190,10 @@ float dot_q4k_row_avx2(const std::uint8_t* source, const float* input,
                        int cols);
 void gemv_q4k_fused_avx2(const DequantBatchArgs& args,
                          const GemvConfig& config);
+float dot_q6k_row_avx2(const std::uint8_t* source, const float* input,
+                       int cols);
+void gemv_q6k_fused_avx2(const DequantBatchArgs& args,
+                         const GemvConfig& config);
 
 void gemv_dequant_batch_scalar(const DequantBatchArgs& args,
                                const GemvConfig& config);

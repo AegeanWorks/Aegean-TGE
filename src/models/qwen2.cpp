@@ -987,11 +987,17 @@ void Qwen2::matvec(const Matrix& weight, const float* input,
       phase_matvec_ns_ += clock_ns() - t0;
       return;
     }
-    if (!scalar_kernels_ && kind == cpu::QuantKind::Q4_K &&
-        cpu::detect().features.avx2) {
-      cpu::gemv_q4k_fused_avx2(args, config);
-      phase_matvec_ns_ += clock_ns() - t0;
-      return;
+    if (!scalar_kernels_ && cpu::detect().features.avx2) {
+      if (kind == cpu::QuantKind::Q4_K) {
+        cpu::gemv_q4k_fused_avx2(args, config);
+        phase_matvec_ns_ += clock_ns() - t0;
+        return;
+      }
+      if (kind == cpu::QuantKind::Q6_K) {
+        cpu::gemv_q6k_fused_avx2(args, config);
+        phase_matvec_ns_ += clock_ns() - t0;
+        return;
+      }
     }
     kernels().gemv_dequant_batch(args, config);
     phase_matvec_ns_ += clock_ns() - t0;

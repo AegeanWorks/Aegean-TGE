@@ -222,6 +222,29 @@ inline void dequantize_group_q6_k(const std::uint8_t* low,
   _mm256_storeu_ps(out, _mm256_mul_ps(_mm256_set1_ps(factor), values));
 }
 
+/// Fused form of `dequantize_group_q6_k`: the same decode stays
+/// multiply-only, then the scaled 8 values are FMA'd into the accumulator
+/// `dot_f32` would have used at that lane offset.
+inline void fma_group_q6_k(const std::uint8_t* low, const std::uint8_t* high,
+                           int low_shift, int high_shift, float factor,
+                           const float* input, __m256& accumulator) {
+  const __m128i low8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(low));
+  const __m128i high8 =
+      _mm_loadl_epi64(reinterpret_cast<const __m128i*>(high));
+  const __m128i lo_nibbles = _mm_and_si128(
+      _mm_srli_epi16(low8, low_shift), _mm_set1_epi8(0x0F));
+  const __m128i hi_bits = _mm_slli_epi16(
+      _mm_and_si128(_mm_srli_epi16(high8, high_shift),
+                    _mm_set1_epi8(0x03)),
+      4);
+  const __m128i combined =
+      _mm_sub_epi8(_mm_or_si128(lo_nibbles, hi_bits), _mm_set1_epi8(32));
+  const __m256 values =
+      _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(combined));
+  const __m256 scaled = _mm256_mul_ps(_mm256_set1_ps(factor), values);
+  accumulator = _mm256_fmadd_ps(scaled, _mm256_loadu_ps(input), accumulator);
+}
+
 void dequantize_q6_k_avx2(const std::uint8_t* source, float* destination,
                           int cols) {
   const int blocks = cols / kKBlockElements;
@@ -260,6 +283,50 @@ void dequantize_q6_k_avx2(const std::uint8_t* source, float* destination,
       scales += 8;
     }
   }
+}
+
+/// Fused Q6_K single-row dot: the same decode and multiply-only dequant as
+/// `dequantize_q6_k_avx2`, with each 8-value group FMA'd straight into the
+/// accumulator `dot_f32` would have used. Bit-identical to the stored path.
+float dot_q6k_row_avx2(const std::uint8_t* source, const float* input,
+                       int cols) {
+  const int blocks = cols / kKBlockElements;
+  __m256 accumulators[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(),
+                            _mm256_setzero_ps(), _mm256_setzero_ps()};
+  for (int block = 0; block < blocks; ++block) {
+    const std::uint8_t* entry = source + block * kQ6_KBlockBytes;
+    const std::uint8_t* low = entry;
+    const std::uint8_t* high = entry + 128;
+    const auto* scales = reinterpret_cast<const std::int8_t*>(entry + 192);
+    std::uint16_t scale_bits = 0;
+    std::memcpy(&scale_bits, entry + 208, sizeof(scale_bits));
+    const float d = half_to_float(scale_bits);
+    const float* in = input + block * kKBlockElements;
+
+    for (int half = 0; half < kKBlockElements; half += 128) {
+      for (int index = 0; index < 32; index += 8) {
+        const int within = index / 16;
+        const float f1 = d * static_cast<float>(scales[within + 0]);
+        const float f2 = d * static_cast<float>(scales[within + 2]);
+        const float f3 = d * static_cast<float>(scales[within + 4]);
+        const float f4 = d * static_cast<float>(scales[within + 6]);
+        __m256& accumulator = accumulators[index / 8];
+        const float* base = in + half + index;
+        fma_group_q6_k(low + index, high + index, 0, 0, f1, base,
+                       accumulator);
+        fma_group_q6_k(low + index + 32, high + index, 0, 2, f2,
+                       base + 32, accumulator);
+        fma_group_q6_k(low + index, high + index, 4, 4, f3,
+                       base + 64, accumulator);
+        fma_group_q6_k(low + index + 32, high + index, 4, 6, f4,
+                       base + 96, accumulator);
+      }
+      low += 64;
+      high += 32;
+      scales += 8;
+    }
+  }
+  return reduce_accumulators(accumulators);
 }
 
 /// Q5_0 legacy block: fp16 d + 32 high bits + 16 quant bytes. Each weight is
