@@ -132,15 +132,13 @@ aegean-tge/
 | f16 block-prefill row hoist | 2048: attention 1.054x / prefill 1.068x (6 pairs); 4096: 1.123x / 1.109x (4 pairs); ids identical, fidelity unchanged |
 | Block-prefill value-accumulation tile | 2049: attention 1.69x f16 / 1.58x f32 (median, 3 pairs each); 4081: 2.09x / 2.01x (2 each); prefill median 1.14x / 1.31x; ids identical 10/10 |
 | Continuous batching, `bench continuous` | 8 × 32: 69.0 t/s at an 8-token prompt vs 62.3 at 1 and 42.2 sessions; ids identical; 4 slots, mixed prompt+decode |
-| GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
-| f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
-| Decode defaults (q8 full tail + 4 GQA chunks) | 4k prompt, 63 tokens: 2.62 -> 2.95 t/s (1.13x); attention phase 4-13% faster; ids identical |
-| Block prefill attention (f32/f16 KV) | 8k prompt: prefill 682.7 -> 475.0 s and 600.9 -> 501.7 s (1.44x / 1.20x), attention 1.63-1.88x; ids identical |
-| kq8d opt-in, `--kq8d head` | f32 KV: mean KL 1.874e-4, top-1 393/399 at 399 positions; 2,399 positions top-1 98.83%; head matvec 3.3-3.6x |
-| kq8d opt-in, `--kq8d head,down` | f32 KV: mean KL 9.711e-4, top-1 390/399 at 399 positions; 2,399 positions top-1 97.67%; default off |
+| `--sequences auto` (continuous bench) | 8 × 32: 8 slots at 9.0-9.1 GiB usable; 1.10x median over fixed 4 (3/3 pairs); transcripts identical |
+| Fused Q4_K/Q6_K decode row dot | Llama-3B Q4_K_M 63 tok: Q4_K 6.55 -> 9.20 t/s (1.40x), Q6_K increment 9.36 -> 10.69 t/s (1.14x); ids identical, fidelity 1.157e-11 / 199/199 |
+| Sampled sixth verifier row | 0.5B locked 128 tok: 22 -> 19 steps, 4.86 -> 5.79 accepted/step, 116 vs 93 t/s best; story neutral; sampled ids identical |
+| Vectorized softmax max/sum | sampler phase 1.4-1.6x faster (top-p and no-cut); sampled ids identical on every config; greedy unchanged |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 162 cases, all passing |
+| Tests | 169 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
@@ -217,7 +215,9 @@ prices at 1.658e-6 mean KL with 497/497 top-1 and identical free-running ids,
 while its speed is not a uniform win; the default stays f32. `bench continuous`
 keeps four KV slots active in one model and decodes the active requests in one
 weight pass; 8×32 measures 58.3 t/s aggregate against 42.2 for four concurrent
-models, with identical ids. Numbers:
+models, with identical ids. `--sequences auto` sizes the slots from live memory
+headroom at full context instead (8 slots when the budget allows, a warning when
+it does not) and never shrinks context to preserve a slot count. Numbers:
 [docs/measurement-log.md](docs/measurement-log.md);
 method and caveats: [docs/benchmarks.md](docs/benchmarks.md).
 

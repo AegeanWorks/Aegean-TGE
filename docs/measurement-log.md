@@ -4009,3 +4009,39 @@ Re-verified on the integrated tree after re-applying the recipe, best-of-pairs, 
 | 3B Q4_K_M, top-p 0.9 (2 pairs) | 8.42 | 27.68 | **3.29x** | 2.41 |
 
 The first helper sorted all 128k candidates on every verified row and regressed the 0.5B by 5-7%; the threshold prefilter is required, not an optimization detail. Quote the paired ratio, not absolute t/s: this box's 3B baseline moved 3.35 -> 5.11 -> 8.42 t/s across sessions. Sampled speculation does not reproduce a sequential draw's ids (the accept rule consumes randomness differently); the distribution is preserved. The resolved line now reports `speculation=sampled` for every temperature setting. Tests 165 -> **167** (six-config cut-set reference; 40k-draw truncated-distribution gate); `aikit.py check aegean-tge` 4/4 with the generated map refreshed. Report: `reports/idea-invented-sampled-speculation-cuts-keep.md`.
+
+## 2026-11-10 - Winner integration: sixth sampled draft, fused K-quant decode, vectorized softmax, sequences auto (kept)
+
+The loop's unintegrated generation-side keep reports were re-applied one at a
+time to the post-integration tree, re-measured in alternating pairs, and
+committed separately after each build + test pass. Nothing was pushed.
+
+| Change | Re-verified result | ids / output | Verdict |
+|---|---|---|---|
+| Sampled sixth verifier row | 0.5B locked `ha`, 128 tok, top-p 0.9: 22 -> 19 verify steps, accepted/step 4.86 -> 5.79; decode median 1.066x (3 pairs; the 0.934 pair had matvec drift) | identical; story seeds 1..4 mean 1.022x with the same steps | kept |
+| Fused Q4_K row dot | Llama-3B Q4_K_M greedy 63 tok, 4 pairs: 6.55/6.97/6.70/6.29 -> 9.20/9.04/8.47/8.38 t/s, median 1.32x | identical 4/4; fidelity 1.157e-11, 199/199 | kept |
+| Fused Q6_K row dot | same workload, incremental after Q4_K: 9.36/9.64/8.11/8.84 -> 10.69/10.56/10.21/8.68 t/s, median 1.12x (3/4 positive) | identical 4/4; fidelity 1.157e-11, 199/199 | kept |
+| Vectorized softmax max/sum | sample phase: 0.5B top-p 40.0 -> 25.6 ms (1.56x), no-cut 36.6 -> 22.4 ms (1.63x), 3B top-p 38.2 -> 26.4 ms (1.45x) | sampled ids identical in every config; spec 19/19 steps and 5.79/5.79 accepted | kept |
+| `--sequences auto` | 8x32 continuous: auto picked 8 slots at 9.0-9.1 GiB usable; 132/132/122 vs 117/120/113 t/s over fixed 4, median 1.10x | transcripts identical 3/3 | kept |
+
+The fused row dots are exact: `dequant_q4k_fused_row_matches_batch` and
+`dequant_q6k_fused_row_matches_batch` compare `gemv_*_fused_avx2` to
+`gemv_dequant_batch_avx2` with `memcmp == 0` over 512/3072 columns; the dequant
+stays multiply-only and the reduction is the batch kernel's four-accumulator
+order. The sixth draft keeps `prompt_lookup_draft(history, draft, 5)` so the
+historical five proposals are byte-identical, then appends
+`history[start + 5]` (fallback `draft[4]`). The softmax max is exact; only the
+summation order changes the returned total (~4e-7 relative), while the stored
+probabilities are unchanged. `--sequences auto` divides full-context KV
+headroom directly instead of using `place().max_sessions`, whose context-shrink
+contract is the wrong answer for a fixed-context bench.
+
+Left outside deliberately: the startup-only keeps (`tokenizer-state-cache`,
+the no-init KV/scratch bundle) change load/tokenizer time, not decode
+throughput, and the timers fix is diagnostic-only; none meets this round's
+token-generation bar. Mixed or negative results (Q5_K bridge, 8-chunk GQA,
+degree-4 exp) stay as recorded.
+
+Tests 169/169 (two new exact fused-row differentials); `aikit.py check
+aegean-tge` 4/4.
+
