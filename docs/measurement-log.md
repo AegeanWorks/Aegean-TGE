@@ -4045,3 +4045,24 @@ degree-4 exp) stay as recorded.
 Tests 169/169 (two new exact fused-row differentials); `aikit.py check
 aegean-tge` 4/4.
 
+## 2026-11-10 - kq8d attention-projection scope shipped opt-in (kept, usage-gated)
+
+The cycle-39 report's `attn` scope (`--kq8d attn`: `wq`/`wk`/`wv`/`wo`
+single-token projections through `gemv_dequant_kq8_row_avx2`) is now a
+first-class CLI scope on `generate` and `fidelity` instead of an env-gated
+spike. The default stays off, and it is documented as a standalone scope, not
+an addition to `head,down` (the three-scope stack fails the top-1 bar at
+1,167/1,199).
+
+| Check | Result |
+|---|---|
+| 199-position fidelity, 3B Q4_K_M, f32 KV | mean KL 1.000e-3, worst 1.278e-2, top-1 195/199 (97.99%) — inside the 1.6e-3 / 97.6% class bar |
+| decode, 0.5B Q4_K_M, 1.2k prompt, 6 alternating pairs | 38.71/39.28, 38.24/36.80, 35.50/36.21, 38.03/38.02, 35.83/39.17, 37.38/38.59 -> median 1.017x (4/6 positive, one flat, one -3.8%) |
+| ids | identical on the 3B 1.2k prompt in every pair |
+
+The kernel is still the 2.9-3.1x cold-matrix win from cycle 39; at the model
+level the four projections are only ~10-20% of decode, so the end-to-end move
+is near this box's noise. It ships because it is priced, opt-in and cannot
+affect the default path; it is not a default-on candidate.
+
+

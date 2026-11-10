@@ -114,7 +114,7 @@ void print_usage(std::FILE* stream = stdout) {
       "        --vnni           AVX-VNNI Q8 batch kernels (activation reused)\n"
       "        --kernel kq8     integer Q4_K/Q6_K x Q8_K prefill kernels (default on)\n"
       "        --kernel float   float dequant prefill kernels (default off)\n"
-      "        --kq8d S         opt-in integer decode scopes: head|down|head,down\n"
+      "        --kq8d S         opt-in integer decode scopes: head|down|attn|head,down\n"
       "                         (default off; lossy near-tie logits, see README)\n"
       "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --gpu M          auto|off|on GPU offload (default auto)\n"
@@ -127,7 +127,7 @@ void print_usage(std::FILE* stream = stdout) {
       "        --kernel kq8     compare against the integer Q4_K/Q6_K x Q8_K prefill kernel (default on)\n"
       "        --kernel float   compare against the float dequant prefill kernels (default off)\n"
       "        --kq8d S         compare against opt-in integer decode scopes:\n"
-      "                         head|down|head,down (default off)\n"
+      "                         head|down|attn|head,down (default off)\n"
       "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
       "        --gpu M          auto|off|on GPU offload (default auto)\n"
       "        --sparse         price the static sparse subset on the candidate\n"
@@ -500,8 +500,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      VocabularyMode vocabulary,
                      tge::models::AttentionMode attention_mode,
                      bool speculative, bool vnni, bool kq8, bool kq8d_head,
-                     bool kq8d_down, bool kv_half, bool kv_q8, bool kv_auto,
-                     bool prefetch, int prefill_threads, bool pin_threads,
+                     bool kq8d_down, bool kq8d_attn, bool kv_half, bool kv_q8,
+                     bool kv_auto, bool prefetch, int prefill_threads,
+                     bool pin_threads,
                      tge::models::SparseConfig sparse,
                      const std::string& gpu_mode, bool disable_fuse = false,
                      bool disable_skip = false) {
@@ -579,7 +580,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   }
   model->set_vnni(vnni);
   model->set_kq8(kq8);
-  model->set_kq8d(kq8d_head, kq8d_down);
+  model->set_kq8d(kq8d_head, kq8d_down, kq8d_attn);
   if (sparse.enabled) {
     try {
       model->set_sparse_config(sparse);
@@ -2132,6 +2133,7 @@ int run_generate(int argc, char** argv) {
   bool kq8 = true;
   bool kq8d_head = false;
   bool kq8d_down = false;
+  bool kq8d_attn = false;
   bool kv_half = false;
   bool kv_q8 = false;
   bool kv_auto = false;
@@ -2259,17 +2261,20 @@ int run_generate(int argc, char** argv) {
     } else if (std::strcmp(flag, "--kq8d") == 0) {
       kq8d_head = false;
       kq8d_down = false;
+      kq8d_attn = false;
       if (std::strcmp(value, "head") == 0) {
         kq8d_head = true;
       } else if (std::strcmp(value, "down") == 0) {
         kq8d_down = true;
+      } else if (std::strcmp(value, "attn") == 0) {
+        kq8d_attn = true;
       } else if (std::strcmp(value, "head,down") == 0 ||
                  std::strcmp(value, "down,head") == 0) {
         kq8d_head = true;
         kq8d_down = true;
       } else if (std::strcmp(value, "off") != 0) {
         std::fprintf(stderr,
-                     "generate: --kq8d takes head|down|head,down|off\n");
+                     "generate: --kq8d takes head|down|attn|head,down|off\n");
         return 2;
       }
     } else if (std::strcmp(flag, "--top-k") == 0) {
@@ -2330,9 +2335,9 @@ int run_generate(int argc, char** argv) {
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
                           vocabulary, attention_mode, speculative, vnni, kq8,
-                          kq8d_head, kq8d_down, kv_half, kv_q8, kv_auto,
-                          prefetch, prefill_threads, pin_threads != 0, sparse,
-                          gpu_mode, disable_fuse, disable_skip);
+                          kq8d_head, kq8d_down, kq8d_attn, kv_half, kv_q8,
+                          kv_auto, prefetch, prefill_threads, pin_threads != 0,
+                          sparse, gpu_mode, disable_fuse, disable_skip);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
@@ -2443,8 +2448,9 @@ int run_mem_bench(int argc, char** argv, int first) {
 
 int command_fidelity(const std::string& path, const std::string& corpus_path,
                      int context, int max_tokens, int threads, bool vnni,
-                     bool kq8, bool kq8d_head, bool kq8d_down, bool kv_half,
-                     bool kv_q8, bool kv_auto, tge::models::SparseConfig sparse,
+                     bool kq8, bool kq8d_head, bool kq8d_down, bool kq8d_attn,
+                     bool kv_half, bool kv_q8, bool kv_auto,
+                     tge::models::SparseConfig sparse,
                      const std::string& gpu_mode) {
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::cli::Preflight preflight{
@@ -2505,7 +2511,7 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
   reference->set_scalar_kernels(true);
   candidate->set_vnni(vnni);
   candidate->set_kq8(kq8);
-  candidate->set_kq8d(kq8d_head, kq8d_down);
+  candidate->set_kq8d(kq8d_head, kq8d_down, kq8d_attn);
   // The candidate may request the GPU; the reference never does, so any KL
   // prices the GPU numerics against the exact scalar oracle.
   candidate->set_use_gpu(gpu_mode != "off");
@@ -2673,6 +2679,7 @@ int run_fidelity(int argc, char** argv) {
   bool kq8 = true;
   bool kq8d_head = false;
   bool kq8d_down = false;
+  bool kq8d_attn = false;
   bool kv_half = false;
   bool kv_q8 = false;
   bool kv_auto = false;
@@ -2749,17 +2756,20 @@ int run_fidelity(int argc, char** argv) {
     } else if (std::strcmp(flag, "--kq8d") == 0) {
       kq8d_head = false;
       kq8d_down = false;
+      kq8d_attn = false;
       if (std::strcmp(value, "head") == 0) {
         kq8d_head = true;
       } else if (std::strcmp(value, "down") == 0) {
         kq8d_down = true;
+      } else if (std::strcmp(value, "attn") == 0) {
+        kq8d_attn = true;
       } else if (std::strcmp(value, "head,down") == 0 ||
                  std::strcmp(value, "down,head") == 0) {
         kq8d_head = true;
         kq8d_down = true;
       } else if (std::strcmp(value, "off") != 0) {
         std::fprintf(stderr,
-                     "fidelity: --kq8d takes head|down|head,down|off\n");
+                     "fidelity: --kq8d takes head|down|attn|head,down|off\n");
         return 2;
       }
     } else if (std::strcmp(flag, "--sparse-window") == 0) {
@@ -2794,9 +2804,9 @@ int run_fidelity(int argc, char** argv) {
     kv_half = tge::models::Qwen2::auto_kv_half(context);
     kv_q8 = false;
   }
-  return command_fidelity(model_path, corpus_path, context, max_tokens, threads,
-                          vnni, kq8, kq8d_head, kq8d_down, kv_half, kv_q8,
-                          kv_auto, sparse, gpu_mode);
+  return command_fidelity(model_path, corpus_path, context, max_tokens,
+                          threads, vnni, kq8, kq8d_head, kq8d_down, kq8d_attn,
+                          kv_half, kv_q8, kv_auto, sparse, gpu_mode);
 }
 
 }  // namespace

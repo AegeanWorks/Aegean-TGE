@@ -2068,9 +2068,9 @@ const float* Qwen2::forward(int sequence, int token, int position) {
     const cpu::Q8Quantized q_attn_in =
         vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
     const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
-    matvec(layer.wq, h_.data(), q_.data(), q_attn_in_ptr);
-    matvec(layer.wk, h_.data(), k_.data(), q_attn_in_ptr);
-    matvec(layer.wv, h_.data(), v_.data(), q_attn_in_ptr);
+    matvec(layer.wq, h_.data(), q_.data(), q_attn_in_ptr, kq8d_attn_);
+    matvec(layer.wk, h_.data(), k_.data(), q_attn_in_ptr, kq8d_attn_);
+    matvec(layer.wv, h_.data(), v_.data(), q_attn_in_ptr, kq8d_attn_);
     for (int axis = 0; axis < dim; ++axis) {
       q_[static_cast<std::size_t>(axis)] += layer.q_bias[axis];
     }
@@ -2109,7 +2109,7 @@ const float* Qwen2::forward(int sequence, int token, int position) {
     const cpu::Q8Quantized q_attn_out =
         vnni_ ? quantize_activations(attn_.data(), 1, dim) : cpu::Q8Quantized{};
     matvec(layer.wo, attn_.data(), h_.data(),
-           vnni_ ? &q_attn_out : nullptr);
+           vnni_ ? &q_attn_out : nullptr, kq8d_attn_);
     for (int axis = 0; axis < dim; ++axis) {
       x_[static_cast<std::size_t>(axis)] += h_[axis];
     }

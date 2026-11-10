@@ -136,6 +136,13 @@ aegean-tge/
 | Fused Q4_K/Q6_K decode row dot | Llama-3B Q4_K_M 63 tok: Q4_K 6.55 -> 9.20 t/s (1.40x), Q6_K increment 9.36 -> 10.69 t/s (1.14x); ids identical, fidelity 1.157e-11 / 199/199 |
 | Sampled sixth verifier row | 0.5B locked 128 tok: 22 -> 19 steps, 4.86 -> 5.79 accepted/step, 116 vs 93 t/s best; story neutral; sampled ids identical |
 | Vectorized softmax max/sum | sampler phase 1.4-1.6x faster (top-p and no-cut); sampled ids identical on every config; greedy unchanged |
+| GEMV f32 4096² | 18.4 GB/s on 1 thread, 35.4 GB/s on 16 |
+| f32 GEMM 1024³ | 66.8 GFLOPS single-thread, 206.6 GFLOPS on 16 threads |
+| Decode defaults (q8 full tail + 4 GQA chunks) | 4k prompt, 63 tokens: 2.62 -> 2.95 t/s (1.13x); attention phase 4-13% faster; ids identical |
+| Block prefill attention (f32/f16 KV) | 8k prompt: prefill 682.7 -> 475.0 s and 600.9 -> 501.7 s (1.44x / 1.20x), attention 1.63-1.88x; ids identical |
+| kq8d opt-in, `--kq8d head` | f32 KV: mean KL 1.874e-4, top-1 393/399 at 399 positions; 2,399 positions top-1 98.83%; head matvec 3.3-3.6x |
+| kq8d opt-in, `--kq8d head,down` | f32 KV: mean KL 9.711e-4, top-1 390/399 at 399 positions; 2,399 positions top-1 97.67%; default off |
+| kq8d opt-in, `--kq8d attn` | f32 KV: mean KL 1.000e-3, top-1 195/199 at 199 positions; 1,199-position top-1 97.83%; decode median 1.017x at 1.2k, not stackable with head+down |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
 | Tests | 169 cases, all passing |
@@ -200,12 +207,17 @@ its 8k working set is cache-resident). Decode defaults also use the full
 chunks per KV head above 1k positions. `--kq8d S` is the opt-in lossy
 decode tier: `head` routes the 308 MiB LM-head projection through the
 integer kq8d row kernel, `down` does the same for the FFN down
-projection, `head,down` enables both; the default is off. On f32 KV the
-399-position fidelity is 1.874e-4 mean KL / 393-399 top-1 for `head` and
-9.711e-4 / 390-399 for `head,down`; at 2,399 positions the top-1 is
-98.83% and 97.67% respectively. The gain is decode-only (head matvec
-3.3-3.6x, end-to-end decode about 1.3x at 4k); it changes near-tie
-logits, so it is off by default and priced by `tge fidelity --kq8d`.
+projection, `attn` routes the four attention projections, `head,down`
+enables both of the first two; the default is off. On f32 KV the
+399-position fidelity is 1.874e-4 mean KL / 393-399 top-1 for `head`,
+9.711e-4 / 390-399 for `head,down`, and 1.000e-3 / 195-199 (97.99%) for
+`attn`; at 2,399 positions the top-1 is 98.83%, 97.67% and 97.83%
+respectively. The gain is decode-only (head matvec 3.3-3.6x,
+end-to-end decode about 1.3x at 4k for `head,down`; `attn` is a
+standalone near-noise decode scope at ~+1.7% median on a 1.2k prompt,
+not additive with head+down — the three-scope stack fails the top-1
+bar); it changes near-tie logits, so it is off by default and priced by
+`tge fidelity --kq8d`.
 `--vnni` selects the AVX-VNNI batch kernels with one activation
 quantization per distinct vector; it lifts prefill 14-19 percent on the best
 run at the cost of a measured 1.6e-3 KL and 12/497 top-1 flips, so the default

@@ -202,15 +202,18 @@ class Qwen2 {
     /// cannot execute an AVX2 translation unit.
     bool kq8_effective() const { return kq8_ && avx2_fma_; }
 
-    /// Opt-in integer decode kernels for the LM head and the FFN down
-    /// projection. Both are lossy on near-tie logits; the measured fidelity
-    /// tiers and usage guidance are in the README and measurement log.
-    void set_kq8d(bool head, bool down) {
+    /// Opt-in integer decode kernels for the LM head, the FFN down
+    /// projection and the attention projections. All are lossy on near-tie
+    /// logits; the measured fidelity tiers and usage guidance are in the
+    /// README and measurement log.
+    void set_kq8d(bool head, bool down, bool attn = false) {
       kq8d_head_ = head;
       kq8d_down_ = down;
+      kq8d_attn_ = attn;
     }
     bool kq8d_head() const { return kq8d_head_; }
     bool kq8d_down() const { return kq8d_down_; }
+    bool kq8d_attn() const { return kq8d_attn_; }
 
   /// True when the KV cache is stored as IEEE half.
   bool kv_half() const { return kv_half_; }
@@ -427,6 +430,7 @@ class Qwen2 {
     bool avx2_fma_ = false;
     bool kq8d_head_ = false;
     bool kq8d_down_ = false;
+    bool kq8d_attn_ = false;
   bool kv_half_ = false;
   bool kv_q8_ = false;
   bool use_gpu_requested_ = false;
