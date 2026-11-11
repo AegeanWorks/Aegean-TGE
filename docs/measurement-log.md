@@ -4066,3 +4066,26 @@ is near this box's noise. It ships because it is priced, opt-in and cannot
 affect the default path; it is not a default-on candidate.
 
 
+
+## 2026-11-11 - Quantized multi-prefix snapshot: i8 KV tier (kept)
+
+The 1384 half-B recipe (quantized snapshot: f16 + i8) had only its f16 half
+shipped; i8 KV was excluded from the cross-sequence table in every query,
+populate and hit site, so `bench continuous --kv i8` re-prefilled every
+admission. The table now carries a `q8` kind tag plus the stored quantized
+rows and per-32-block scales, copies them verbatim on populate and restores
+them verbatim on hit (deterministic quantize of identical rows, so a hit is
+byte-identical by construction). f32/f16 stores are unchanged and keep their
+own tag.
+
+| Check | Result |
+|---|---|
+| `bench continuous --kv i8`, 0.5B Q8_0, 8 requests x 32 tokens, 8 slots, 48-token shared prompt | wall 3.331/2.357/2.363 -> 1.246/1.282/1.252 s (median 1.84x); decode 106.08 -> 192.31 t/s aggregate |
+| table traffic | 1 `POPULATE C=48` + 7 `PRIME seq=1..7` per run; base emits none |
+| transcripts | `state: independent (all transcripts identical)` in both arms; `first` ids string identical |
+| single-stream ids, `generate --kv i8` | identical 32/32 |
+
+The win is admission-side prefill skipping in continuous batching, not a
+decode-kernel change; single-stream generate is unaffected (one prefill per
+process, table empty at prefill). Tests 169/169; `aikit.py check
+aegean-tge` 4/4.

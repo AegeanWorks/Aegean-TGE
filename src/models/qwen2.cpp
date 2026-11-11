@@ -37,29 +37,37 @@ constexpr int kHardMaxContext = 32768;
 // above; the buffers are sized for the larger chunk.
 constexpr int kPrefillChunk = 128;
 
-// Cross-sequence shared-prefix table. Up to four start-0 f32|f16 prefills
-// with >=16 tokens populate slots (tokens plus per-layer K/V rows, up to the
-// cap); later sequences with identical leading tokens memcpy the rows into
-// their own slots and skip recompute. Byte-identical by construction (same
-// tokens, same positions, resident rows recomputed nowhere; f16 traffic
-// converts losslessly on both sides). The verifier path (all_logits) and
-// i8 KV are excluded; entries are tier-tagged so f32 and f16 runs never
-// share bytes. Cleared on every model load so different files with the same
-// geometry can never false-hit (e.g. Q8_0 vs Q4_K_M share layers/kv_dim).
-// Replaces the former first-prefix-wins single snapshot, which could never
-// serve a second distinct shared prefix in the same process.
+// Cross-sequence shared-prefix table. Up to four start-0 f32|f16|i8 prefill
+// prompts with >=16 tokens populate slots (tokens plus per-layer K/V rows, up
+// to the cap); later sequences with identical leading tokens memcpy the rows
+// into their own slots and skip recompute. Byte-identical by construction
+// (same tokens, same positions, resident rows recomputed nowhere; f16 traffic
+// converts losslessly on both sides, i8 traffic copies the quantized bytes and
+// scales verbatim). The verifier path (all_logits) is excluded; entries are
+// kind-tagged so f32, f16 and i8 runs never share bytes. Cleared on every
+// model load so different files with the same geometry can never false-hit
+// (e.g. Q8_0 vs Q4_K_M share layers/kv_dim). Replaces the former
+// first-prefix-wins single snapshot, which could never serve a second distinct
+// shared prefix in the same process.
 struct MultiPrefix {
   std::vector<int> tokens;
   std::vector<float> k;
   std::vector<float> v;
+  // i8 KV snapshot: quantized rows and their per-32-block scales, copied
+  // verbatim so a hit restores the exact stored bytes.
+  std::vector<std::int8_t> k_q8;
+  std::vector<std::int8_t> v_q8;
+  std::vector<float> k_q8_scales;
+  std::vector<float> v_q8_scales;
   int layers = 0;
   int kv_dim = 0;
   // KV tier tag: a snapshot populated from one tier must never serve
   // another. f32 and f16 runs of the same prompt compute different K/V
   // rows (the f16 store rounds), so cross-tier reuse would mix unpriced
-  // numerics. The table stores float either way (f16 traffic converts
-  // losslessly on both sides), and the tag keeps the tiers apart.
+  // numerics. The float table stores float either way (f16 traffic converts
+  // losslessly on both sides), and the i8 table stores the quantized bytes.
   bool half = false;
+  bool q8 = false;
   long last_use = 0;
   bool valid = false;
 };
@@ -144,6 +152,28 @@ inline void table_load_kv_row(float* f, std::uint16_t* h, bool half,
   } else {
     std::memcpy(f, table_src, sizeof(float) * static_cast<std::size_t>(kv_dim));
   }
+}
+
+/// i8 KV rows move as stored bytes plus one float scale per 32 values, so a
+/// snapshot hit restores the exact quantized row the cold path would have
+/// written (deterministic quantize of identical values). No arithmetic runs
+/// here; the tier tag still keeps q8 snapshots away from f32/f16 models.
+inline void table_store_kv_q8_row(std::int8_t* table_q8, float* table_scales,
+                                  const std::int8_t* src_q8,
+                                  const float* src_scales, int kv_dim) {
+  std::memcpy(table_q8, src_q8,
+              sizeof(std::int8_t) * static_cast<std::size_t>(kv_dim));
+  std::memcpy(table_scales, src_scales,
+              sizeof(float) * static_cast<std::size_t>(kv_dim / 32));
+}
+
+inline void table_load_kv_q8_row(std::int8_t* dst_q8, float* dst_scales,
+                                 const std::int8_t* table_q8,
+                                 const float* table_scales, int kv_dim) {
+  std::memcpy(dst_q8, table_q8,
+              sizeof(std::int8_t) * static_cast<std::size_t>(kv_dim));
+  std::memcpy(dst_scales, table_scales,
+              sizeof(float) * static_cast<std::size_t>(kv_dim / 32));
 }
 
 /// Maps a supported weight type onto the kernel's quant kind. Q8_0 has fused
@@ -687,9 +717,14 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
       g_mprefix_table[slot].tokens.clear();
       g_mprefix_table[slot].k.clear();
       g_mprefix_table[slot].v.clear();
+      g_mprefix_table[slot].k_q8.clear();
+      g_mprefix_table[slot].v_q8.clear();
+      g_mprefix_table[slot].k_q8_scales.clear();
+      g_mprefix_table[slot].v_q8_scales.clear();
       g_mprefix_table[slot].layers = 0;
       g_mprefix_table[slot].kv_dim = 0;
       g_mprefix_table[slot].half = false;
+      g_mprefix_table[slot].q8 = false;
       g_mprefix_table[slot].last_use = 0;
       g_mprefix_table[slot].valid = false;
     }
@@ -1808,10 +1843,10 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
   // as exact full prompts [0..P) for one sequence in a single batch call.
   // When such a prompt lands with P>=16 and the table holds no run >= 16
   // over it, snapshot the resident K/V rows so a later prefill_run of the
-  // same leading tokens HITs instead of recomputing. f32|f16 (tier-tagged);
+  // same leading tokens HITs instead of recomputing. f32|f16|i8 (tier-tagged);
   // memcpy-or-exact-cvt only, no arithmetic change. Batch capacity is 64
   // rows, so the scan is trivial.
-  if (!kv_q8_) {
+  {
     int best_seq = -1;
     int best_len = 0;
     for (int row = 0; row < count; ++row) {
@@ -1863,12 +1898,13 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
       }
       if (full) {
         int best = 0;
-      for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
-        const MultiPrefix& entry = g_mprefix_table[slot];
-        if (!entry.valid || entry.layers != config_.block_count ||
-            entry.kv_dim != kv_dim || entry.half != kv_half_) {
-          continue;
-        }
+        for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
+          const MultiPrefix& entry = g_mprefix_table[slot];
+          if (!entry.valid || entry.layers != config_.block_count ||
+              entry.kv_dim != kv_dim || entry.half != kv_half_ ||
+              entry.q8 != kv_q8_) {
+            continue;
+          }
           const int cached = static_cast<int>(entry.tokens.size());
           int run = 0;
           const int limit = cap < cached ? cap : cached;
@@ -1903,10 +1939,32 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
           entry.layers = config_.block_count;
           entry.kv_dim = kv_dim;
           entry.half = kv_half_;
-          entry.k.assign(
-              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
-          entry.v.assign(
-              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+          entry.q8 = kv_q8_;
+          entry.k.clear();
+          entry.v.clear();
+          entry.k_q8.clear();
+          entry.v_q8.clear();
+          entry.k_q8_scales.clear();
+          entry.v_q8_scales.clear();
+          if (kv_q8_) {
+            entry.k_q8.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0);
+            entry.v_q8.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0);
+            entry.k_q8_scales.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim / 32,
+                0.0F);
+            entry.v_q8_scales.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim / 32,
+                0.0F);
+          } else {
+            entry.k.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim,
+                0.0F);
+            entry.v.assign(
+                static_cast<std::size_t>(config_.block_count) * cap * kv_dim,
+                0.0F);
+          }
           for (int layer = 0; layer < config_.block_count; ++layer) {
             for (int pos = 0; pos < cap; ++pos) {
               const std::size_t src =
@@ -1921,12 +1979,40 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
                        static_cast<std::size_t>(cap) +
                    static_cast<std::size_t>(pos)) *
                   static_cast<std::size_t>(kv_dim);
-              table_store_kv_row(entry.k.data() + dst,
-                                 k_cache_.data() + src,
-                                 k_cache_half_.data() + src, kv_half_, kv_dim);
-              table_store_kv_row(entry.v.data() + dst,
-                                 v_cache_.data() + src,
-                                 v_cache_half_.data() + src, kv_half_, kv_dim);
+              const std::size_t scale_dst =
+                  (static_cast<std::size_t>(layer) *
+                       static_cast<std::size_t>(cap) +
+                   static_cast<std::size_t>(pos)) *
+                  static_cast<std::size_t>(kv_dim / 32);
+              const std::size_t scale_src =
+                  (static_cast<std::size_t>(best_seq) *
+                       static_cast<std::size_t>(config_.block_count) +
+                   static_cast<std::size_t>(layer)) *
+                      static_cast<std::size_t>(context_) *
+                      static_cast<std::size_t>(kv_dim / 32) +
+                  static_cast<std::size_t>(pos) *
+                      static_cast<std::size_t>(kv_dim / 32);
+              if (kv_q8_) {
+                table_store_kv_q8_row(entry.k_q8.data() + dst,
+                                      entry.k_q8_scales.data() + scale_dst,
+                                      k_cache_q8_.data() + src,
+                                      k_cache_q8_scales_.data() + scale_src,
+                                      kv_dim);
+                table_store_kv_q8_row(entry.v_q8.data() + dst,
+                                      entry.v_q8_scales.data() + scale_dst,
+                                      v_cache_q8_.data() + src,
+                                      v_cache_q8_scales_.data() + scale_src,
+                                      kv_dim);
+              } else {
+                table_store_kv_row(entry.k.data() + dst,
+                                   k_cache_.data() + src,
+                                   k_cache_half_.data() + src, kv_half_,
+                                   kv_dim);
+                table_store_kv_row(entry.v.data() + dst,
+                                   v_cache_.data() + src,
+                                   v_cache_half_.data() + src, kv_half_,
+                                   kv_dim);
+              }
             }
           }
           entry.last_use = ++g_mprefix_tick;
@@ -1958,7 +2044,7 @@ const float* Qwen2::forward_batch(const int* tokens, const int* positions,
 }
 
 int Qwen2::shared_prefix_len(const int* tokens, int count) const {
-  if (kv_q8_ || count <= 0) {
+  if (count <= 0) {
     return 0;
   }
   const int kv_dim = config_.kv_dim();
@@ -1966,7 +2052,8 @@ int Qwen2::shared_prefix_len(const int* tokens, int count) const {
   for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
     const MultiPrefix& entry = g_mprefix_table[slot];
     if (!entry.valid || entry.layers != config_.block_count ||
-        entry.kv_dim != kv_dim || entry.half != kv_half_) {
+        entry.kv_dim != kv_dim || entry.half != kv_half_ ||
+        entry.q8 != kv_q8_) {
       continue;
     }
     const int cached = static_cast<int>(entry.tokens.size());
@@ -1984,8 +2071,7 @@ int Qwen2::shared_prefix_len(const int* tokens, int count) const {
 
 bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
                                    int count) {
-  if (kv_q8_ || count < 16 || sequence < 0 ||
-      sequence >= sequence_count_) {
+  if (count < 16 || sequence < 0 || sequence >= sequence_count_) {
     return false;
   }
   const int kv_dim = config_.kv_dim();
@@ -1994,7 +2080,8 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
   for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
     const MultiPrefix& entry = g_mprefix_table[slot];
     if (!entry.valid || entry.layers != config_.block_count ||
-        entry.kv_dim != kv_dim || entry.half != kv_half_) {
+        entry.kv_dim != kv_dim || entry.half != kv_half_ ||
+        entry.q8 != kv_q8_) {
       continue;
     }
     const int cached = static_cast<int>(entry.tokens.size());
@@ -2026,10 +2113,33 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
           (static_cast<std::size_t>(layer) * static_cast<std::size_t>(cached) +
            static_cast<std::size_t>(pos)) *
           static_cast<std::size_t>(kv_dim);
-      table_load_kv_row(k_cache_.data() + dst, k_cache_half_.data() + dst,
-                        kv_half_, entry.k.data() + src, kv_dim);
-      table_load_kv_row(v_cache_.data() + dst, v_cache_half_.data() + dst,
-                        kv_half_, entry.v.data() + src, kv_dim);
+      const std::size_t scale_dst =
+          (static_cast<std::size_t>(sequence) *
+               static_cast<std::size_t>(config_.block_count) +
+           static_cast<std::size_t>(layer)) *
+              static_cast<std::size_t>(context_) *
+              static_cast<std::size_t>(kv_dim / 32) +
+          static_cast<std::size_t>(pos) *
+              static_cast<std::size_t>(kv_dim / 32);
+      const std::size_t scale_src =
+          (static_cast<std::size_t>(layer) * static_cast<std::size_t>(cached) +
+           static_cast<std::size_t>(pos)) *
+          static_cast<std::size_t>(kv_dim / 32);
+      if (kv_q8_) {
+        table_load_kv_q8_row(k_cache_q8_.data() + dst,
+                             k_cache_q8_scales_.data() + scale_dst,
+                             entry.k_q8.data() + src,
+                             entry.k_q8_scales.data() + scale_src, kv_dim);
+        table_load_kv_q8_row(v_cache_q8_.data() + dst,
+                             v_cache_q8_scales_.data() + scale_dst,
+                             entry.v_q8.data() + src,
+                             entry.v_q8_scales.data() + scale_src, kv_dim);
+      } else {
+        table_load_kv_row(k_cache_.data() + dst, k_cache_half_.data() + dst,
+                          kv_half_, entry.k.data() + src, kv_dim);
+        table_load_kv_row(v_cache_.data() + dst, v_cache_half_.data() + dst,
+                          kv_half_, entry.v.data() + src, kv_dim);
+      }
     }
   }
   std::fprintf(stderr, "[cow-mp] PRIME seq=%d C=%d slot=%d\n", sequence, count,
@@ -2202,12 +2312,12 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     }
   }
   // Cross-sequence shared-prefix hit: the table holds up to four start-0
-  // f32|f16 prefixes (tier-tagged; a snapshot never serves another tier);
+  // f32|f16|i8 prefixes (tier-tagged; a snapshot never serves another tier);
   // the longest leading-token run across valid same-geometry slots wins.
   // Requires a common run of at least 16 tokens (one BlockTable block) and
   // a longer prompt, so single-token overlaps never pay the memcmp setup.
   {
-    if (all_logits == nullptr && !kv_q8_ && start_position == 0 &&
+    if (all_logits == nullptr && start_position == 0 &&
         sequence >= 0 && consumed == 0) {
       int best_slot = -1;
       int best_run = 0;
@@ -2215,7 +2325,8 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
       for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
         const MultiPrefix& entry = g_mprefix_table[slot];
         if (!entry.valid || entry.layers != config_.block_count ||
-            entry.kv_dim != kv_dim || entry.half != kv_half_) {
+            entry.kv_dim != kv_dim || entry.half != kv_half_ ||
+            entry.q8 != kv_q8_) {
           continue;
         }
         const int cached = static_cast<int>(entry.tokens.size());
@@ -2246,12 +2357,38 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                      static_cast<std::size_t>(best_cached) +
                  static_cast<std::size_t>(pos)) *
                 static_cast<std::size_t>(kv_dim);
-            table_load_kv_row(k_cache_.data() + dst,
-                              k_cache_half_.data() + dst, kv_half_,
-                              entry.k.data() + src, kv_dim);
-            table_load_kv_row(v_cache_.data() + dst,
-                              v_cache_half_.data() + dst, kv_half_,
-                              entry.v.data() + src, kv_dim);
+            const std::size_t scale_dst =
+                (static_cast<std::size_t>(sequence) *
+                     static_cast<std::size_t>(config_.block_count) +
+                 static_cast<std::size_t>(layer)) *
+                    static_cast<std::size_t>(context_) *
+                    static_cast<std::size_t>(kv_dim / 32) +
+                static_cast<std::size_t>(pos) *
+                    static_cast<std::size_t>(kv_dim / 32);
+            const std::size_t scale_src =
+                (static_cast<std::size_t>(layer) *
+                     static_cast<std::size_t>(best_cached) +
+                 static_cast<std::size_t>(pos)) *
+                static_cast<std::size_t>(kv_dim / 32);
+            if (kv_q8_) {
+              table_load_kv_q8_row(k_cache_q8_.data() + dst,
+                                   k_cache_q8_scales_.data() + scale_dst,
+                                   entry.k_q8.data() + src,
+                                   entry.k_q8_scales.data() + scale_src,
+                                   kv_dim);
+              table_load_kv_q8_row(v_cache_q8_.data() + dst,
+                                   v_cache_q8_scales_.data() + scale_dst,
+                                   entry.v_q8.data() + src,
+                                   entry.v_q8_scales.data() + scale_src,
+                                   kv_dim);
+            } else {
+              table_load_kv_row(k_cache_.data() + dst,
+                                k_cache_half_.data() + dst, kv_half_,
+                                entry.k.data() + src, kv_dim);
+              table_load_kv_row(v_cache_.data() + dst,
+                                v_cache_half_.data() + dst, kv_half_,
+                                entry.v.data() + src, kv_dim);
+            }
           }
         }
         consumed = best_run;
@@ -2404,13 +2541,14 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
   // mirrors the HIT threshold so a 4-token story prompt can never poison a
   // slot for a later 120-token shared prefix.
   {
-    if (all_logits == nullptr && !kv_q8_ && start_position == 0 &&
+    if (all_logits == nullptr && start_position == 0 &&
         sequence >= 0 && count >= 16) {
       int best = 0;
       for (int slot = 0; slot < kMultiPrefixSlots; ++slot) {
         const MultiPrefix& entry = g_mprefix_table[slot];
         if (!entry.valid || entry.layers != config_.block_count ||
-            entry.kv_dim != kv_dim || entry.half != kv_half_) {
+            entry.kv_dim != kv_dim || entry.half != kv_half_ ||
+            entry.q8 != kv_q8_) {
           continue;
         }
         const int cached = static_cast<int>(entry.tokens.size());
@@ -2448,10 +2586,32 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
         entry.layers = config_.block_count;
         entry.kv_dim = kv_dim;
         entry.half = kv_half_;
-        entry.k.assign(
-            static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
-        entry.v.assign(
-            static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0.0F);
+        entry.q8 = kv_q8_;
+        entry.k.clear();
+        entry.v.clear();
+        entry.k_q8.clear();
+        entry.v_q8.clear();
+        entry.k_q8_scales.clear();
+        entry.v_q8_scales.clear();
+        if (kv_q8_) {
+          entry.k_q8.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0);
+          entry.v_q8.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim, 0);
+          entry.k_q8_scales.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim / 32,
+              0.0F);
+          entry.v_q8_scales.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim / 32,
+              0.0F);
+        } else {
+          entry.k.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim,
+              0.0F);
+          entry.v.assign(
+              static_cast<std::size_t>(config_.block_count) * cap * kv_dim,
+              0.0F);
+        }
         for (int layer = 0; layer < config_.block_count; ++layer) {
           for (int pos = 0; pos < cap; ++pos) {
             const std::size_t src =
@@ -2466,10 +2626,36 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
                      static_cast<std::size_t>(cap) +
                  static_cast<std::size_t>(pos)) *
                 static_cast<std::size_t>(kv_dim);
-            table_store_kv_row(entry.k.data() + dst, k_cache_.data() + src,
-                               k_cache_half_.data() + src, kv_half_, kv_dim);
-            table_store_kv_row(entry.v.data() + dst, v_cache_.data() + src,
-                               v_cache_half_.data() + src, kv_half_, kv_dim);
+            const std::size_t scale_src =
+                (static_cast<std::size_t>(sequence) *
+                     static_cast<std::size_t>(config_.block_count) +
+                 static_cast<std::size_t>(layer)) *
+                    static_cast<std::size_t>(context_) *
+                    static_cast<std::size_t>(kv_dim / 32) +
+                static_cast<std::size_t>(pos) *
+                    static_cast<std::size_t>(kv_dim / 32);
+            const std::size_t scale_dst =
+                (static_cast<std::size_t>(layer) *
+                     static_cast<std::size_t>(cap) +
+                 static_cast<std::size_t>(pos)) *
+                static_cast<std::size_t>(kv_dim / 32);
+            if (kv_q8_) {
+              table_store_kv_q8_row(entry.k_q8.data() + dst,
+                                    entry.k_q8_scales.data() + scale_dst,
+                                    k_cache_q8_.data() + src,
+                                    k_cache_q8_scales_.data() + scale_src,
+                                    kv_dim);
+              table_store_kv_q8_row(entry.v_q8.data() + dst,
+                                    entry.v_q8_scales.data() + scale_dst,
+                                    v_cache_q8_.data() + src,
+                                    v_cache_q8_scales_.data() + scale_src,
+                                    kv_dim);
+            } else {
+              table_store_kv_row(entry.k.data() + dst, k_cache_.data() + src,
+                                 k_cache_half_.data() + src, kv_half_, kv_dim);
+              table_store_kv_row(entry.v.data() + dst, v_cache_.data() + src,
+                                 v_cache_half_.data() + src, kv_half_, kv_dim);
+            }
           }
         }
         entry.last_use = ++g_mprefix_tick;
