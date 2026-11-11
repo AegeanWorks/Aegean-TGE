@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -221,6 +222,97 @@ TGE_TEST(tokenizer_encodes_with_merges) {
     threw = true;
   }
   TGE_CHECK(threw);
+}
+
+TGE_TEST(tokenizer_heap_merge_matches_the_scan) {
+  // The heap encoder must reproduce the old rescan exactly, including its
+  // leftmost-first tie break, across the heap/scan threshold (32 symbols).
+  // Pieces and merges form a ladder: a+a, aa+aa, ... up to a 64-run.
+  std::vector<std::string> pieces = {"a", "b", "aa", "aaaa"};
+  for (int length : {8, 16, 32, 64}) {
+    pieces.push_back(std::string(static_cast<std::size_t>(length), 'a'));
+  }
+  std::vector<std::string> merges = {"a a", "aa aa", "aaaa aaaa",
+                                     "aaaaaaaa aaaaaaaa",
+                                     std::string(16, 'a') + " " + std::string(16, 'a'),
+                                     std::string(32, 'a') + " " + std::string(32, 'a')};
+  std::map<std::string, int> vocab;
+  for (std::size_t index = 0; index < pieces.size(); ++index) {
+    vocab[pieces[index]] = static_cast<int>(index);
+  }
+  std::map<std::string, int> merge_rank;
+  for (std::size_t index = 0; index < merges.size(); ++index) {
+    merge_rank[merges[index]] = static_cast<int>(index);
+  }
+  // Reference: the historical vector-of-strings scan, fallback included.
+  const auto reference_bpe = [&](const std::string& text) {
+    std::vector<std::string> symbols;
+    for (const char raw : text) {
+      symbols.emplace_back(1, raw);
+    }
+    while (symbols.size() > 1) {
+      int best_rank = std::numeric_limits<int>::max();
+      std::size_t best_index = 0;
+      for (std::size_t index = 0; index + 1 < symbols.size(); ++index) {
+        const auto found = merge_rank.find(symbols[index] + " " + symbols[index + 1]);
+        if (found != merge_rank.end() && found->second < best_rank) {
+          best_rank = found->second;
+          best_index = index;
+        }
+      }
+      if (best_rank == std::numeric_limits<int>::max()) {
+        break;
+      }
+      symbols[best_index] += symbols[best_index + 1];
+      symbols.erase(symbols.begin() + static_cast<std::ptrdiff_t>(best_index) + 1);
+    }
+    std::vector<int> ids;
+    for (const std::string& symbol : symbols) {
+      const auto found = vocab.find(symbol);
+      if (found != vocab.end()) {
+        ids.push_back(found->second);
+        continue;
+      }
+      for (const char raw : symbol) {
+        ids.push_back(vocab.at(std::string(1, raw)));
+      }
+    }
+    return ids;
+  };
+
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 2);  // metadata entries
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, static_cast<std::uint64_t>(pieces.size()));
+  for (const std::string& piece : pieces) {
+    put_string(out, piece);
+  }
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, static_cast<std::uint64_t>(merges.size()));
+  for (const std::string& rule : merges) {
+    put_string(out, rule);
+  }
+
+  const TempFile temp(out, "tge_gguf_heap_merges.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  std::string error;
+  const std::unique_ptr<tge::models::Tokenizer> tokenizer =
+      tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(tokenizer != nullptr);
+
+  for (int length = 1; length <= 128; ++length) {
+    const std::string a_run(static_cast<std::size_t>(length), 'a');
+    const std::string b_run(static_cast<std::size_t>(length), 'b');
+    TGE_CHECK(tokenizer->encode(a_run) == reference_bpe(a_run));
+    TGE_CHECK(tokenizer->encode(b_run) == reference_bpe(b_run));
+  }
 }
 
 TGE_TEST(tokenizer_decodes_byte_level_pieces) {

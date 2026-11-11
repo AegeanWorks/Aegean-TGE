@@ -313,6 +313,43 @@ std::vector<std::string> split_pre_tokens(const std::string& text,
   return pieces;
 }
 
+// Lazy-heap BPE merge state for encode_plain. The old encoder rescanned the
+// whole symbol list for the best pair on every merge (O(n^2) rank lookups);
+// long unbroken pre-tokens (code, repeated text) spent hundreds of
+// milliseconds there. Symbols stay in a linked list; candidates are ranked
+// by (merge rank, left index), which reproduces the old leftmost-first tie
+// break exactly. Small pieces keep the plain rescan: no heap allocation
+// below the threshold.
+struct BpeSymbol {
+  std::size_t start = 0;
+  std::size_t length = 0;
+  int prev = -1;
+  int next = -1;
+  std::uint32_t version = 0;
+  bool alive = true;
+};
+
+struct BpeCandidate {
+  int rank = 0;
+  int left = 0;
+  int right = 0;
+  std::uint32_t left_version = 0;
+  std::uint32_t right_version = 0;
+};
+
+/// `priority_queue` puts the greatest first; "later" means higher rank or,
+/// on a tie, a further-left index, so the top is the old scan's choice.
+struct BpeCandidateIsLater {
+  bool operator()(const BpeCandidate& left, const BpeCandidate& right) const {
+    if (left.rank != right.rank) {
+      return left.rank > right.rank;
+    }
+    return left.left > right.left;
+  }
+};
+
+constexpr std::size_t kBpeHeapThreshold = 32;
+
 }  // namespace
 
 int Tokenizer::byte_piece_value(const std::string& piece) {
@@ -601,38 +638,124 @@ std::vector<int> Tokenizer::encode_plain(const std::string& text) const {
                        codepoint_of_byte_[static_cast<unsigned char>(raw)]);
     }
 
-    std::vector<std::string> symbols;
+    std::vector<BpeSymbol> symbols;
     symbols.reserve(encoded.size());
     {
       std::size_t position = 0;
+      int index = 0;
       while (position < encoded.size()) {
         const std::size_t begin = position;
         next_codepoint(encoded, position);
-        symbols.push_back(encoded.substr(begin, position - begin));
+        BpeSymbol symbol;
+        symbol.start = begin;
+        symbol.length = position - begin;
+        symbol.prev = index - 1;
+        if (index > 0) {
+          symbols[static_cast<std::size_t>(index) - 1].next = index;
+        }
+        symbols.push_back(symbol);
+        ++index;
       }
     }
 
-    // Repeatedly apply the lowest-ranked adjacent merge.
-    while (symbols.size() > 1) {
-      int best_rank = std::numeric_limits<int>::max();
-      std::size_t best_index = 0;
-      for (std::size_t index = 0; index + 1 < symbols.size(); ++index) {
-        const auto found =
-            merge_rank_.find(symbols[index] + " " + symbols[index + 1]);
-        if (found != merge_rank_.end() && found->second < best_rank) {
-          best_rank = found->second;
-          best_index = index;
+    // One reusable key: rank lookup builds "left right" per candidate without
+    // allocating, reproducing the old concatenation exactly.
+    std::string key;
+    const auto rank_of = [&](int left, int right) {
+      const BpeSymbol& first = symbols[static_cast<std::size_t>(left)];
+      const BpeSymbol& second = symbols[static_cast<std::size_t>(right)];
+      key.assign(encoded, first.start, first.length);
+      key.push_back(' ');
+      key.append(encoded, second.start, second.length);
+      const auto found = merge_rank_.find(key);
+      return found != merge_rank_.end() ? found->second : -1;
+    };
+    const auto merge_at = [&](int left, int right) {
+      BpeSymbol& first = symbols[static_cast<std::size_t>(left)];
+      const BpeSymbol& second = symbols[static_cast<std::size_t>(right)];
+      first.length += second.length;
+      first.next = second.next;
+      if (first.next >= 0) {
+        symbols[static_cast<std::size_t>(first.next)].prev = left;
+      }
+      symbols[static_cast<std::size_t>(right)].alive = false;
+      ++first.version;
+    };
+
+    if (symbols.size() > kBpeHeapThreshold) {
+      std::priority_queue<BpeCandidate, std::vector<BpeCandidate>,
+                          BpeCandidateIsLater>
+          work;
+      const auto push_pair = [&](int left, int right) {
+        if (left < 0 || right < 0) {
+          return;
+        }
+        const int rank = rank_of(left, right);
+        if (rank < 0) {
+          return;
+        }
+        BpeCandidate candidate;
+        candidate.rank = rank;
+        candidate.left = left;
+        candidate.right = right;
+        candidate.left_version =
+            symbols[static_cast<std::size_t>(left)].version;
+        candidate.right_version =
+            symbols[static_cast<std::size_t>(right)].version;
+        work.push(candidate);
+      };
+      for (int index = 1; index < static_cast<int>(symbols.size()); ++index) {
+        push_pair(index - 1, index);
+      }
+      while (!work.empty()) {
+        const BpeCandidate candidate = work.top();
+        work.pop();
+        const BpeSymbol& first = symbols[static_cast<std::size_t>(candidate.left)];
+        const BpeSymbol& second =
+            symbols[static_cast<std::size_t>(candidate.right)];
+        if (!first.alive || !second.alive ||
+            first.version != candidate.left_version ||
+            second.version != candidate.right_version ||
+            first.next != candidate.right) {
+          continue;
+        }
+        const int before = first.prev;
+        const int after = second.next;
+        merge_at(candidate.left, candidate.right);
+        push_pair(before, candidate.left);
+        push_pair(candidate.left, after);
+      }
+    } else {
+      bool merged = true;
+      while (merged) {
+        merged = false;
+        int best_rank = std::numeric_limits<int>::max();
+        int best_left = -1;
+        for (int index = 0; index >= 0;
+             index = symbols[static_cast<std::size_t>(index)].next) {
+          const int next = symbols[static_cast<std::size_t>(index)].next;
+          if (next < 0) {
+            break;
+          }
+          const int rank = rank_of(index, next);
+          if (rank >= 0 && rank < best_rank) {
+            best_rank = rank;
+            best_left = index;
+          }
+        }
+        if (best_left >= 0) {
+          merge_at(best_left,
+                   symbols[static_cast<std::size_t>(best_left)].next);
+          merged = true;
         }
       }
-      if (best_rank == std::numeric_limits<int>::max()) {
-        break;
-      }
-      symbols[best_index] += symbols[best_index + 1];
-      symbols.erase(symbols.begin() + static_cast<std::ptrdiff_t>(best_index) + 1);
     }
 
-    for (const std::string& symbol : symbols) {
-      const auto found = vocab_.find(symbol);
+    for (int index = 0; index >= 0;
+         index = symbols[static_cast<std::size_t>(index)].next) {
+      const BpeSymbol& symbol = symbols[static_cast<std::size_t>(index)];
+      const std::string piece_text = encoded.substr(symbol.start, symbol.length);
+      const auto found = vocab_.find(piece_text);
       if (found != vocab_.end()) {
         ids.push_back(found->second);
         continue;
@@ -643,10 +766,10 @@ std::vector<int> Tokenizer::encode_plain(const std::string& text) const {
       // (Full Qwen/Llama vocabs cover every byte, so this fires only on
       // truncated fixtures.)
       std::size_t position = 0;
-      while (position < symbol.size()) {
+      while (position < piece_text.size()) {
         const std::size_t begin = position;
-        next_codepoint(symbol, position);
-        const auto single = vocab_.find(symbol.substr(begin, position - begin));
+        next_codepoint(piece_text, position);
+        const auto single = vocab_.find(piece_text.substr(begin, position - begin));
         if (single == vocab_.end()) {
           throw std::invalid_argument("encode_plain: text has no vocabulary entry");
         }

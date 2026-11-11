@@ -4089,3 +4089,26 @@ The win is admission-side prefill skipping in continuous batching, not a
 decode-kernel change; single-stream generate is unaffected (one prefill per
 process, table empty at prefill). Tests 169/169; `aikit.py check
 aegean-tge` 4/4.
+
+## 2026-11-11 - Heap BPE encode for long pre-tokens (kept)
+
+The keep-grade spike in `reports/idea-invented-bpe-heap-encode-keep.md` was
+report-only; the tree still ran the old O(n^2) rescan in
+`Tokenizer::encode_plain`. It is now the shipped encoder: symbols live in a
+linked list and candidates in a lazy `priority_queue` keyed by
+`(merge rank, left index)`, which reproduces the rescan's leftmost-first tie
+break exactly; pieces of <= 32 symbols keep the plain rescan so ordinary words
+never pay heap overhead. The rank key still concatenates `left + ' ' + right`
+against `merge_rank_`, and unknown-piece per-code-point fallback order is
+unchanged.
+
+| Check | Result |
+|---|---|
+| differential test `tokenizer_heap_merge_matches_the_scan` (170th case) | lengths 1..128 over an `a`-merge ladder and an unmergeable `b` run, new encoder vs an in-test copy of the old scan: all identical |
+| prompt and generated ids, Qwen2.5-0.5B Q8_0 | `a`x4096, `a`x8192 and the dragon prose prompt: identical id strings (temp 0.8, seed 7) |
+| end-to-end wall, `--prompt 'a'x8192 --n 1` | 3.892/3.854/4.205 -> 3.363/3.365/3.886 s over 3 alternating pairs; the delta tracks the recorded tokenizer stall (~572 ms in the spike) |
+| prose regression | none; prose pre-tokens are far below the threshold and take the unchanged scan |
+
+The win is time-to-first-token on long unbroken pre-tokens (code, repeated
+text), not decode throughput: prefill still dominates those prompts. Tests
+170/170; `aikit.py check aegean-tge` 4/4.
