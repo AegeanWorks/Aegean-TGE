@@ -4036,11 +4036,15 @@ probabilities are unchanged. `--sequences auto` divides full-context KV
 headroom directly instead of using `place().max_sessions`, whose context-shrink
 contract is the wrong answer for a fixed-context bench.
 
-Left outside deliberately: the startup-only keeps (`tokenizer-state-cache`,
-the no-init KV/scratch bundle) change load/tokenizer time, not decode
-throughput, and the timers fix is diagnostic-only; none meets this round's
-token-generation bar. Mixed or negative results (Q5_K bridge, 8-chunk GQA,
-degree-4 exp) stay as recorded.
+Left outside at the time of this batch: the startup-only keeps
+(`tokenizer-state-cache`, the no-init KV/scratch bundle) change load/tokenizer
+time, not decode throughput. The no-init bundle and the heap BPE encoder were
+integrated later the same day once TTFT was counted as token-generation wall
+time (see the two 2026-11-11 follow-up entries); `tokenizer-state-cache`
+stays out because it is a feature-sized mechanism (new flat index, binary
+sidecar format, cache-validation and atomic-write policy), not a port. The
+timers fix is diagnostic-only; mixed or negative results (Q5_K bridge,
+8-chunk GQA, degree-4 exp) stay as recorded.
 
 Tests 169/169 (two new exact fused-row differentials); `aikit.py check
 aegean-tge` 4/4.
