@@ -59,7 +59,7 @@ Measured: KL 2.495e-4 / 198/199 and median 1.20x, 6/6 pairs. Keep.
 
 | scope | mean KL | worst KL | top-1 |
 |---|---:|---:|---:|
-| default (fused float) | 1.020e-11 | 2.330e-10 | 399/399 |
+| default (fused float), 399-position precedent, for scale | 1.020e-11 | 2.330e-10 | 399/399 |
 | **ffn (gate+up)** | **2.495e-4** | 3.883e-3 | **198/199 (99.50%)** |
 | down (prior, 399 pos) | 7.954e-4 | — | 390/399 (97.74%) |
 | head+down (prior) | 9.711e-4 | — | 390-399 |
