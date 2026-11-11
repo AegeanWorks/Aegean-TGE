@@ -135,6 +135,7 @@ aegean-tge/
 | `--sequences auto` (continuous bench) | 8 × 32: 8 slots at 9.0-9.1 GiB usable; 1.10x median over fixed 4 (3/3 pairs); transcripts identical |
 | i8 KV prefix snapshot (continuous bench) | 8 × 32, 48-token shared prompt: wall 2.36 -> 1.29 s, 106.1 -> 192.3 t/s aggregate (1.81x); 1 populate + 7 primes; transcripts identical |
 | Heap BPE encode (long pre-tokens) | `a`×8192 single pre-token: prompt ids and generated ids identical; end-to-end wall median 3.89 -> 3.37 s (4096-char run: 141 -> 0.7 ms in the tokenizer phase); prose unchanged |
+| No-init KV + scratch buffers | Llama-3B ctx 4096 load median 201.4 -> 36.6 ms (5.5x, 5/5 pairs); ids identical on f32/f16/i8/spec/spec+i8 and the continuous bench; `reset()` still zeroes |
 | Fused Q4_K/Q6_K decode row dot | Llama-3B Q4_K_M 63 tok: Q4_K 6.55 -> 9.20 t/s (1.40x), Q6_K increment 9.36 -> 10.69 t/s (1.14x); ids identical, fidelity 1.157e-11 / 199/199 |
 | Sampled sixth verifier row | 0.5B locked 128 tok: 22 -> 19 steps, 4.86 -> 5.79 accepted/step, 116 vs 93 t/s best; story neutral; sampled ids identical |
 | Vectorized softmax max/sum | sampler phase 1.4-1.6x faster (top-p and no-cut); sampled ids identical on every config; greedy unchanged |

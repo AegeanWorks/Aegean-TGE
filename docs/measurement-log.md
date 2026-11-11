@@ -4112,3 +4112,25 @@ unchanged.
 The win is time-to-first-token on long unbroken pre-tokens (code, repeated
 text), not decode throughput: prefill still dominates those prompts. Tests
 170/170; `aikit.py check aegean-tge` 4/4.
+
+## 2026-11-11 - No-init KV and scratch buffers (kept)
+
+The three no-init reports (`kv-noinit`, `scratch-noinit`, `noinit-combined`)
+were report-only; `Qwen2::load` still zero-filled eight KV cache vectors and
+three scratch buffers — ~965 MB at Llama-3B context 4096. All eleven now use
+`NoInitAllocator` (allocate plus default-construction, no zero store) and
+`resize` instead of `assign(n, 0)`. Every element is written before it is
+read (KV rows 0..position, batched logits rows 0..count-1, per-task score
+slices, verifier rows); `Qwen2::reset` keeps its explicit zero fills, and
+`assign(n, value)` semantics are unchanged.
+
+| Check | Result |
+|---|---|
+| Llama-3B Q4_K_M load, ctx 4096, eager vocabulary, 5 alternating pairs | 247.9/196.4/201.4/200.5/201.5 -> 41.7/36.0/38.6/36.5/36.6 ms; median 201.4 -> 36.6 ms (5.5x) |
+| ids: f32 / f16 / i8 / speculative / speculative+i8, 0.5B Q8_0, temp 0.8 seed 7 | identical id strings in all five configurations |
+| continuous bench 8x32, f16, 4 slots | `state: independent (all transcripts identical)`, `first` strings identical |
+| suite | 170/170; `aikit.py check aegean-tge` 4/4 |
+
+The remaining load line is mmap plus tensor-table parse; the tokenizer
+construction dominates it now. This is time-to-first-token, not decode
+throughput, and it scales with context (the zero-fill was O(context)).

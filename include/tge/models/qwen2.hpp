@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "tge/core/thread_pool.hpp"
@@ -13,6 +15,44 @@ struct Q8Quantized;
 }
 
 namespace tge::models {
+
+/// Allocator that default-initializes elements: `vector::resize` allocates the
+/// block and constructs each element with no zero store. Large buffers whose
+/// every element is written before it is read (KV rows, batched logits,
+/// attention score slices, verifier rows) otherwise pay a full memset at load
+/// that scales with context — hundreds of MiB at long contexts. Explicit
+/// `assign(n, value)` and `std::fill` still initialize, and `Qwen2::reset`
+/// keeps its zero fills, so reuse semantics are unchanged.
+template <typename T>
+struct NoInitAllocator {
+  using value_type = T;
+
+  NoInitAllocator() noexcept = default;
+  template <typename U>
+  NoInitAllocator(const NoInitAllocator<U>&) noexcept {}
+
+  T* allocate(std::size_t count) {
+    return static_cast<T*>(::operator new(count * sizeof(T)));
+  }
+  void deallocate(T* pointer, std::size_t) noexcept { ::operator delete(pointer); }
+
+  template <typename U>
+  struct rebind {
+    using other = NoInitAllocator<U>;
+  };
+
+  template <typename U, typename... Args>
+  void construct(U* pointer, Args&&... args) const {
+    if constexpr (sizeof...(args) == 0) {
+      ::new (static_cast<void*>(pointer)) U;  // default-init: no zero store
+    } else {
+      ::new (static_cast<void*>(pointer)) U(std::forward<Args>(args)...);
+    }
+  }
+};
+
+template <typename T>
+using NoInitVector = std::vector<T, NoInitAllocator<T>>;
 
 /// How decode attention is scheduled.
 ///
@@ -451,16 +491,16 @@ class Qwen2 {
   // layers point here instead of faulting at load.
   std::vector<float> zero_bias_;
 
-  std::vector<float> k_cache_;
-  std::vector<float> v_cache_;
-  std::vector<std::uint16_t> k_cache_half_;
-  std::vector<std::uint16_t> v_cache_half_;
+  NoInitVector<float> k_cache_;
+  NoInitVector<float> v_cache_;
+  NoInitVector<std::uint16_t> k_cache_half_;
+  NoInitVector<std::uint16_t> v_cache_half_;
   // Int8 KV form: values parallel the float cache element for element, with
   // one float scale per 32 values in matching order.
-  std::vector<std::int8_t> k_cache_q8_;
-  std::vector<std::int8_t> v_cache_q8_;
-  std::vector<float> k_cache_q8_scales_;
-  std::vector<float> v_cache_q8_scales_;
+  NoInitVector<std::int8_t> k_cache_q8_;
+  NoInitVector<std::int8_t> v_cache_q8_;
+  NoInitVector<float> k_cache_q8_scales_;
+  NoInitVector<float> v_cache_q8_scales_;
 
   std::vector<float> x_;
   std::vector<float> h_;
@@ -474,9 +514,9 @@ class Qwen2 {
   std::vector<float> gate_;
   std::vector<float> up_;
   std::vector<float> logits_;
-  std::vector<float> verify_logits_;
-  std::vector<float> logits_batch_;
-  std::vector<float> scores_;
+  NoInitVector<float> verify_logits_;
+  NoInitVector<float> logits_batch_;
+  NoInitVector<float> scores_;
   // Grouped-query attention scratch: per-chunk online-softmax state for every
   // query head in every KV group.
   std::vector<float> group_maxima_;

@@ -573,16 +573,16 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->kv_half_ = kv_half;
     model->kv_q8_ = kv_q8 && !kv_half;
     if (kv_half) {
-      model->k_cache_half_.assign(cache_elements, 0);
-      model->v_cache_half_.assign(cache_elements, 0);
+      model->k_cache_half_.resize(cache_elements);
+      model->v_cache_half_.resize(cache_elements);
     } else if (model->kv_q8_) {
-      model->k_cache_q8_.assign(cache_elements, 0);
-      model->v_cache_q8_.assign(cache_elements, 0);
-      model->k_cache_q8_scales_.assign(cache_elements / 32, 0.0F);
-      model->v_cache_q8_scales_.assign(cache_elements / 32, 0.0F);
+      model->k_cache_q8_.resize(cache_elements);
+      model->v_cache_q8_.resize(cache_elements);
+      model->k_cache_q8_scales_.resize(cache_elements / 32);
+      model->v_cache_q8_scales_.resize(cache_elements / 32);
     } else {
-      model->k_cache_.assign(cache_elements, 0.0F);
-      model->v_cache_.assign(cache_elements, 0.0F);
+      model->k_cache_.resize(cache_elements);
+      model->v_cache_.resize(cache_elements);
     }
 
     model->x_.assign(static_cast<std::size_t>(dim), 0.0F);
@@ -596,14 +596,12 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     model->up_.assign(static_cast<std::size_t>(config.feed_forward_length),
                       0.0F);
     model->logits_.assign(static_cast<std::size_t>(config.vocab_size), 0.0F);
-    model->logits_batch_.assign(
+    model->logits_batch_.resize(
         static_cast<std::size_t>(std::min(kPrefillChunk, model->context_)) *
-            static_cast<std::size_t>(config.vocab_size),
-        0.0F);
-    model->verify_logits_.assign(
+        static_cast<std::size_t>(config.vocab_size));
+    model->verify_logits_.resize(
         static_cast<std::size_t>(kSpeculativeBatch) *
-            static_cast<std::size_t>(config.vocab_size),
-        0.0F);
+        static_cast<std::size_t>(config.vocab_size));
     const std::size_t prefill_rows = static_cast<std::size_t>(
         std::min(kPrefillChunk, model->context_));
     // Attention writes one score slice per parallel task. Decode uses one
@@ -611,8 +609,7 @@ std::unique_ptr<Qwen2> Qwen2::load(const std::string& path, std::string& error,
     // prompts still fill the pool (4 tokens x 14 heads = 56 tasks).
     const std::size_t score_rows =
         prefill_rows * static_cast<std::size_t>(config.head_count);
-    model->scores_.assign(score_rows * static_cast<std::size_t>(model->context_),
-                          0.0F);
+    model->scores_.resize(score_rows * static_cast<std::size_t>(model->context_));
     const int kv_heads = config.head_count_kv;
     const int group = config.head_count / kv_heads;
     const std::size_t gqa_states = static_cast<std::size_t>(kv_heads) *
