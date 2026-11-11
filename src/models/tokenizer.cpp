@@ -3,6 +3,9 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <queue>
@@ -350,6 +353,111 @@ struct BpeCandidateIsLater {
 
 constexpr std::size_t kBpeHeapThreshold = 32;
 
+/// Fixed 24-byte slot image so the sidecar stores the slot table as one raw
+/// block and restores it with one read plus a single validation pass. The
+/// padding is explicit and zeroed, so the image is deterministic across
+/// builds; bump the sidecar version if this layout ever changes.
+struct SerializedSlot {
+  std::uint64_t hash = 0;
+  std::uint32_t offset = 0;
+  std::uint32_t length = 0;
+  std::int32_t value = 0;
+  std::uint8_t state = 0;
+  std::uint8_t padding[3] = {0, 0, 0};
+};
+static_assert(sizeof(SerializedSlot) == 24, "sidecar slot layout changed");
+
+/// Little-endian append-only buffer for the tokenizer state sidecar. Building
+/// the whole image in memory keeps the write a single call; the cache is
+/// disposable, so a torn file is caught by the magic/size/index validation on
+/// the next load and simply rebuilt.
+class ByteWriter {
+ public:
+  void u8(std::uint8_t value) { bytes_.push_back(value); }
+  void u32(std::uint32_t value) {
+    for (int shift = 0; shift < 32; shift += 8) {
+      bytes_.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFu));
+    }
+  }
+  void u64(std::uint64_t value) {
+    for (int shift = 0; shift < 64; shift += 8) {
+      bytes_.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFu));
+    }
+  }
+  void raw(const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    bytes_.insert(bytes_.end(), bytes, bytes + size);
+  }
+  void str(const std::string& value) {
+    u32(static_cast<std::uint32_t>(value.size()));
+    raw(value.data(), value.size());
+  }
+  const std::vector<std::uint8_t>& bytes() const { return bytes_; }
+
+ private:
+  std::vector<std::uint8_t> bytes_;
+};
+
+/// Bounds-checked reader for `ByteWriter` images. Every accessor returns false
+/// on truncation, and the caller treats any failure as a cache miss.
+class ByteReader {
+ public:
+  ByteReader(const std::uint8_t* data, std::size_t size)
+      : data_(data), size_(size) {}
+
+  bool u8(std::uint8_t& value) {
+    if (remaining() < 1) {
+      return false;
+    }
+    value = data_[position_++];
+    return true;
+  }
+  bool u32(std::uint32_t& value) {
+    if (remaining() < 4) {
+      return false;
+    }
+    value = 0;
+    for (int shift = 0; shift < 32; shift += 8) {
+      value |= static_cast<std::uint32_t>(data_[position_++]) << shift;
+    }
+    return true;
+  }
+  bool u64(std::uint64_t& value) {
+    if (remaining() < 8) {
+      return false;
+    }
+    value = 0;
+    for (int shift = 0; shift < 64; shift += 8) {
+      value |= static_cast<std::uint64_t>(data_[position_++]) << shift;
+    }
+    return true;
+  }
+  bool raw(void* out, std::size_t size) {
+    if (remaining() < size) {
+      return false;
+    }
+    std::memcpy(out, data_ + position_, size);
+    position_ += size;
+    return true;
+  }
+  bool str(std::string& value, std::size_t limit) {
+    std::uint32_t length = 0;
+    if (!u32(length) || length > limit || remaining() < length) {
+      return false;
+    }
+    value.assign(reinterpret_cast<const char*>(data_ + position_), length);
+    position_ += length;
+    return true;
+  }
+
+  std::size_t remaining() const { return size_ - position_; }
+
+ private:
+  const std::uint8_t* data_ = nullptr;
+  std::size_t size_ = 0;
+  std::size_t position_ = 0;
+};
+
 }  // namespace
 
 int Tokenizer::byte_piece_value(const std::string& piece) {
@@ -459,7 +567,7 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
     }
   }
 
-  tokenizer->vocab_.reserve(tokenizer->pieces_.size() * 2);
+  tokenizer->vocab_.reserve(tokenizer->pieces_.size());
   for (std::size_t index = 0; index < tokenizer->pieces_.size(); ++index) {
     tokenizer->vocab_.emplace(tokenizer->pieces_[index],
                               static_cast<int>(index));
@@ -469,7 +577,7 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
   // literal space, which the mapped alphabet never produces inside a piece.
   if (const gguf::Value* merges = file.find("tokenizer.ggml.merges");
       merges != nullptr && merges->type == gguf::ValueType::Array) {
-    tokenizer->merge_rank_.reserve(merges->elements.size() * 2);
+    tokenizer->merge_rank_.reserve(merges->elements.size());
     for (std::size_t index = 0; index < merges->elements.size(); ++index) {
       tokenizer->merge_rank_.emplace(merges->elements[index].string_value,
                                      static_cast<int>(index));
@@ -546,11 +654,341 @@ std::unique_ptr<Tokenizer> Tokenizer::from_gguf(const gguf::File& file,
     return tokenizer;
 }
 
+bool Tokenizer::cache_location(const std::string& model_path,
+                               const std::string& cache_dir,
+                               std::uint64_t& key, std::string& file) {
+  std::error_code error;
+  const std::uintmax_t size = std::filesystem::file_size(model_path, error);
+  if (error) {
+    return false;
+  }
+  const auto modified = std::filesystem::last_write_time(model_path, error);
+  if (error) {
+    return false;
+  }
+  std::uint64_t value = StringIndex::hash(model_path);
+  value ^= static_cast<std::uint64_t>(size) * 0x9E3779B97F4A7C15ULL;
+  value ^= static_cast<std::uint64_t>(modified.time_since_epoch().count()) *
+           0xC2B2AE3D27D4EB4FULL;
+  key = value;
+  char name[32] = {};
+  std::snprintf(name, sizeof(name), "%016llx.bin",
+                static_cast<unsigned long long>(value));
+  file = (std::filesystem::path(cache_dir) / name).string();
+  return true;
+}
+
+void Tokenizer::save_cache(const std::string& file, std::uint64_t key,
+                           const Tokenizer& tokenizer) {
+  constexpr std::uint32_t kMagic = 0x53544754u;  // "TGTS"
+  constexpr std::uint32_t kVersion = 3;
+  ByteWriter writer;
+  writer.u32(kMagic);
+  writer.u32(kVersion);
+  writer.u64(key);
+  writer.u32(static_cast<std::uint32_t>(tokenizer.pieces_.size()));
+  for (const std::string& piece : tokenizer.pieces_) {
+    writer.str(piece);
+  }
+  writer.raw(tokenizer.byte_of_codepoint_.data(),
+             sizeof(std::int32_t) * tokenizer.byte_of_codepoint_.size());
+  writer.raw(tokenizer.codepoint_of_byte_.data(),
+             sizeof(std::uint32_t) * tokenizer.codepoint_of_byte_.size());
+  const auto write_index = [&writer](const StringIndex& index) {
+    writer.u32(static_cast<std::uint32_t>(index.arena_.size()));
+    writer.raw(index.arena_.data(), index.arena_.size());
+    writer.u32(static_cast<std::uint32_t>(index.slots_.size()));
+    std::vector<SerializedSlot> slots(index.slots_.size());
+    for (std::size_t slot_index = 0; slot_index < index.slots_.size();
+         ++slot_index) {
+      const StringIndex::Slot& slot = index.slots_[slot_index];
+      SerializedSlot& stored = slots[slot_index];
+      stored.hash = slot.hash;
+      stored.offset = slot.offset;
+      stored.length = slot.length;
+      stored.value = slot.value;
+      stored.state = slot.state;
+    }
+    writer.raw(slots.data(), slots.size() * sizeof(SerializedSlot));
+    writer.u64(static_cast<std::uint64_t>(index.size_));
+    writer.u64(static_cast<std::uint64_t>(index.tombstones_));
+  };
+  write_index(tokenizer.vocab_);
+  write_index(tokenizer.merge_rank_);
+  writer.u32(static_cast<std::uint32_t>(tokenizer.control_.size()));
+  writer.raw(tokenizer.control_.data(), tokenizer.control_.size());
+  writer.u32(static_cast<std::uint32_t>(tokenizer.control_tokens_.size()));
+  for (const auto& entry : tokenizer.control_tokens_) {
+    writer.str(entry.first);
+    writer.u32(static_cast<std::uint32_t>(entry.second));
+  }
+  writer.u32(static_cast<std::uint32_t>(tokenizer.control_by_first_.size()));
+  for (const auto& entry : tokenizer.control_by_first_) {
+    writer.u8(static_cast<std::uint8_t>(entry.first));
+    writer.u32(static_cast<std::uint32_t>(entry.second.size()));
+    for (const int id : entry.second) {
+      writer.u32(static_cast<std::uint32_t>(id));
+    }
+  }
+  writer.u32(tokenizer.llama_bpe_digits_ ? 1u : 0u);
+  writer.u32(tokenizer.spm_ ? 1u : 0u);
+  writer.u32(static_cast<std::uint32_t>(tokenizer.scores_.size()));
+  writer.raw(tokenizer.scores_.data(),
+             sizeof(float) * tokenizer.scores_.size());
+  writer.raw(tokenizer.byte_token_.data(),
+             sizeof(int) * tokenizer.byte_token_.size());
+
+  std::error_code error;
+  const std::filesystem::path target(file);
+  std::filesystem::create_directories(target.parent_path(), error);
+  const std::string temporary = file + ".tmp";
+  {
+    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+      return;
+    }
+    stream.write(reinterpret_cast<const char*>(writer.bytes().data()),
+                 static_cast<std::streamsize>(writer.bytes().size()));
+    stream.flush();
+    if (!stream) {
+      stream.close();
+      std::filesystem::remove(temporary, error);
+      return;
+    }
+  }
+  std::filesystem::remove(target, error);
+  std::filesystem::rename(temporary, target, error);
+  if (error) {
+    std::filesystem::remove(temporary, error);
+  }
+}
+
+bool Tokenizer::load_cache(const std::string& file, std::uint64_t key,
+                           std::unique_ptr<Tokenizer>& tokenizer) {
+  constexpr std::uint32_t kMagic = 0x53544754u;  // "TGTS"
+  constexpr std::uint32_t kVersion = 3;
+  constexpr std::uint32_t kMaxPieces = 2000000;
+  constexpr std::uint32_t kMaxArena = 64u * 1024u * 1024u;
+  constexpr std::uint32_t kMaxSlots = 4000000;
+  constexpr std::uint32_t kMaxScores = 2000000;
+  constexpr std::uint32_t kMaxString = 1u * 1024u * 1024u;
+
+  std::error_code error;
+  const std::uintmax_t size = std::filesystem::file_size(file, error);
+  if (error || size == 0 || size > (256ull * 1024ull * 1024ull)) {
+    return false;
+  }
+  std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+  {
+    std::ifstream stream(file, std::ios::binary);
+    if (!stream ||
+        !stream.read(reinterpret_cast<char*>(data.data()),
+                     static_cast<std::streamsize>(data.size()))) {
+      return false;
+    }
+  }
+
+  ByteReader reader(data.data(), data.size());
+  std::uint32_t magic = 0;
+  std::uint32_t version = 0;
+  std::uint64_t stored_key = 0;
+  if (!reader.u32(magic) || magic != kMagic || !reader.u32(version) ||
+      version != kVersion || !reader.u64(stored_key) ||
+      stored_key != key) {
+    return false;
+  }
+
+  std::unique_ptr<Tokenizer> restored(new Tokenizer());
+  std::uint32_t piece_count = 0;
+  if (!reader.u32(piece_count) || piece_count == 0 ||
+      piece_count > kMaxPieces) {
+    return false;
+  }
+  restored->pieces_.reserve(piece_count);
+  for (std::uint32_t index = 0; index < piece_count; ++index) {
+    std::string piece;
+    if (!reader.str(piece, kMaxString)) {
+      return false;
+    }
+    restored->pieces_.push_back(std::move(piece));
+  }
+  if (!reader.raw(restored->byte_of_codepoint_.data(),
+                  sizeof(std::int32_t) *
+                      restored->byte_of_codepoint_.size()) ||
+      !reader.raw(restored->codepoint_of_byte_.data(),
+                  sizeof(std::uint32_t) *
+                      restored->codepoint_of_byte_.size())) {
+    return false;
+  }
+
+  const auto read_index = [&reader](StringIndex& index) {
+    std::uint32_t arena_length = 0;
+    if (!reader.u32(arena_length) || arena_length > kMaxArena ||
+        reader.remaining() < arena_length) {
+      return false;
+    }
+    index.arena_.resize(arena_length);
+    if (arena_length > 0 && !reader.raw(index.arena_.data(), arena_length)) {
+      return false;
+    }
+    std::uint32_t slot_count = 0;
+    if (!reader.u32(slot_count) || slot_count > kMaxSlots) {
+      return false;
+    }
+    if (slot_count != 0 && (slot_count & (slot_count - 1)) != 0) {
+      return false;
+    }
+    static_assert(sizeof(StringIndex::Slot) == sizeof(SerializedSlot),
+                  "slot layout must match the sidecar image");
+    if (reader.remaining() / sizeof(SerializedSlot) < slot_count) {
+      return false;
+    }
+    index.slots_.resize(slot_count);
+    if (slot_count > 0 &&
+        !reader.raw(index.slots_.data(),
+                    index.slots_.size() * sizeof(StringIndex::Slot))) {
+      return false;
+    }
+    std::size_t occupied = 0;
+    for (std::uint32_t slot_index = 0; slot_index < slot_count; ++slot_index) {
+      const StringIndex::Slot& slot = index.slots_[slot_index];
+      if (slot.state > 2) {
+        return false;
+      }
+      if (slot.state == 1) {
+        if (static_cast<std::uint64_t>(slot.offset) + slot.length >
+            arena_length) {
+          return false;
+        }
+        ++occupied;
+      }
+    }
+    std::uint64_t stored_size = 0;
+    std::uint64_t stored_tombstones = 0;
+    if (!reader.u64(stored_size) || !reader.u64(stored_tombstones) ||
+        stored_size > slot_count || stored_tombstones > slot_count ||
+        stored_size != occupied) {
+      return false;
+    }
+    index.size_ = static_cast<std::size_t>(stored_size);
+    index.tombstones_ = static_cast<std::size_t>(stored_tombstones);
+    return true;
+  };
+  if (!read_index(restored->vocab_) ||
+      !read_index(restored->merge_rank_)) {
+    return false;
+  }
+
+  std::uint32_t control_count = 0;
+  if (!reader.u32(control_count) || control_count > piece_count ||
+      (control_count != 0 && control_count != piece_count)) {
+    return false;
+  }
+  restored->control_.resize(control_count);
+  if (control_count > 0 &&
+      !reader.raw(restored->control_.data(), control_count)) {
+    return false;
+  }
+  std::uint32_t control_token_count = 0;
+  if (!reader.u32(control_token_count) || control_token_count > piece_count ||
+      (control_token_count > 0 && control_count != piece_count)) {
+    return false;
+  }
+  restored->control_tokens_.reserve(control_token_count);
+  for (std::uint32_t index = 0; index < control_token_count; ++index) {
+    std::string piece;
+    std::uint32_t id = 0;
+    if (!reader.str(piece, kMaxString) || !reader.u32(id) || id >= piece_count) {
+      return false;
+    }
+    restored->control_tokens_.emplace_back(std::move(piece),
+                                           static_cast<int>(id));
+  }
+  std::uint32_t by_first_count = 0;
+  if (!reader.u32(by_first_count) || by_first_count > control_token_count) {
+    return false;
+  }
+  std::array<bool, 256> seen_first{};
+  for (std::uint32_t index = 0; index < by_first_count; ++index) {
+    std::uint8_t first = 0;
+    std::uint32_t count = 0;
+    if (!reader.u8(first) || !reader.u32(count) || count == 0 ||
+        count > control_token_count || seen_first[first]) {
+      return false;
+    }
+    seen_first[first] = true;
+    std::vector<int> ids;
+    ids.reserve(count);
+    for (std::uint32_t id_index = 0; id_index < count; ++id_index) {
+      std::uint32_t id = 0;
+      if (!reader.u32(id) || id >= control_token_count) {
+        return false;
+      }
+      ids.push_back(static_cast<int>(id));
+    }
+    restored->control_by_first_.emplace(static_cast<char>(first),
+                                        std::move(ids));
+  }
+  std::uint32_t llama_bpe_digits = 0;
+  std::uint32_t spm = 0;
+  if (!reader.u32(llama_bpe_digits) || llama_bpe_digits > 1 ||
+      !reader.u32(spm) || spm > 1) {
+    return false;
+  }
+  restored->llama_bpe_digits_ = llama_bpe_digits != 0;
+  restored->spm_ = spm != 0;
+  std::uint32_t score_count = 0;
+  if (!reader.u32(score_count) || score_count > kMaxScores) {
+    return false;
+  }
+  restored->scores_.resize(score_count);
+  if (score_count > 0 &&
+      !reader.raw(restored->scores_.data(), sizeof(float) * score_count)) {
+    return false;
+  }
+  if (!reader.raw(restored->byte_token_.data(),
+                  sizeof(int) * restored->byte_token_.size())) {
+    return false;
+  }
+  for (const int id : restored->byte_token_) {
+    if (id < -1 || id >= static_cast<int>(piece_count)) {
+      return false;
+    }
+  }
+  for (const float score : restored->scores_) {
+    if (!std::isfinite(score)) {
+      return false;
+    }
+  }
+  if (reader.remaining() != 0) {
+    return false;
+  }
+  tokenizer = std::move(restored);
+  return true;
+}
+
 std::unique_ptr<Tokenizer> Tokenizer::from_path(const std::string& path,
-                                                std::string& error) {
+                                                std::string& error,
+                                                const std::string& cache_dir) {
   try {
     // Open with full metadata: the model loader skips large arrays, so its File
     // has no vocabulary in it.
+    if (!cache_dir.empty()) {
+      std::uint64_t key = 0;
+      std::string file;
+      if (cache_location(path, cache_dir, key, file)) {
+        std::unique_ptr<Tokenizer> cached;
+        if (load_cache(file, key, cached)) {
+          return cached;
+        }
+        const gguf::File file_data = gguf::File::open(path);
+        std::unique_ptr<Tokenizer> tokenizer = from_gguf(file_data, error);
+        if (tokenizer != nullptr) {
+          save_cache(file, key, *tokenizer);
+        }
+        return tokenizer;
+      }
+    }
     const gguf::File file = gguf::File::open(path);
     return from_gguf(file, error);
   } catch (const std::exception& exception) {
@@ -558,6 +996,7 @@ std::unique_ptr<Tokenizer> Tokenizer::from_path(const std::string& path,
     return nullptr;
   }
 }
+
 
 std::string Tokenizer::decode_span(const int* tokens, int count) const {
   std::string text;

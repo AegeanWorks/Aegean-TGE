@@ -315,6 +315,109 @@ TGE_TEST(tokenizer_heap_merge_matches_the_scan) {
   }
 }
 
+TGE_TEST(tokenizer_state_cache_round_trips) {
+  // Exercises the opt-in state sidecar end to end: a cold from_path writes it,
+  // a warm from_path restores it, and both must behave exactly like the
+  // in-memory tokenizer. Control tokens, merge ranks and the byte alphabet are
+  // all non-trivial here so every serialized region is compared. A truncated
+  // sidecar must rebuild silently instead of yielding a half-restored object.
+  std::vector<std::uint8_t> out;
+  put_u32(out, 0x46554747u);
+  put_u32(out, 3);
+  put_u64(out, 0);  // tensors
+  put_u64(out, 3);  // metadata entries
+  put_string(out, "tokenizer.ggml.tokens");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 9);
+  for (const char* piece :
+       {"h", "e", "l", "o", "!", "hello", "u", "s", "use"}) {
+    put_string(out, piece);
+  }
+  put_string(out, "tokenizer.ggml.merges");
+  put_u32(out, 9);
+  put_u32(out, 8);
+  put_u64(out, 6);
+  for (const char* rule :
+       {"h e", "he l", "hel l", "hell o", "u s", "us e"}) {
+    put_string(out, rule);
+  }
+  put_string(out, "tokenizer.ggml.token_type");
+  put_u32(out, 9);
+  put_u32(out, 5);
+  put_u64(out, 9);
+  for (const std::uint32_t type :
+       {1u, 1u, 1u, 1u, 1u, 3u, 1u, 1u, 1u}) {
+    put_u32(out, type);
+  }
+
+  const TempFile temp(out, "tge_gguf_state_cache.gguf");
+  const tge::gguf::File file = tge::gguf::File::open(temp.path());
+  std::string error;
+  const std::unique_ptr<tge::models::Tokenizer> reference =
+      tge::models::Tokenizer::from_gguf(file, error);
+  TGE_REQUIRE(reference != nullptr);
+  const std::vector<int> control_ids = reference->encode("hello!");
+  const std::vector<int> merge_ids = reference->encode("use");
+  TGE_REQUIRE(control_ids.size() == 2);
+  TGE_REQUIRE(merge_ids.size() == 1);
+  TGE_CHECK(control_ids[0] == 5);
+  TGE_CHECK(merge_ids[0] == 8);
+  const std::vector<int> plain_ids = {0, 1, 2, 2, 3, 4};
+  const std::string plain_text = reference->decode(plain_ids);
+  TGE_CHECK(plain_text == "hello!");
+
+  static std::atomic<int> cache_counter{0};
+  std::error_code ignored;
+  const std::filesystem::path cache_dir =
+      std::filesystem::temp_directory_path(ignored) /
+      ("tge-tokenizer-cache-test." +
+       std::to_string(cache_counter.fetch_add(1, std::memory_order_relaxed)));
+  std::filesystem::remove_all(cache_dir, ignored);
+
+  const auto check_matches = [&](tge::models::Tokenizer& tokenizer) {
+    TGE_CHECK(tokenizer.encode("hello!") == control_ids);
+    TGE_CHECK(tokenizer.encode("use") == merge_ids);
+    TGE_CHECK(tokenizer.decode(plain_ids) == plain_text);
+    TGE_CHECK(tokenizer.vocab_size() == reference->vocab_size());
+    TGE_CHECK(tokenizer.llama_bpe() == reference->llama_bpe());
+    TGE_CHECK(tokenizer.spm() == reference->spm());
+  };
+
+  const std::unique_ptr<tge::models::Tokenizer> cold =
+      tge::models::Tokenizer::from_path(temp.path(), error, cache_dir.string());
+  TGE_REQUIRE(cold != nullptr);
+  check_matches(*cold);
+
+  int sidecars = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(cache_dir)) {
+    if (entry.path().extension() == ".bin") {
+      ++sidecars;
+    }
+  }
+  TGE_CHECK(sidecars == 1);
+
+  const std::unique_ptr<tge::models::Tokenizer> warm =
+      tge::models::Tokenizer::from_path(temp.path(), error, cache_dir.string());
+  TGE_REQUIRE(warm != nullptr);
+  check_matches(*warm);
+
+  // Truncate every sidecar to its magic: load must reject it and rebuild.
+  for (const auto& entry : std::filesystem::directory_iterator(cache_dir)) {
+    if (entry.path().extension() != ".bin") {
+      continue;
+    }
+    std::ofstream stream(entry.path(), std::ios::binary | std::ios::trunc);
+    stream.write("TGTS", 4);
+  }
+  const std::unique_ptr<tge::models::Tokenizer> rebuilt =
+      tge::models::Tokenizer::from_path(temp.path(), error, cache_dir.string());
+  TGE_REQUIRE(rebuilt != nullptr);
+  check_matches(*rebuilt);
+
+  std::filesystem::remove_all(cache_dir, ignored);
+}
+
 TGE_TEST(tokenizer_decodes_byte_level_pieces) {
   // Three pieces in the GPT-2 representation: space, "hello", "!".
   std::vector<std::uint8_t> out;

@@ -4040,11 +4040,10 @@ Left outside at the time of this batch: the startup-only keeps
 (`tokenizer-state-cache`, the no-init KV/scratch bundle) change load/tokenizer
 time, not decode throughput. The no-init bundle and the heap BPE encoder were
 integrated later the same day once TTFT was counted as token-generation wall
-time (see the two 2026-11-11 follow-up entries); `tokenizer-state-cache`
-stays out because it is a feature-sized mechanism (new flat index, binary
-sidecar format, cache-validation and atomic-write policy), not a port. The
-timers fix is diagnostic-only; mixed or negative results (Q5_K bridge,
-8-chunk GQA, degree-4 exp) stay as recorded.
+time (see the 2026-11-11 follow-up entries), and `tokenizer-state-cache` was
+ported the same day as an opt-in flag once the flat index it needs existed
+(see the last 2026-11-11 entry). The timers fix is diagnostic-only; mixed or
+negative results (Q5_K bridge, 8-chunk GQA, degree-4 exp) stay as recorded.
 
 Tests 169/169 (two new exact fused-row differentials); `aikit.py check
 aegean-tge` 4/4.
@@ -4138,3 +4137,41 @@ slices, verifier rows); `Qwen2::reset` keeps its explicit zero fills, and
 The remaining load line is mmap plus tensor-table parse; the tokenizer
 construction dominates it now. This is time-to-first-token, not decode
 throughput, and it scales with context (the zero-fill was O(context)).
+
+## 2026-11-11 - Tokenizer state cache shipped opt-in (kept)
+
+The keep-grade spike in `reports/idea-invented-tokenizer-state-cache-keep.md`
+was report-only; the tree rebuilt the tokenizer on every invocation. It is now
+shipped behind `--tokenizer-cache` (plus `--tokenizer-cache-dir`):
+
+- `StringIndex` replaces `std::unordered_map` for `vocab_` and
+  `merge_rank_`: one arena with every key back to back plus an
+  open-addressing slot table (first insert wins, tombstones on erase), which
+  is what makes the final state serializable and removes the node build.
+- Sidecar format v3 (`TGTS`), keyed on FNV1a(path) ^ size ^ mtime, holding
+  pieces, byte tables, both indexes (fixed 24-byte slot image, one read plus a
+  validation pass), control tables, flags, scores and byte tokens. Any
+  validation failure is a silent miss; the file is written to `.tmp` and
+  renamed into place, so a torn sidecar can never be accepted.
+- `from_path` takes an optional cache directory; with the cache enabled and
+  `--vocabulary auto`, the model load takes the lazy path (skips the large
+  tokenizer arrays) and the tokenizer is restored from the sidecar.
+  `--vocabulary eager` remains the escape hatch. Defaults are unchanged.
+
+| Check | Result |
+|---|---|
+| Llama-3B Q4_K_M, ctx 4096, 5 alternating pairs, load+tokenizer | plain 68.4/66.0/64.7/63.9/64.8 -> cache 31.2/29.5/29.8/29.9/32.0 ms; median **64.8 -> 29.9 ms (2.2x)** |
+| same, tokenizer phase only | 30.7/30.0/28.5/28.5/29.7 -> 22.4/20.8/21.1/20.9/22.4 ms; median **29.7 -> 21.1 ms (1.4x)** |
+| pre-flat build (unordered_map), 3 runs | 87.4/83.9/79.7 ms total -> 29.9 ms cache median (**2.8x**) |
+| Qwen2.5-0.5B Q8_0 warm | 52.6 -> **21.0 ms** (load 5.0 + tokenizer 15.8) |
+| cold first run (writes the 24.6 MB sidecar) | tokenizer 143.0/150.8 ms, i.e. **+~115 ms one-time**; every later run saves ~32-35 ms |
+| ids | Llama prose, CJK and control-token prompts plus the Qwen prompt: prompt ids and generated ids identical |
+| suite | new `tokenizer_state_cache_round_trips` (cold write, warm restore, truncated sidecar rebuild; control token, merge rank and byte alphabet all compared) -> **171/171**; `aikit.py check aegean-tge` 4/4 |
+
+Two honest notes. (1) The shrink from a 38.8 MB to a 24.6 MB sidecar came from
+reserving the indexes at the entry count instead of twice it; the first
+oversized attempt made the warm tokenizer 53-56 ms and the cold write 416 ms,
+so the reservation sizing is load-bearing, not cosmetic. (2) The first-run
+penalty exceeds the spike's +50 ms bar (~+115 ms here); it is a one-time cost
+per model file and the flag is opt-in, while a warm invocation wins on both
+models measured.

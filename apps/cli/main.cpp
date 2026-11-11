@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -94,6 +95,8 @@ void print_usage(std::FILE* stream = stdout) {
       "        --pin-threads 1|0  pin decode workers to P-cores (default 0)\n"
       "        --context N      KV cache length (default 4096, capped by model)\n"
       "        --vocabulary M   auto|eager|lazy tokenizer parsing (default auto)\n"
+      "        --tokenizer-cache  opt-in tokenizer state sidecar (TTFT)\n"
+      "        --tokenizer-cache-dir PATH  sidecar directory (default temp)\n"
       "        --temp T         sampling temperature; 0 is greedy (default 0)\n"
       "        --top-k N        keep the N best tokens (default off)\n"
       "        --top-p P        nucleus probability mass (default 1.0)\n"
@@ -505,7 +508,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
                      bool pin_threads,
                      tge::models::SparseConfig sparse,
                      const std::string& gpu_mode, bool disable_fuse = false,
-                     bool disable_skip = false) {
+                     bool disable_skip = false,
+                     const std::string& tokenizer_cache_dir = std::string()) {
   if (count <= 0) {
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
@@ -535,10 +539,13 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   std::string error;
   // Whether a tokenizer will be built decides the cheaper load strategy: eager
   // costs ~65 ms up front but the tokenizer then reuses the parsed arrays
-  // instead of parsing the file a second time.
+  // instead of parsing the file a second time. A state-cache hit makes the
+  // lazy load cheaper: the tokenizer is restored from the sidecar instead of
+  // parsing either file.
   const bool needs_tokenizer = !prompt_text.empty() || print_text;
   const bool eager = vocabulary == VocabularyMode::Eager ||
-                     (vocabulary == VocabularyMode::Auto && needs_tokenizer);
+                     (vocabulary == VocabularyMode::Auto && needs_tokenizer &&
+                      tokenizer_cache_dir.empty());
   const auto load_start = Clock::now();
   std::unique_ptr<tge::models::Qwen2> model = tge::models::Qwen2::load(
       path, error, context_limit, eager, kv_half, kv_q8);
@@ -645,7 +652,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   // second mapping of the same file.
   const auto build_tokenizer = [&](std::string& tokenizer_error) {
     return eager ? tge::models::Tokenizer::from_gguf(model->file(), tokenizer_error)
-                 : tge::models::Tokenizer::from_path(path, tokenizer_error);
+                 : tge::models::Tokenizer::from_path(path, tokenizer_error,
+                                                   tokenizer_cache_dir);
   };
 
   std::vector<int> tokens = prompt_ids;
@@ -2138,6 +2146,8 @@ int run_generate(int argc, char** argv) {
   bool kv_q8 = false;
   bool kv_auto = false;
   bool prefetch = false;
+  bool tokenizer_cache = false;
+  std::string tokenizer_cache_dir;
   tge::models::SamplingParams sampling;
   int seed = 0;
   tge::models::SparseConfig sparse;
@@ -2176,6 +2186,10 @@ int run_generate(int argc, char** argv) {
       prefetch = true;
       continue;
     }
+    if (std::strcmp(argv[index], "--tokenizer-cache") == 0) {
+      tokenizer_cache = true;
+      continue;
+    }
     if (index + 1 >= argc) {
       std::fprintf(stderr, "generate: '%s' needs a value\n", argv[index]);
       return 2;
@@ -2195,6 +2209,9 @@ int run_generate(int argc, char** argv) {
       ok = parse_int(value, threads);
     } else if (std::strcmp(flag, "--prefill-threads") == 0) {
       ok = parse_int(value, prefill_threads);
+    } else if (std::strcmp(flag, "--tokenizer-cache-dir") == 0) {
+      tokenizer_cache_dir = value;
+      ok = !tokenizer_cache_dir.empty();
     } else if (std::strcmp(flag, "--pin-threads") == 0) {
       ok = parse_int(value, pin_threads) &&
            (pin_threads == 0 || pin_threads == 1);
@@ -2332,12 +2349,26 @@ int run_generate(int argc, char** argv) {
     kv_half = tge::models::Qwen2::auto_kv_half(context_limit);
     kv_q8 = false;
   }
+  std::string resolved_tokenizer_cache;
+  if (tokenizer_cache) {
+    resolved_tokenizer_cache = tokenizer_cache_dir;
+    if (resolved_tokenizer_cache.empty()) {
+      std::error_code directory_error;
+      const std::filesystem::path base =
+          std::filesystem::temp_directory_path(directory_error);
+      if (!directory_error) {
+        resolved_tokenizer_cache =
+            (base / "tge-tokenizer-state-cache").string();
+      }
+    }
+  }
   return command_generate(model_path, prompt, prompt_text, count, threads,
                           print_ids, sampling, context_limit, print_text,
                           vocabulary, attention_mode, speculative, vnni, kq8,
                           kq8d_head, kq8d_down, kq8d_attn, kv_half, kv_q8,
                           kv_auto, prefetch, prefill_threads, pin_threads != 0,
-                          sparse, gpu_mode, disable_fuse, disable_skip);
+                          sparse, gpu_mode, disable_fuse, disable_skip,
+                          resolved_tokenizer_cache);
 }
 
 int run_gemm_bench(int argc, char** argv, int first) {
