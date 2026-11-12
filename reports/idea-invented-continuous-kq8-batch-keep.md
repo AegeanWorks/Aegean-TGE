@@ -8,6 +8,7 @@
   - 8 slots, 16 requests x 32: 173.80/161.71/145.34/165.82/145.51/121.89 -> 172.12/200.01/183.82/169.02/142.66/126.25 (0.990/1.237/1.265/1.019/0.981/1.036).
   - **13 pairs: 10 positive, median ~1.034x**; `state: independent (all transcripts identical)` in **13/13** runs, in both arms.
   - The gain is small because the kernel advantage at the 4-token shape is only 1.10x; at 8 slots the kernel is 1.53x but scheduling/admission noise dominates the aggregate.
+- **Status correction (2026-11-11, follow-up audit)**: KEEP-GRADE is withdrawn as a default candidate. The occupancy-invariance audit named in §7 ran and **failed**: at `--prompt-tokens 24 --tokens 16`, the same request produces `35-E5-78…` decoded alone and `99-22-12…` decoded inside an 8-request batch on the kq8 build (first divergence at output token 11), while the float build is identical in both. Cause: with `float_only` removed, occupancy 1 still takes the `tokens == 1` float kernel and occupancy 8 takes kq8 — a path split, not kq8 being occupancy-sensitive. The +3.4% median throughput stands, but the change must not become a default; only a `tokens == 1` kq8 row path (same kernel for all occupancies) could make it safe. See `reports/idea-invented-continuous-kq8-leak-audit-measured.md`.
 - **Tree state at close**: spike reverted from `src/models/qwen2.cpp`; `git status` clean; stash holds only the pre-existing 2026-11-04 peer entry; rebuild clean, `tge_tests` **171/171**, `python aikit.py check aegean-tge` **4/4**. No branch, no spike commit, nothing pushed.
 
 ## 1. Mechanism
