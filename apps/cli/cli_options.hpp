@@ -1,7 +1,10 @@
 #pragma once
 
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace tge::cli {
 
@@ -46,6 +49,36 @@ inline const char* kv_label(const KvSelection& selection) {
     return "i8";
   }
   return "f32";
+}
+
+/// Reads a whole prompt file (`--prompt-file`) into `text`, so prompts longer
+/// than the command-line limit can be used. Returns an empty string on success,
+/// otherwise a message without the `<command>: ` prefix.
+inline std::string load_prompt_file(const std::string& path,
+                                    std::string& text) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return "cannot open prompt file '" + path + "'";
+  }
+  std::string loaded((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+  if (in.bad()) {
+    return "cannot read prompt file '" + path + "'";
+  }
+  if (loaded.empty()) {
+    return "prompt file '" + path + "' is empty";
+  }
+  text = std::move(loaded);
+  return {};
+}
+
+/// --prompt-file may not be combined with --prompt or --tokens. Returns an empty
+/// string when the combination is valid, otherwise a message without the prefix.
+inline std::string prompt_source_conflict(bool has_file, bool has_text, bool has_tokens) {
+  if (has_file && (has_text || has_tokens)) {
+    return "--prompt-file cannot be combined with --prompt or --tokens";
+  }
+  return {};
 }
 
 /// Pre-load checks shared by `generate` and `fidelity`. Returns an empty string
@@ -109,7 +142,7 @@ inline std::string format_resolved(const Resolved& state) {
 /// flag (`generate: '--help' needs a value`).
 inline std::string command_usage(std::string_view command) {
   if (command == "generate") {
-    return "usage: tge generate --model PATH [--prompt TEXT | --tokens IDS]\n"
+    return "usage: tge generate --model PATH [--prompt TEXT | --prompt-file PATH | --tokens IDS]\n"
            "                     [--n N] [--kv f32|f16|i8|auto]\n"
            "                     [--attention auto|scalar|head|gqa] [--gpu auto|off|on]\n"
            "                     [--kernel kq8|float] [--speculative] [--sparse]\n"

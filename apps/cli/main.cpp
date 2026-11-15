@@ -89,6 +89,8 @@ void print_usage(std::FILE* stream = stdout) {
       "        --model PATH     GGUF model to load\n"
       "        --tokens \"a b c\"  prompt token ids\n"
       "        --prompt \"text\"   prompt as text, tokenized by the model\n"
+      "        --prompt-file PATH  prompt read from a file (beyond the\n"
+      "                         command-line length limit)\n"
       "        --n N            tokens to generate (default 32)\n"
       "        --threads N      decode workers (default: physical cores)\n"
       "        --prefill-threads N prefill workers (default: all logical)\n"
@@ -2125,6 +2127,8 @@ int run_generate(int argc, char** argv) {
   std::string model_path;
   std::vector<int> prompt;
   std::string prompt_text;
+  bool prompt_from_file = false;
+  bool prompt_from_text = false;
   int count = 32;
   int threads = 0;
   int prefill_threads = 0;
@@ -2203,6 +2207,15 @@ int run_generate(int argc, char** argv) {
       prompt = parse_token_list(value);
     } else if (std::strcmp(flag, "--prompt") == 0) {
       prompt_text = value;
+      prompt_from_text = true;
+    } else if (std::strcmp(flag, "--prompt-file") == 0) {
+      const std::string failure =
+          tge::cli::load_prompt_file(value, prompt_text);
+      if (!failure.empty()) {
+        std::fprintf(stderr, "generate: %s\n", failure.c_str());
+        return 2;
+      }
+      prompt_from_file = true;
     } else if (std::strcmp(flag, "--n") == 0) {
       ok = parse_int(value, count);
     } else if (std::strcmp(flag, "--threads") == 0) {
@@ -2343,6 +2356,12 @@ int run_generate(int argc, char** argv) {
     std::fprintf(stderr,
                  "generate: --sparse-window must be >= 1 and --sparse-stride "
                  "must be >= 2\n");
+    return 2;
+  }
+  const std::string source_conflict = tge::cli::prompt_source_conflict(
+      prompt_from_file, prompt_from_text, !prompt.empty());
+  if (!source_conflict.empty()) {
+    std::fprintf(stderr, "generate: %s\n", source_conflict.c_str());
     return 2;
   }
   if (kv_auto) {

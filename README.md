@@ -159,7 +159,8 @@ tokens, then a near-tie flips; `tge fidelity` prices the arithmetic at mean KL
 SiLU). The older "2x decode" result was against
 llama.cpp build a91eab6 (15.2 t/s at 6 threads); the installed build 11624 runs
 at 45.1 t/s, so short-context decode is now at parity, and prefill is behind.
-Prompts can be given as text (`--prompt`) or token ids (`--tokens`), and output prints as
+Prompts can be given as text (`--prompt`), a text file (`--prompt-file`, for prompts
+longer than the command-line limit) or token ids (`--tokens`), and output prints as
 text with `--text`; the tokenizer was validated against `llama-tokenize` on
 punctuation, decimals, contractions and whitespace, including the reference
 splitter's optional leading space or punctuation character. Sampling supports

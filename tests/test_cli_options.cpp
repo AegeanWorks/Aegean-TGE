@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "cli_options.hpp"
@@ -136,5 +138,41 @@ TGE_TEST(cli_info_json_has_every_section_and_escapes) {
   TGE_CHECK(json.find("GPU \\\"quoted\\\"") != std::string::npos);
   TGE_CHECK(json.find("\"kv_half_context\": " +
                       std::to_string(tge::models::Qwen2::kAutoKvHalfContext)) !=
+            std::string::npos);
+}
+
+TGE_TEST(cli_prompt_file_loads_text_and_rejects_bad_paths) {
+  namespace fs = std::filesystem;
+  const fs::path path = fs::temp_directory_path() / "tge_prompt_file_test.txt";
+  const std::string body = "line one\nline two with \xC3\xA9 and no trailing newline";
+  {
+    std::ofstream out(path, std::ios::binary);
+    out << body;
+  }
+  std::string text;
+  TGE_CHECK(tge::cli::load_prompt_file(path.string(), text).empty());
+  TGE_CHECK(text == body);
+
+  std::error_code ignored;
+  fs::remove(path, ignored);
+  TGE_CHECK(!tge::cli::load_prompt_file(path.string(), text).empty());
+
+  {
+    std::ofstream out(path, std::ios::binary);
+  }
+  TGE_CHECK(tge::cli::load_prompt_file(path.string(), text).find("empty") !=
+            std::string::npos);
+  fs::remove(path, ignored);
+}
+
+TGE_TEST(cli_prompt_file_conflicts_with_other_prompt_sources) {
+  TGE_CHECK(tge::cli::prompt_source_conflict(true, false, false).empty());
+  TGE_CHECK(tge::cli::prompt_source_conflict(false, true, true).empty());
+  TGE_CHECK(!tge::cli::prompt_source_conflict(true, true, false).empty());
+  TGE_CHECK(!tge::cli::prompt_source_conflict(true, false, true).empty());
+}
+
+TGE_TEST(cli_generate_usage_names_prompt_file) {
+  TGE_CHECK(command_usage("generate").find("--prompt-file") !=
             std::string::npos);
 }
