@@ -4175,3 +4175,24 @@ so the reservation sizing is load-bearing, not cosmetic. (2) The first-run
 penalty exceeds the spike's +50 ms bar (~+115 ms here); it is a one-time cost
 per model file and the flag is opt-in, while a warm invocation wins on both
 models measured.
+
+## 2026-11-14 - Single-stream decode thread and pin sweep, 0.5B Q8_0 (no change, defaults confirmed)
+
+Baseline and result are the same binary (no code edit). `generate --prompt "Once upon a time" --n 128`, greedy, best-of-3 per row; `bench mem` read 46.1 GB/s at the time.
+
+| Setting | decode t/s (3 runs) | matvec share |
+|---|---|---|
+| default (10 threads) | 52.5 / 47.9 / 46.8 | 82-85% |
+| `--threads 6` | 49.5 / 49.3 / 46.6 | 86-87% |
+| `--threads 8` | 50.1 / 49.3 / 49.3 | 84-85% |
+| `--threads 12` | 47.8 / 47.8 / 42.3 | 84% |
+| `--pin-threads 1` | 33.3 / 35.9 / 25.9 | 90-92% |
+| `--threads 6 --pin-threads 1` | 35.0 / 37.8 / 35.0 | 90-92% |
+
+Verdict: rejected as a lever, nothing changed. Thread count 6-10 is flat inside the box's ~10% drift, 12 is slightly worse, and P-core pinning costs 25-35%. Phase split: matvec 82-87%, attention 3-4%, norm/RoPE/SiLU 11-15% (~1.5 ms/token, already AVX2). Decode streams ~640 MiB in ~9.5 ms, so the weight stream is at the wall; no lossless single-stream kernel change is left that can clear the noise. Remaining lossless lever is speculation, already shipped.
+
+Addendum, same session: `--speculative` on a fresh 20-token code prompt (no repeated text to look up), 128 tokens, 3 runs each. Plain 42.8 / 48.9 / 49.3 t/s; speculative 43.3 / 44.0 / 42.4 t/s (median -10%). Not kept as a default: prompt-lookup speculation only pays when the output repeats the prompt, so it stays opt-in.
+
+Addendum, same session: decode of the three 0.5B files on disk, `generate --prompt "Once upon a time" --n 128`, 3 runs each. Q8_0 42.9 / 46.7 / 46.0 t/s; Q5_K_M 33.9 / 28.9 / 27.1; Q4_K_M 30.8 / 32.9 / 35.5. The smaller files read fewer bytes but decode slower, so the K-quant decode kernels, not bandwidth, bound them. Lower precision is therefore not a speed lever here and the quality trade is moot; Q8_0 stays the fastest.
+
+Addendum, same session: single-thread `bench batch` decode kernels, 4.3M weights per call, tokens=1 (cache-resident). Q8 0.256-0.270 ms; Q4_0 0.319; Q5_0 0.284; Q4_K 0.273; Q5_K 0.274; Q6_K 0.317. Per weight the formats cost about the same ALU time, so decode here is bound by dequantise-and-dot throughput (~32 GFLOPS per stream), not by bytes read. That explains why the 0.5B Q4_K_M/Q5_K_M files (which also carry Q4_0/Q5_0/Q8 tensors, since hidden 896 is not a multiple of 256) decode slower than Q8_0. The one remaining lever, integer-activation kernels (`--kq8d`, `--vnni`), is already shipped opt-in and priced at KL 1.0-1.6e-3 with top-1 below 100%, so it harms quality and is not a default candidate. Conclusion: no lossless single-stream decode gain is left on this box at 0.5B.
