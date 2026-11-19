@@ -63,8 +63,14 @@ class BlockTable {
     }
     if (--refcount_[i] == 0) {
       free_.push_back(block);
-      prefix_owner_.erase(prefix_of_block_.count(block) ? prefix_of_block_[block]
-                                                        : kNoHash);
+      // Erase both directions of the mapping. Leaving prefix_of_block_[block]
+      // stale lets a later incarnation of this block (with no remember_prefix
+      // call) erase a different, still-live prefix's ownership entry.
+      const auto owner = prefix_of_block_.find(block);
+      if (owner != prefix_of_block_.end()) {
+        prefix_owner_.erase(owner->second);
+        prefix_of_block_.erase(owner);
+      }
     }
   }
 
@@ -111,8 +117,6 @@ class BlockTable {
   }
 
  private:
-  static constexpr std::uint64_t kNoHash = 0xFFFFFFFFFFFFFFFFULL;
-
   void live(int block) const {
     if (block < 0 || block >= capacity()) {
       throw std::runtime_error("BlockTable: block id out of range");

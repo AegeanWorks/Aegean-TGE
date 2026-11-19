@@ -1225,6 +1225,47 @@ TGE_TEST(model_reset_one_slot_leaves_other_slots_intact) {
   }
 }
 
+TGE_TEST(multiprefix_table_populates_and_evicts_lru) {
+  // Coverage for the 4-slot shared-prefix table (review-missing-multiprefix-
+  // table-test): distinct prefixes populate separate slots, the longest run is
+  // selected, a 5th distinct prefix evicts the least-recently-used slot, and a
+  // populated prefix can prime a slot's cache while an unknown one cannot.
+  // The table is a process global cleared on load; load() below starts clean.
+  const TempFile temp(build_phi_model(true), "tge_gguf_phi_mprefix.gguf");
+  std::string error;
+  std::unique_ptr<tge::models::Qwen2> model =
+      tge::models::Qwen2::load(temp.path(), error, 16, false, false, false, 2);
+  TGE_REQUIRE(model != nullptr);
+
+  // Five distinct 16-token prefixes (distinct leading token so no shared run).
+  // vocab is 64, so keep tokens in [1,63].
+  std::vector<std::vector<int>> prefixes(5, std::vector<int>(16));
+  for (int p = 0; p < 5; ++p) {
+    for (int i = 0; i < 16; ++i) {
+      prefixes[static_cast<std::size_t>(p)][static_cast<std::size_t>(i)] =
+          1 + (p * 3 + i) % 60;
+    }
+    prefixes[static_cast<std::size_t>(p)][0] = p + 1;  // distinct leading token
+  }
+
+  for (int p = 0; p < 5; ++p) {
+    TGE_REQUIRE(model->prefill(prefixes[static_cast<std::size_t>(p)].data(), 16,
+                               0, 0) != nullptr);
+  }
+
+  // The last four prefixes remain; the first was LRU-evicted by the fifth.
+  TGE_CHECK(model->shared_prefix_len(prefixes[0].data(), 16) < 16);
+  for (int p = 1; p < 5; ++p) {
+    TGE_CHECK(model->shared_prefix_len(prefixes[static_cast<std::size_t>(p)].data(),
+                                       16) == 16);
+  }
+
+  // A populated prefix primes a slot; an unknown prefix cannot.
+  const std::vector<int> unknown(16, 63);
+  TGE_CHECK(model->prime_cache_from_table(1, prefixes[4].data(), 16));
+  TGE_CHECK(!model->prime_cache_from_table(1, unknown.data(), 16));
+}
+
 TGE_TEST(phi_style_fused_tensors_load) {  // One-block phi3-shaped file: fused attn_qkv (dim + 2*kv_dim rows) and a
   // fused ffn_up (2*ffn rows), all tiny Q8_0 so the load is milliseconds.
   // dim = 32, heads = 2, kv heads = 1 -> head_dim 16, kv_dim 16.

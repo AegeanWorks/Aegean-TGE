@@ -716,6 +716,13 @@ NoopResult run_noop() {
   result.submit_ns = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
   if (wait != VK_SUCCESS) {
+    // The submission is still in flight on the queue; fail() would free the
+    // command buffer and destroy the fence the GPU is using (invalid, can
+    // crash). Block until it completes before tearing down. The `submitted`
+    // flag documents that this path only follows a successful vkQueueSubmit.
+    if (submitted) {
+      vkWaitForFences(g_device, 1, &fence, VK_TRUE, UINT64_MAX);
+    }
     return fail();
   }
   result.readback = *static_cast<const std::uint32_t*>(mapped);
@@ -1057,6 +1064,11 @@ static bool run_q8_call(VkPipeline pipe, VkPipelineLayout pipe_layout,
   result.submit_ns = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
   if (wait != VK_SUCCESS) {
+    // g_cmd/g_fence are persistent and reused by the next call, which begins
+    // with vkResetCommandBuffer/vkResetFences. Resetting them while this
+    // submission is still in flight is invalid and corrupts later offloads.
+    // Block until completion, then let the caller fall back to the CPU path.
+    vkWaitForFences(g_device, 1, &g_fence, VK_TRUE, UINT64_MAX);
     return false;
   }
   const auto t2 = std::chrono::steady_clock::now();

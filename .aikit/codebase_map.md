@@ -14,7 +14,7 @@
 
 ## 🧭 Map Coverage
 - **Indexed**: python (`1` module(s))
-- **Not indexed by this map**: cpp (`75` file(s))
+- **Not indexed by this map**: cpp (`76` file(s))
 
 > Only Python symbols are catalogued. A language above is reported as not indexed, never as verified by this map.
 
@@ -25,7 +25,7 @@
 ### [`scripts/measure_startup.py`](scripts/measure_startup.py)
 > *Measure the per-invocation startup path of `tge generate`.*
 
-**Size**: `128` lines (`4649` bytes)
+**Size**: `128` lines
 
 **Functions:**
 - `def default_binary()` - *The release CLI, resolved relative to this script, never an absolute path.*

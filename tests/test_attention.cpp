@@ -226,6 +226,85 @@ TGE_TEST(attention_group_avx2_matches_scalar) {
   }
 }
 
+TGE_TEST(attention_group_half_matches_scalar_and_float) {
+  // Coverage for the f16 KV branches of attention_group_scalar/avx2. The
+  // existing group differential uses float KV only; attention_half_matches_float
+  // covers only the single-head path. Here the group half branches are exercised
+  // directly: scalar-half vs avx2-half must agree tightly, and both must track
+  // the float result within the f16 quantization price.
+  for (const int count : {1, 7, 64}) {
+    for (const int group_heads : {1, 7}) {
+      for (const int head_dim : {64, 128}) {
+        const int stride = head_dim;
+        const std::vector<float> queries =
+            make_values(group_heads * head_dim, 14u);
+        const std::vector<float> keys = make_values(count * stride, 15u);
+        const std::vector<float> values = make_values(count * stride, 16u);
+        std::vector<std::uint16_t> half_keys(keys.size());
+        std::vector<std::uint16_t> half_values(values.size());
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+          half_keys[i] = tge::cpu::float_to_half(keys[i]);
+          half_values[i] = tge::cpu::float_to_half(values[i]);
+        }
+
+        const std::size_t states = static_cast<std::size_t>(group_heads);
+        const std::size_t accumulators =
+            static_cast<std::size_t>(group_heads) * static_cast<std::size_t>(head_dim);
+        std::vector<float> scalar_max(states), scalar_sum(states);
+        std::vector<float> avx_max(states), avx_sum(states);
+        std::vector<float> float_max(states), float_sum(states);
+        std::vector<float> scalar_acc(accumulators), avx_acc(accumulators),
+            float_acc(accumulators);
+
+        tge::cpu::AttentionGroupArgs base;
+        base.queries = queries.data();
+        base.kv_stride = stride;
+        base.count = count;
+        base.head_dim = head_dim;
+        base.group_heads = group_heads;
+        base.scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
+
+        tge::cpu::AttentionGroupArgs f32 = base;
+        f32.keys = keys.data();
+        f32.values = values.data();
+        f32.maxima = float_max.data();
+        f32.sums = float_sum.data();
+        f32.accumulators = float_acc.data();
+
+        tge::cpu::AttentionGroupArgs scalar_half = base;
+        scalar_half.half = true;
+        scalar_half.keys_half = half_keys.data();
+        scalar_half.values_half = half_values.data();
+        scalar_half.maxima = scalar_max.data();
+        scalar_half.sums = scalar_sum.data();
+        scalar_half.accumulators = scalar_acc.data();
+
+        tge::cpu::AttentionGroupArgs avx_half = scalar_half;
+        avx_half.maxima = avx_max.data();
+        avx_half.sums = avx_sum.data();
+        avx_half.accumulators = avx_acc.data();
+
+        tge::cpu::attention_group_scalar(f32);
+        tge::cpu::attention_group_scalar(scalar_half);
+        tge::cpu::attention_group_avx2(avx_half);
+
+        for (std::size_t h = 0; h < states; ++h) {
+          // scalar-half vs avx2-half: same arithmetic, tight tolerance.
+          TGE_CHECK_NEAR(scalar_max[h], avx_max[h], 1e-4);
+          TGE_CHECK_NEAR(scalar_sum[h], avx_sum[h], 1e-4);
+          // half vs float: f16 quantization price.
+          TGE_CHECK_NEAR(float_max[h], scalar_max[h], 5e-2);
+          TGE_CHECK_NEAR(float_sum[h], scalar_sum[h], 5e-2);
+        }
+        for (std::size_t i = 0; i < accumulators; ++i) {
+          TGE_CHECK_NEAR(scalar_acc[i], avx_acc[i], 1e-4);
+          TGE_CHECK_NEAR(float_acc[i], scalar_acc[i], 5e-2);
+        }
+      }
+    }
+  }
+}
+
 TGE_TEST(attention_i8_matches_float) {
   // Int8 KV prices a quantization (like --kv f16), so scalar-int8 agrees
   // with scalar-float loosely while the AVX2 int8 path must track its own

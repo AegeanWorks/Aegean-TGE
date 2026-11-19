@@ -6,6 +6,28 @@
 #include "tge/core/thread_pool.hpp"
 #include "tge/cpu/kernels.hpp"
 
+TGE_TEST(group0_logicals_from_mask_uses_bit_positions) {
+  // Regression: p_core_logicals used a running counter as the base and added
+  // each KAFFINITY bit, double-counting SMT threads. The mask bit is already
+  // the group-0 logical index and must be used directly.
+  TGE_CHECK(tge::core::group0_logicals_from_mask(0x0) == std::vector<int>{});
+  TGE_CHECK(tge::core::group0_logicals_from_mask(0x3) ==
+            std::vector<int>({0, 1}));
+  // Second 2-thread core at bits 2,3: indices are 2,3 -- not counter+2,+3.
+  TGE_CHECK(tge::core::group0_logicals_from_mask(0xC) ==
+            std::vector<int>({2, 3}));
+  TGE_CHECK(tge::core::group0_logicals_from_mask(0xF0) ==
+            std::vector<int>({4, 5, 6, 7}));
+  // A 16-logical machine's E cores at bits 12..15 must map to 12..15 exactly.
+  TGE_CHECK(tge::core::group0_logicals_from_mask(0xF000) ==
+            std::vector<int>({12, 13, 14, 15}));
+  // High bit stays in range (logical 63, not counter + 63).
+  const std::vector<int> high =
+      tge::core::group0_logicals_from_mask(1ULL << 63);
+  TGE_CHECK(high.size() == 1);
+  TGE_CHECK(high[0] == 63);
+}
+
 TGE_TEST(thread_pool_runs_every_index_once) {
   tge::core::ThreadPool pool(4);
   constexpr int count = 1000;

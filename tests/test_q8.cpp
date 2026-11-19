@@ -198,6 +198,32 @@ TGE_TEST(half_conversion_matches_known_values) {
   TGE_CHECK_NEAR(tge::cpu::half_to_float(0x3555), 0.33325195F, 1e-6);
 }
 
+TGE_TEST(half_conversion_rounds_exact_ties_to_even) {
+  // Regression: float_to_half is documented "round to nearest even" but added
+  // the round bit unconditionally, ignoring the kept LSB and sticky bits. At an
+  // exact half-way value whose lower half has an even mantissa LSB, it rounded
+  // up to odd. Build inputs from exact bit patterns so the tie is precise.
+  const auto from_bits = [](std::uint32_t bits) {
+    float value = 0.0F;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+  };
+  // 1.0 = 0x3F800000 -> 0x3C00. mantissa 0x1000 is exactly half-way between
+  // 0x3C00 (even LSB) and 0x3C01; nearest-even keeps 0x3C00.
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x3F801000u)) == 0x3C00u);
+  // mantissa 0x3000 is the tie between 0x3C01 (odd) and 0x3C02 (even);
+  // nearest-even rounds up to 0x3C02.
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x3F803000u)) == 0x3C02u);
+  // Round bit set plus any sticky bit is strictly above the tie -> round up.
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x3F801001u)) == 0x3C01u);
+  // Round bit clear is strictly below the tie -> keep the lower half.
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x3F800FFFu)) == 0x3C00u);
+  // Subnormal branch (unbiased -15): guard bit set, sticky clear, even kept
+  // LSB is the tie between half 0x0200 and 0x0201 -> nearest-even keeps 0x0200.
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x38002000u)) == 0x0200u);
+  TGE_CHECK(tge::cpu::float_to_half(from_bits(0x38006000u)) == 0x0202u);
+}
+
 TGE_TEST(decode_thread_count_is_bounded) {
   const int decode_threads = tge::cpu::resolve_decode_threads();
   const int logical = tge::cpu::resolve_thread_count(0);

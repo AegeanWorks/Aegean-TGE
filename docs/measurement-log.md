@@ -4196,3 +4196,258 @@ Addendum, same session: `--speculative` on a fresh 20-token code prompt (no repe
 Addendum, same session: decode of the three 0.5B files on disk, `generate --prompt "Once upon a time" --n 128`, 3 runs each. Q8_0 42.9 / 46.7 / 46.0 t/s; Q5_K_M 33.9 / 28.9 / 27.1; Q4_K_M 30.8 / 32.9 / 35.5. The smaller files read fewer bytes but decode slower, so the K-quant decode kernels, not bandwidth, bound them. Lower precision is therefore not a speed lever here and the quality trade is moot; Q8_0 stays the fastest.
 
 Addendum, same session: single-thread `bench batch` decode kernels, 4.3M weights per call, tokens=1 (cache-resident). Q8 0.256-0.270 ms; Q4_0 0.319; Q5_0 0.284; Q4_K 0.273; Q5_K 0.274; Q6_K 0.317. Per weight the formats cost about the same ALU time, so decode here is bound by dequantise-and-dot throughput (~32 GFLOPS per stream), not by bytes read. That explains why the 0.5B Q4_K_M/Q5_K_M files (which also carry Q4_0/Q5_0/Q8 tensors, since hidden 896 is not a multiple of 256) decode slower than Q8_0. The one remaining lever, integer-activation kernels (`--kq8d`, `--vnni`), is already shipped opt-in and priced at KL 1.0-1.6e-3 with top-1 below 100%, so it harms quality and is not a default candidate. Conclusion: no lossless single-stream decode gain is left on this box at 0.5B.
+
+## 2026-11-19 - float_to_half rounds exact ties to nearest even (kept)
+
+A Reforge audit finding (stage 9, `review-half-rounding-not-nearest-even`) was
+verified still present at HEAD. `float_to_half` is documented "round to nearest
+even" and is the single conversion used by the f16 KV store on both the scalar
+and AVX2 paths, but both the normal and subnormal branches added the round bit
+unconditionally: an exact tie whose lower half had an even mantissa LSB rounded
+up to odd. The f16 KV store rounds every K/V row on `--kv f16` and `--kv auto`
+(long contexts), so this biased stored numerics on exact ties. Fix is arithmetic
+only: round up iff the guard bit is set AND (kept LSB odd OR any sticky bit).
+
+| Check | Result |
+|---|---|
+| `float_to_half(0x3F801000)` (tie 1.0, even LSB) | before `0x3C01` (odd, wrong) -> after `0x3C00`; new regression test caught it failing first |
+| `float_to_half(0x38002000)` (subnormal tie, even LSB) | before `0x0201` -> after `0x0200` |
+| suite before fix (new test added) | **175 cases, 1 failed, 1 assertion failed** (the tie test) |
+| suite after fix | **175 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+| other tie cases (odd LSB, sticky set, below tie) | `0x3F803000`->`0x3C02`, `0x3F801001`->`0x3C01`, `0x3F800FFF`->`0x3C00`, `0x38006000`->`0x0202` all correct |
+
+Kept: correctness fix, no measurable decode-speed claim (it changes only exact ties in the f16 KV store, not the hot decode path). The f16 fidelity tier is unchanged for non-tie values, which are the overwhelming majority of K/V rows.
+
+Addendum, same session: a second Reforge finding (`review-untested-decode-output-predicate`)
+noted that `eligible_decode_output()` had no test while its `eligible_batch` and
+`eligible_gqa` siblings did. Added `gpu_eligible_decode_output_conjunctions`
+(request bit, type guard, clean-flags guard, and the no-token-floor winner) to
+`tests/test_gpu_fallback.cpp`. Test-only change, no production behavior change.
+
+| Check | Result |
+|---|---|
+| suite before this test | 175 cases, 0 failed |
+| suite after this test | **176 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+| `aikit.py check aegean-tge --all-gates` | **4/4 passed** (hygiene, guidelines, secrets, test) |
+
+## 2026-11-19 - report_row zero-second guard and P-core index fix (kept)
+
+Two more Reforge findings, both still present at HEAD, verified and fixed.
+
+`report_row` (stage 10, `review-report-row-divide-by-zero`) divided `flops` by a
+benchmark duration that can be exactly 0 (a tiny kernel finishing within one
+`steady_clock` tick), printing `inf`/`NaN` in the GFLOPS column. Extracted the
+rate into a pure `tge::cli::throughput_gflops` helper in `apps/cli/cli_options.hpp`
+and guarded `seconds > 0`.
+
+| Check | Result |
+|---|---|
+| `throughput_gflops(2e9, 0.0)` before | `inf` (`std::isfinite` false) -> after `0.0` |
+| `throughput_gflops(2e9, -1.0)` before | negative rate -> after `0.0` |
+| suite before fix (new test added) | **177 cases, 1 failed, 2 assertions failed** |
+| suite after fix | **177 cases, 0 failed** |
+
+`p_core_logicals` (stage 9, `review-pcore-index-double-count`) built each core's
+logical list as `logical + bit`, where the KAFFINITY bit is already the group-0
+logical index; the running per-core counter double-counted SMT threads. On a
+representative 16-logical i5-14400F (6 HT P-cores + 4 E-cores) the old formula
+produced indices `[0,1,4,5,8,9,12,13,16,17,20,21,24,26,28,30]` -- max 30 on a
+16-logical machine, 8 indices out of range -- so `SetThreadAffinityMask` pinned
+workers to wrong/nonexistent processors, defeating P-core pinning. Extracted the
+mapping into a pure `tge::core::group0_logicals_from_mask` helper that uses the
+bit position directly; `p_core_logicals` now calls it.
+
+| Check | Result |
+|---|---|
+| mask `0xC` (2-thread core at bits 2,3) | before (with counter base) would give `counter+2,+3` -> after `{2,3}` |
+| mask `0xF000` (E cores) | after `{12,13,14,15}`; all indices in `0..logical-1` |
+| suite after fix | **178 cases, 0 failed**; new `group0_logicals_from_mask_uses_bit_positions` passes |
+
+Kept: both are correctness fixes. No decode-speed claim -- `--pin-threads` is off
+by default and already rejected as a lever in this log; this only makes the
+opt-in path address real processors.
+
+## 2026-11-19 - Group f16-KV attention parity test added (kept)
+
+A Reforge finding (`review-missing-group-half-test`, stage 9) noted that the
+f16 KV branches of `attention_group_scalar` and `attention_group_avx2` had no
+test: `attention_half_matches_float` covered only the single-head path and
+`attention_group_avx2_matches_scalar` used float KV only. Added
+`attention_group_half_matches_scalar_and_float` to `tests/test_attention.cpp`,
+covering count {1,7,64} x group_heads {1,7} x head_dim {64,128}: scalar-half vs
+avx2-half must agree to 1e-4 and both must track float within the f16
+quantization price (5e-2).
+
+| Check | Result |
+|---|---|
+| suite with new test | **179 cases, 0 failed** -- the half group branches were correct, so this was a pure coverage gap, no production fix needed |
+| `ctest --preset release` | 1/1 passed |
+
+Kept: test-only; no production change because the test exposed no defect.
+
+## 2026-11-19 - BlockTable release keeps a live prefix owner (kept)
+
+Reforge finding `review-stale-prefix-owner-erase` (stage 8), still present at
+HEAD: `BlockTable::release()` erased `prefix_owner_[hash]` using
+`prefix_of_block_[block]` but never erased `prefix_of_block_[block]` itself.
+The stale block->hash entry let a later incarnation of the same block (with no
+`remember_prefix` call) erase a different, still-live prefix's ownership, so
+`find_prefix` returned -1 for a live prefix. Fixed by erasing both directions
+of the map in `release()` and dropping the now-unused `kNoHash` constant.
+
+Failing-first scenario in `block_table_release_keeps_a_live_prefix_owner`:
+allocate blocks a,b; `remember_prefix(h1, a)`; `release(a)`; re-register
+`remember_prefix(h1, b)`; reuse a with no remember_prefix; `release(a)` must
+not clear b's h1 ownership.
+
+| Check | Result |
+|---|---|
+| suite with new test, before fix | **180 cases, 1 failed** (`find_prefix(h1) == b`) |
+| suite after fix | **180 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+
+Kept: correctness fix in a design-only data structure (no engine wiring yet).
+
+## 2026-11-19 - Fused K-quant decode gate requires FMA, not just AVX2 (kept)
+
+Reforge finding `review-fma-dispatch-checks-only-avx2` (stage 3, high), still
+present at HEAD: `Qwen2::matvec` gated `gemv_q4k_fused_avx2` /
+`gemv_q6k_fused_avx2` on `features.avx2` alone, but those kernels call
+`_mm256_fmadd_ps` (dequant_avx2.cpp:96,245). On an AVX2-no-FMA CPU that raises
+SIGILL. Added a pure `tge::cpu::fused_kv_decode_safe(features)` predicate
+(avx2 && fma) in cpu.hpp and used it at the dispatch site. The opt-in integer
+`kq8d` decode path one branch above stays AVX2-only: it uses maddubs/madd, no FMA.
+
+| Check | Result |
+|---|---|
+| avx2-only gate on {avx2=true, fma=false} | before **true** (would SIGILL) -> after **false** |
+| suite with test, before fix (avx2-only helper) | **181 cases, 1 failed** |
+| suite after fix | **181 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+
+Kept: defensive correctness fix. No speed claim -- on this box (AVX2+FMA) the
+selected kernel is unchanged; it only prevents dispatching FMA code on a CPU
+that cannot execute it.
+
+## 2026-11-19 - Fidelity KL reports infinite divergence (kept)
+
+Reforge finding `review-kl-drops-infinite-divergence` (stage 9), still present at
+HEAD: the fidelity check's KL loop skipped any index where `q <= 0`, even when
+the oracle had mass there (`p > 0`). That term is +infinity; dropping it let a
+divergent attention kernel (zero mass where the oracle has mass) report a small
+finite KL and pass. Extracted a pure `tge::cli::kl_from_unnormalized` helper that
+returns +infinity on a `p > 0, q <= 0` term and wired it into `command_fidelity`.
+
+| Check | Result |
+|---|---|
+| ref {1,1,0} vs divergent {1,0,0} | before finite (skipped term) -> after `+inf` |
+| suite with test, before fix (skip behavior) | **182 cases, 1 failed, 3 assertions failed** |
+| suite after fix | **182 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+
+Kept: correctness fix in a diagnostic; identical distributions still give KL ~0.
+
+## 2026-11-19 - Greedy draft fills all six verifier slots (kept)
+
+Reforge finding `review-uninitialized-draft-slot` (stage 8, high), still present
+at HEAD: `prompt_lookup_draft(history, draft, 6)` could succeed on its 5-deep
+fallback (no 6-deep match, a 5-deep match) and write only `draft[0..4]`, while
+the greedy caller declares `int draft[6]` and copies all six into the verifier
+batch. `draft[5]` was uninitialized stack memory, so verification consumed a
+garbage token and could take a spurious full-accept path. Extracted the four
+pure draft builders from `main.cpp` into a new testable header `apps/cli/draft.hpp`
+(identical logic) and added `complete_draft_tail`, called on every success path,
+which fills `[want, need)` with the last real proposal. The sampled path
+(need 5) is unaffected.
+
+| Check | Result |
+|---|---|
+| history forcing the 5-deep fallback, sentinel-filled draft | before `draft[5]` stayed sentinel -> after `draft[5] = draft[4]` |
+| suite with test, before fix (tail calls removed) | **183 cases, 1 failed, 2 assertions failed** |
+| suite after fix | **183 cases, 0 failed**; CLI binary builds clean; `ctest --preset release` 1/1 passed |
+
+Kept: correctness fix; output ids unchanged because the verifier still decides
+the sixth token, which is now a deterministic observed continuation instead of
+garbage.
+
+## 2026-11-19 - Bench context guard avoids signed overflow (kept)
+
+Reforge finding `review-context-sum-signed-overflow` (stage 3), still present at
+HEAD: `command_continuous_bench` checked `prompt_tokens + tokens > max_context`
+with a signed-int sum. Large positive CLI values overflow to negative, bypassing
+the guard, after which KV writes use an unvalidated context. Added a pure
+`tge::cli::positive_sum_exceeds(a, b, limit)` helper (`a > limit - b`, safe for
+a,b > 0) and used it in both the 64-prefill-row guard and the context guard;
+the error message now prints operands instead of the (overflowing) sum.
+
+| Check | Result |
+|---|---|
+| a=b=2e9, limit=4096 | before naive sum wrapped negative -> guard bypassed -> after correctly true |
+| suite with test, before fix (naive sum) | **184 cases, 1 failed, 2 assertions failed** |
+| suite after fix | **184 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+
+Kept: correctness fix on an error path; no throughput claim.
+
+## 2026-11-19 - Streaming test uses runtime dispatch (kept)
+
+Reforge finding `review-test-bypasses-avx2-dispatch` (stage 10): the
+`streaming_kernels_agree_with_scalar` test called `copy_stream_avx2` /
+`sum_stream_avx2` directly. Those translation units are compiled with AVX2, so
+on a CPU without AVX2 the test SIGILLs instead of exercising the scalar fallback
+dispatch the rest of the codebase uses. Switched the test to `tge::kernels()`'s
+dispatched `copy_stream` / `sum_stream`, so it runs on any CPU and still checks
+the same stream-vs-scalar agreement.
+
+| Check | Result |
+|---|---|
+| suite after change | **184 cases, 0 failed**; `streaming_dispatch_never_reaches_past_its_features` and `streaming_kernels_agree_with_scalar` both OK |
+
+Kept: test-only portability fix; no production change.
+
+## 2026-11-19 - Vulkan fence-timeout teardown is safe (kept)
+
+Two Reforge findings in `src/gpu/vulkan_context.cpp`, both still present at
+HEAD: `review-fence-timeout-frees-inflight` (stage 8) and
+`review-persistent-cmd-reused-after-timeout` (stage 8).
+
+- `run_noop` set `submitted=true` after `vkQueueSubmit`, but on a
+  `vkWaitForFences` timeout called `fail()`, which frees the command buffer and
+  destroys the fence still in flight on the queue (invalid, can crash). The
+  `submitted` flag was dead. Fix: when a submit succeeded and the wait timed
+  out, block with `vkWaitForFences(..., UINT64_MAX)` before `fail()`.
+- `run_q8_call` reused the persistent `g_cmd`/`g_fence` across dispatches; on a
+  fence timeout it returned false without waiting, so the next call's
+  `vkResetCommandBuffer`/`vkResetFences` operated on an in-flight submission
+  and corrupted later offloads. Fix: on timeout, block until completion before
+  returning false (caller falls back to CPU).
+
+| Check | Result |
+|---|---|
+| GPU noop roundtrip (real device) | OK, readback 1 |
+| GPU Q8 gemv / gemm vs scalar (real device) | OK |
+| suite | **185 cases, 0 failed**; clean compile |
+
+Honest limitation: a 5-second fence timeout cannot be triggered hermetically,
+so the two error paths are verified by compile + unchanged normal-path tests +
+code inspection only, not by an executed timeout. The change is confined to the
+`wait != VK_SUCCESS` branches; the normal path is untouched.
+
+Kept: defensive correctness fix; no throughput claim (only the failure path).
+
+## 2026-11-19 - `tge bench <name> --help` reaches subcommand help (kept)
+
+The last audit finding, `review-bench-subcommand-help-intercepted` (stage 3):
+the generic bench usage promises `run tge bench <name> --help` for that
+benchmark's options, but a blanket `wants_help` intercept printed generic usage
+(and for continuous/sessions the subcommand parser consumed `--help` as a flag
+needing a value). Added a pure `tge::cli::bench_subcommand_usage(name)` helper
+with focused help for all six subcommands and a single uniform handler in
+`dispatch_main` placed before subcommand dispatch; unknown/missing names fall
+back to the generic usage, which is now an honest promise.
+
+| Check | Result |
+|---|---|
+| `tge bench gemm --help` | focused `usage: tge bench gemm [--m N] ...` (was generic) |
+| `tge bench continuous --help` | focused continuous usage (was "'--help' needs a value") |
+| `tge bench --help` | generic usage listing subcommands |
+| suite with test, before fix (helper returned empty) | **186 cases, 1 failed, 19 assertions failed** |
+| suite after fix | **186 cases, 0 failed**; `ctest --preset release` 1/1 passed |
+
+Kept: UX fix; no engine behavior change.

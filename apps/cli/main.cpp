@@ -35,9 +35,15 @@
 #include "tge/tensor/ops.hpp"
 
 #include "cli_options.hpp"
+#include "draft.hpp"
 #include "info_json.hpp"
 
 namespace {
+
+using tge::cli::bigram_chain_draft;
+using tge::cli::gapped_draft;
+using tge::cli::prompt_lookup_draft;
+using tge::cli::skip_locked_draft;
 
 using Clock = std::chrono::steady_clock;
 
@@ -202,7 +208,7 @@ double best_gemv_seconds(const tge::cpu::GemvFn kernel,
 
 void report_row(const char* kernel, int threads, double seconds, double flops) {
   std::printf("  %-12s  %7d  %9.3f ms  %8.2f\n", kernel, threads,
-              seconds * 1e3, flops / seconds / 1e9);
+              seconds * 1e3, tge::cli::throughput_gflops(flops, seconds));
 }
 
 int command_gemm_bench(int m, int n, int k, int repeat, int threads,
@@ -493,9 +499,6 @@ int command_gguf(const char* path) {
 /// (the arrays are parsed once instead of twice), skipped is cheaper when it
 /// will not.
 enum class VocabularyMode { Auto, Eager, Lazy };
-
-bool prompt_lookup_draft(const std::vector<int>& history, int* draft, int need);
-bool skip_locked_draft(const std::vector<int>& history, int* draft, int need);
 
 int command_generate(const std::string& path, const std::vector<int>& prompt_ids,
                      const std::string& prompt_text, int count, int threads,
@@ -1534,7 +1537,8 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
                 static_cast<double>(plan.kv_bytes_per_session) /
                     (1024.0 * 1024.0));
   }
-  if (sequences > 64 || prompt_tokens + sequences > 64) {
+  if (sequences > 64 ||
+      tge::cli::positive_sum_exceeds(prompt_tokens, sequences, 64)) {
     std::fprintf(stderr,
                  "bench continuous: prompt-tokens + sequences must fit the 64 "
                  "prefill rows\n");
@@ -1565,11 +1569,12 @@ int command_continuous_bench(const std::string& path, int requests, int tokens,
   model->set_prefill_threads(prefill_threads);
   model->set_vnni(vnni);
   const auto load_end = Clock::now();
-  if (prompt_tokens + tokens > model->max_context()) {
+  if (tge::cli::positive_sum_exceeds(prompt_tokens, tokens,
+                                     model->max_context())) {
     std::fprintf(stderr,
-                 "bench continuous: prompt-tokens + tokens (%d) exceeds the "
-                 "%d-token context\n",
-                 prompt_tokens + tokens, model->max_context());
+                 "bench continuous: prompt-tokens (%d) + tokens (%d) exceeds "
+                 "the %d-token context\n",
+                 prompt_tokens, tokens, model->max_context());
     return 2;
   }
 
@@ -1926,197 +1931,6 @@ bool parse_float(const char* text, float& value) {
   }
   value = static_cast<float>(parsed);
   return true;
-}
-
-/// Bigram-chain fallback: when no exact span matches, chain the most
-/// frequent successor of each token in history. draft[0] follows the last
-/// history token; draft[i + 1] follows draft[i]. Proposes only observed
-/// continuations (never invents a token); the verifier still decides.
-/// One linear pass per chain step with a small distinct-successor set.
-/// `need` is 6 for the greedy deep draft, 5 for the sampled path.
-bool bigram_chain_draft(const std::vector<int>& history, int* draft, int need) {
-  const int length = static_cast<int>(history.size());
-  if (length < 2 || need < 1 || need > 6) {
-    return false;
-  }
-  int prev = history.back();
-  for (int index = 0; index < need; ++index) {
-    int best = -1;
-    int best_count = 0;
-    // Small distinct-successor set: text bigrams fan out narrowly, so a
-    // linear scan beats a hash table here and allocates nothing.
-    int candidates[32] = {0};
-    int tallies[32] = {0};
-    int distinct = 0;
-    for (int pos = 0; pos < length - 1; ++pos) {
-      if (history[static_cast<std::size_t>(pos)] != prev) {
-        continue;
-      }
-      const int cand = history[static_cast<std::size_t>(pos + 1)];
-      int slot = 0;
-      while (slot < distinct && candidates[slot] != cand) {
-        ++slot;
-      }
-      if (slot == distinct) {
-        if (distinct == 32) {
-          continue;
-        }
-        candidates[distinct] = cand;
-        tallies[distinct] = 1;
-        ++distinct;
-      } else {
-        ++tallies[slot];
-      }
-      if (tallies[slot] > best_count) {
-        best_count = tallies[slot];
-        best = cand;
-      }
-    }
-    if (best < 0) {
-      return false;
-    }
-    draft[index] = best;
-    prev = best;
-  }
-  return true;
-}
-
-/// Drafts the continuation of a near-match of the last two to six tokens
-/// with exactly one substitution. Last resort after the exact spans and the
-/// bigram chain: both abstain only where the tail is novel, and a single
-/// novel token still leaves a near-full match worth proposing. Windows are
-/// tried most-recent first, longest span at each position first; every
-/// proposal is observed history the verifier still decides, and a
-/// first-position miss skips the weight pass entirely (greedy d0 pre-check,
-/// sampled pre-judge), so a wrong proposal costs microseconds, never a pass.
-/// Returns false when no window is within one substitution.
-bool gapped_draft(const std::vector<int>& history, int* draft, int need) {
-  const int length = static_cast<int>(history.size());
-  if (need < 1 || need > 6) {
-    return false;
-  }
-  for (int end = length - 2; end >= 1; --end) {
-    if (length - 1 - end < need) {
-      continue;
-    }
-    for (int span = 6; span >= 2; --span) {
-      if (span > end + 1 || length < span + need) {
-        continue;
-      }
-      int mismatches = 0;
-      for (int offset = 0; offset < span; ++offset) {
-        if (history[static_cast<std::size_t>(length - span + offset)] !=
-            history[static_cast<std::size_t>(end - span + 1 + offset)]) {
-          if (++mismatches > 1) {
-            break;
-          }
-        }
-      }
-      if (mismatches != 1) {
-        continue;
-      }
-      for (int index = 0; index < need; ++index) {
-        draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Detects a period-1 (aaaa) or period-2 (abab) lock in recent history and
-/// proposes `need` tokens along the locked cycle. Verifier-gated like all
-/// drafts (the d0 pre-check still applies), so a wrong lock costs microseconds,
-/// never a weight pass; returns false when not locked. Measured: locked
-/// repetition accepts at the 6.00/step ceiling with byte-identical ids on
-/// Qwen2.5-0.5B and Llama-3.2-3B; non-locked prompts abstain.
-bool skip_locked_draft(const std::vector<int>& history, int* draft, int need) {
-  const int length = static_cast<int>(history.size());
-  if (need < 1 || need > 6 || length < 8) {
-    return false;
-  }
-  const int a = history[static_cast<std::size_t>(length - 1)];
-  const int b = history[static_cast<std::size_t>(length - 2)];
-  bool period1 = true;
-  for (int i = 1; i <= 6; ++i) {
-    if (history[static_cast<std::size_t>(length - i)] != a) {
-      period1 = false;
-      break;
-    }
-  }
-  bool period2 = false;
-  if (!period1) {
-    period2 = true;
-    for (int i = 0; i < 8; ++i) {
-      const int expect = (i % 2 == 0) ? a : b;
-      if (history[static_cast<std::size_t>(length - 1 - i)] != expect) {
-        period2 = false;
-        break;
-      }
-    }
-  }
-  if (!period1 && !period2) {
-    return false;
-  }
-  for (int index = 0; index < need; ++index) {
-    if (period1) {
-      draft[index] = a;
-    } else {
-      draft[index] = (index % 2 == 0) ? a : b;
-    }
-  }
-  return true;
-}
-
-/// Drafts the continuation of the latest earlier match of the last one to
-/// six tokens. Returns `need` tokens or nothing. Longer spans are tried
-/// first: a longer context match accepts at a higher rate, and the fallback
-/// to shorter spans keeps every proposal the old 3..1 range would have made.
-/// When no exact span matches, a bigram chain proposes from single-token
-/// statistics instead of abstaining; when the chain also abstains (novel
-/// tail), one-substitution windows get the last word.
-/// `need` is 6 on the greedy path (the verifier's whole batch, no padding)
-/// and 5 on the sampled path (historical shape, zero behavioral delta).
-/// Greedy tries the deep draft first and falls back to the historical
-/// five-deep form, so every proposal the old code made is preserved.
-bool prompt_lookup_draft(const std::vector<int>& history, int* draft, int need) {
-  if (need < 1 || need > 6) {
-    return false;
-  }
-  const int length = static_cast<int>(history.size());
-  // Deep draft first; the historical five-deep form is the fallback, so a
-  // short history that cannot supply six continuations behaves exactly as
-  // before. The sampled path (need 5) runs a single identical pass.
-  for (int pass = 0; pass < 2 && (pass == 0 || need > 5); ++pass) {
-    const int want = (pass == 0) ? need : 5;
-    for (int span = 6; span >= 1; --span) {
-      if (length < span + want) {
-        continue;
-      }
-      const auto suffix_begin = history.begin() + (length - span);
-      const auto suffix_end = history.end();
-      for (int end = length - 2; end >= span - 1; --end) {
-        if (length - 1 - end < want) {
-          continue;
-        }
-        if (!std::equal(suffix_begin, suffix_end,
-                        history.begin() + (end - span + 1))) {
-          continue;
-        }
-        for (int index = 0; index < want; ++index) {
-          draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
-        }
-        return true;
-      }
-    }
-    if (bigram_chain_draft(history, draft, want)) {
-      return true;
-    }
-    if (gapped_draft(history, draft, want)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 int run_generate(int argc, char** argv) {
@@ -2653,29 +2467,15 @@ int command_fidelity(const std::string& path, const std::string& corpus_path,
 
     const double reference_max = reference_logits[best_reference];
     const double candidate_max = candidate_logits[best_candidate];
-    double reference_sum = 0.0;
-    double candidate_sum = 0.0;
     for (int index = 0; index < vocab_size; ++index) {
       left[static_cast<std::size_t>(index)] =
           std::exp(static_cast<double>(reference_logits[index]) - reference_max);
       right[static_cast<std::size_t>(index)] =
           std::exp(static_cast<double>(candidate_logits[index]) - candidate_max);
-      reference_sum += left[static_cast<std::size_t>(index)];
-      candidate_sum += right[static_cast<std::size_t>(index)];
     }
 
-    double kl = 0.0;
-    for (int index = 0; index < vocab_size; ++index) {
-      const double p = left[static_cast<std::size_t>(index)] / reference_sum;
-      if (p <= 0.0) {
-        continue;
-      }
-      const double q = right[static_cast<std::size_t>(index)] / candidate_sum;
-      if (q <= 0.0) {
-        continue;
-      }
-      kl += p * std::log(p / q);
-    }
+    const double kl = tge::cli::kl_from_unnormalized(
+        left.data(), right.data(), static_cast<std::size_t>(vocab_size));
     kl_sum += kl;
     if (kl > kl_worst) {
       kl_worst = kl;
@@ -2917,6 +2717,19 @@ int dispatch_main(int argc, char** argv) {
     return 0;
   }
 
+  // `tge bench <name> --help` must reach that subcommand's own help, as the
+  // generic bench usage promises. Handle it once here, before the continuous/
+  // sessions/batch blocks dispatch (those would otherwise parse --help as a
+  // flag needing a value). An unknown or missing subcommand falls back to the
+  // generic usage.
+  if (command == "bench" && wants_help(argc, argv, 2)) {
+    const std::string focused = argc >= 3
+        ? tge::cli::bench_subcommand_usage(argv[2]) : std::string();
+    std::printf("%s", focused.empty()
+        ? tge::cli::command_usage("bench").c_str() : focused.c_str());
+    return 0;
+  }
+
   if (command == "info") {
     if (wants_help(argc, argv, 2)) {
       std::printf("%s", tge::cli::command_usage("info").c_str());
@@ -3117,10 +2930,6 @@ int dispatch_main(int argc, char** argv) {
   }
 
   if (command == "bench") {
-    if (wants_help(argc, argv, 2)) {
-      std::printf("%s", tge::cli::command_usage("bench").c_str());
-      return 0;
-    }
     if (argc >= 3 && std::strcmp(argv[2], "batch") == 0) {
       int rows = 4864, cols = 896, tokens = 64, repeat = 5;
       bool use_vnni = false;

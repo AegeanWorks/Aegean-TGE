@@ -13,6 +13,24 @@ TGE_TEST(cpu_reports_identity_and_topology) {
   TGE_CHECK(info.topology.numa_nodes >= 1);
 }
 
+TGE_TEST(fused_kv_decode_requires_fma_not_just_avx2) {
+  // Regression: the fused Q4_K/Q6_K decode kernels use _mm256_fmadd_ps, but
+  // the dispatch gate checked AVX2 alone. An AVX2-no-FMA CPU would SIGILL.
+  tge::cpu::Features f;
+  f.avx2 = false;
+  f.fma = false;
+  TGE_CHECK(!tge::cpu::fused_kv_decode_safe(f));
+  f.avx2 = true;
+  f.fma = false;
+  TGE_CHECK(!tge::cpu::fused_kv_decode_safe(f));  // the bug: avx2-only was unsafe
+  f.avx2 = false;
+  f.fma = true;
+  TGE_CHECK(!tge::cpu::fused_kv_decode_safe(f));
+  f.avx2 = true;
+  f.fma = true;
+  TGE_CHECK(tge::cpu::fused_kv_decode_safe(f));
+}
+
 TGE_TEST(cpu_feature_implications_hold) {
   const tge::cpu::Features features = tge::cpu::detect().features;
   if (features.avx2) {

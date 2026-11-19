@@ -204,7 +204,10 @@ TGE_TEST(streaming_kernels_agree_with_scalar) {
   std::vector<float> target(count, 0.0F);
   fill(source.data(), source.size(), 0xABCDEFu);
 
-  tge::cpu::copy_stream_avx2(target.data(), source.data(), count);
+  // Use the runtime-dispatched kernels, not copy_stream_avx2/sum_stream_avx2
+  // directly: those TUs are compiled with AVX2, so calling them on a CPU
+  // without AVX2 raises SIGILL instead of exercising the scalar fallback.
+  tge::kernels().copy_stream(target.data(), source.data(), count);
   TGE_CHECK_NEAR(tge::ops::max_abs_diff(source.data(), target.data(), count),
                  0.0F, 1e-9);
 
@@ -212,8 +215,8 @@ TGE_TEST(streaming_kernels_agree_with_scalar) {
   for (int index = 0; index < count; ++index) {
     expected += source[static_cast<std::size_t>(index)];
   }
-  TGE_CHECK_NEAR(
-      tge::cpu::sum_stream_avx2(source.data(), count), expected, 1e-1);
+  TGE_CHECK_NEAR(tge::kernels().sum_stream(source.data(), count), expected,
+                 1e-1);
 }
 
 TGE_TEST(gemm_ref_zero_times_nan_stays_nan) {

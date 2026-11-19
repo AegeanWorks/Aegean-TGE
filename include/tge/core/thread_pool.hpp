@@ -83,4 +83,19 @@ ThreadPool& acquire_pool(int threads);
 /// Logical processors usable by this process.
 int default_thread_count();
 
+/// Group-0 logical processor indices whose bit is set in a KAFFINITY mask.
+/// A mask bit IS the logical processor index within the group, so it must be
+/// used directly -- adding a running per-core counter double-counts SMT threads
+/// (bits 2,3 of a second 2-thread core are logical 2,3, not counter+2,+3).
+/// Pure so the mapping is unit-testable without Windows topology APIs.
+inline std::vector<int> group0_logicals_from_mask(std::uint64_t mask) {
+  std::vector<int> out;
+  for (int bit = 0; bit < 64; ++bit) {
+    if (((mask >> bit) & 1ULL) != 0ULL) {
+      out.push_back(bit);
+    }
+  }
+  return out;
+}
+
 }  // namespace tge::core

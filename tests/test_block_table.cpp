@@ -78,6 +78,37 @@ TGE_TEST(block_table_prefix_hash) {
   TGE_CHECK(table.find_prefix(hb) == -1);
 }
 
+TGE_TEST(block_table_release_keeps_a_live_prefix_owner) {
+  // Regression: release() erased prefix_owner_[prefix_of_block_[block]] but
+  // never erased prefix_of_block_[block]. A later incarnation of that block
+  // with no remember_prefix call then erased the ownership entry of a
+  // different, still-live prefix, making find_prefix return -1 for it.
+  BlockTable table(4, 16);
+  const std::uint64_t h1 = 0x1111u;
+
+  const int a = table.allocate();  // block 0
+  const int b = table.allocate();  // block 1
+  TGE_CHECK(b != a);
+
+  table.remember_prefix(h1, a);            // owner[h1]=a, of_block[a]=h1
+  TGE_CHECK(table.find_prefix(h1) == a);
+
+  table.release(a);                        // frees a; owner.erase(h1), of_block[a] STALE=h1
+  TGE_CHECK(table.find_prefix(h1) == -1);
+
+  // Re-register h1 on the still-live block b.
+  table.remember_prefix(h1, b);            // owner[h1]=b, of_block[b]=h1
+  TGE_CHECK(table.find_prefix(h1) == b);
+
+  // Reuse the freed block a with no remember_prefix call (of_block[a] still h1).
+  const int reused = table.allocate();
+  TGE_CHECK(reused == a);
+  table.release(reused);                   // buggy: erases owner[of_block[a]=h1]
+
+  // Block b is still live and owns h1, so the lookup must still succeed.
+  TGE_CHECK(table.find_prefix(h1) == b);
+}
+
 TGE_TEST(block_table_bad_ids_throw) {
   BlockTable table(2, 16);
   bool threw = false;

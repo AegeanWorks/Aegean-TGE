@@ -386,7 +386,13 @@ inline std::uint16_t float_to_half(float value) {
     const std::uint32_t shift = static_cast<std::uint32_t>(-unbiased - 14);
     const std::uint32_t significand = 0x800000u | mantissa;
     const std::uint32_t half = significand >> (shift + 13);
-    const std::uint32_t round = (significand >> (shift + 12)) & 1u;
+    // Round half to even: round up only when the guard bit is set AND
+    // either the kept LSB is odd or any sticky bit below the guard is set.
+    const std::uint32_t guard = (significand >> (shift + 12)) & 1u;
+    const std::uint32_t kept_lsb = (significand >> (shift + 13)) & 1u;
+    const std::uint32_t sticky =
+        (significand & ((std::uint32_t{1} << (shift + 12)) - 1u)) != 0u ? 1u : 0u;
+    const std::uint32_t round = guard & (kept_lsb | sticky);
     return static_cast<std::uint16_t>(sign | (half + round));
   }
   if (unbiased > 15) {
@@ -394,7 +400,10 @@ inline std::uint16_t float_to_half(float value) {
   }
   const std::uint32_t half =
       (static_cast<std::uint32_t>(unbiased + 15) << 10) | (mantissa >> 13);
-  const std::uint32_t round = (mantissa >> 12) & 1u;
+  const std::uint32_t guard = (mantissa >> 12) & 1u;
+  const std::uint32_t kept_lsb = (mantissa >> 13) & 1u;
+  const std::uint32_t sticky = (mantissa & 0xFFFu) != 0u ? 1u : 0u;
+  const std::uint32_t round = guard & (kept_lsb | sticky);
   return static_cast<std::uint16_t>(sign | (half + round));
 }
 

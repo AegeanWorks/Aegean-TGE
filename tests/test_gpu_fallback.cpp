@@ -83,6 +83,17 @@ TGE_TEST(gpu_eligible_batch_conjunctions) {
   TGE_CHECK(!tge::gpu::eligible_batch(true, 64, true, false));
 }
 
+TGE_TEST(gpu_eligible_decode_output_conjunctions) {
+  // Off by default: the request bit gates everything.
+  TGE_CHECK(!tge::gpu::eligible_decode_output(false, true, true));
+  // K-quants (and any non-Q8/F32) stay on the CPU dequant path.
+  TGE_CHECK(!tge::gpu::eligible_decode_output(true, false, true));
+  // VNNI activations, scalar-oracle arm or forced-Scalar schedule stay CPU.
+  TGE_CHECK(!tge::gpu::eligible_decode_output(true, true, false));
+  // Winner: requested Q8_0/F32 output with clean flags (no token floor here).
+  TGE_CHECK(tge::gpu::eligible_decode_output(true, true, true));
+}
+
 TGE_TEST(gpu_eligible_gqa_conjunctions) {
   TGE_CHECK(!tge::gpu::eligible_gqa(false, 2048, 6, true, true));
   // Below the span floor, or single-threaded: per-head CPU path.

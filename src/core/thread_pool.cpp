@@ -83,11 +83,13 @@ std::vector<int> p_core_logicals() {
         if (entry->Processor.GroupMask[group].Group != 0) {
           continue;
         }
-        for (int bit = 0; bit < 64; ++bit) {
-          if ((mask >> bit) & 1) {
-            core.processors.push_back(logical + bit);
-          }
-        }
+        // The mask bit is the group-0 logical processor index. Adding the
+        // running per-core counter double-counts SMT threads and can push
+        // indices past the machine's logical count, defeating pinning.
+        const std::vector<int> indices =
+            group0_logicals_from_mask(static_cast<std::uint64_t>(mask));
+        core.processors.insert(core.processors.end(), indices.begin(),
+                               indices.end());
       }
       // Fallback when masks are unavailable: count the core once.
       if (core.processors.empty()) {

@@ -1,8 +1,10 @@
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
 #include "cli_options.hpp"
+#include "draft.hpp"
 #include "harness.hpp"
 #include "info_json.hpp"
 
@@ -44,6 +46,94 @@ TGE_TEST(cli_kv_rejects_unknown_and_keeps_state) {
   TGE_CHECK(!apply_kv(selection, "f64"));
   TGE_CHECK(selection.half);
   TGE_CHECK(!selection.auto_);
+}
+
+TGE_TEST(bench_help_reaches_each_subcommand) {
+  // Regression (review-bench-subcommand-help-intercepted): generic bench help
+  // promises `tge bench <name> --help` shows that benchmark's options, but the
+  // blanket intercept printed generic usage. Each subcommand now has focused help.
+  for (const char* name : {"gemm", "gemv", "mem", "batch", "sessions",
+                           "continuous"}) {
+    const std::string usage = tge::cli::bench_subcommand_usage(name);
+    TGE_CHECK(!usage.empty());
+    TGE_CHECK(usage.find(std::string("tge bench ") + name) != std::string::npos);
+    TGE_CHECK(usage.find("usage:") != std::string::npos);
+  }
+  // Unknown/missing subcommand yields no focused help so dispatch falls back.
+  TGE_CHECK(tge::cli::bench_subcommand_usage("nope").empty());
+  TGE_CHECK(tge::cli::bench_subcommand_usage("").empty());
+  // Focused gemm help carries gemm flags, not generate flags.
+  const std::string gemm = tge::cli::bench_subcommand_usage("gemm");
+  TGE_CHECK(gemm.find("--m N") != std::string::npos);
+  TGE_CHECK(gemm.find("--model PATH") == std::string::npos);
+}
+
+TGE_TEST(positive_sum_guard_avoids_signed_overflow) {
+  // Regression: prompt_tokens + tokens overflowed signed int for large CLI
+  // values, wrapping negative and bypassing the context guard.
+  TGE_CHECK(!tge::cli::positive_sum_exceeds(100, 200, 4096));
+  TGE_CHECK(!tge::cli::positive_sum_exceeds(2000, 2096, 4096));
+  TGE_CHECK(tge::cli::positive_sum_exceeds(2001, 2096, 4096));
+  // The overflow case: both operands positive, sum wraps past INT_MAX.
+  constexpr int kBig = 2000000000;
+  TGE_CHECK(tge::cli::positive_sum_exceeds(kBig, kBig, 4096));
+  TGE_CHECK(tge::cli::positive_sum_exceeds(kBig, kBig, 64));
+  // The 64-row prefill guard uses the same helper.
+  TGE_CHECK(tge::cli::positive_sum_exceeds(40, 30, 64));
+  TGE_CHECK(!tge::cli::positive_sum_exceeds(40, 24, 64));
+}
+
+TGE_TEST(draft_fills_all_slots_on_five_deep_fallback) {
+  // Regression (review-uninitialized-draft-slot, high): the greedy caller
+  // declares int draft[6] and copies all six into the verifier batch, but a
+  // 6-deep prompt_lookup_draft that succeeds on its 5-deep fallback wrote only
+  // draft[0..4]. draft[5] was uninitialized stack memory. This history forces
+  // that fallback (no 6-deep match, a 5-deep match), so a sentinel in draft[5]
+  // must be overwritten by the fix.
+  const std::vector<int> history = {0, 3, 3, 0, 0, 2, 3, 2, 3, 0, 3,
+                                    2, 3, 0, 1, 2, 2, 1, 0, 1, 4};
+  constexpr int kSentinel = -999;
+  int draft[6] = {kSentinel, kSentinel, kSentinel,
+                  kSentinel, kSentinel, kSentinel};
+  TGE_CHECK(tge::cli::prompt_lookup_draft(history, draft, 6));
+  for (int i = 0; i < 6; ++i) {
+    TGE_CHECK(draft[i] != kSentinel);  // every slot written on success
+  }
+  // The tail filler uses the last real proposal.
+  TGE_CHECK(draft[5] == draft[4]);
+}
+
+TGE_TEST(cli_kl_reports_infinite_divergence) {
+  // Regression: the fidelity KL loop skipped any index where q <= 0, so a
+  // candidate that put zero mass where the oracle has mass reported a small
+  // finite KL instead of maximal divergence.
+  const double ref[3] = {1.0, 1.0, 0.0};
+  const double same[3] = {1.0, 1.0, 0.0};
+  const double divergent[3] = {1.0, 0.0, 0.0};  // zero mass on oracle token 2
+  // Identical -> zero KL.
+  TGE_CHECK(tge::cli::kl_from_unnormalized(ref, same, 3) < 1e-12);
+  // Divergent -> +infinity, not a finite number.
+  const double kl = tge::cli::kl_from_unnormalized(ref, divergent, 3);
+  TGE_CHECK(std::isinf(kl));
+  TGE_CHECK(kl > 0.0);
+  // A completely disjoint candidate also diverges.
+  const double other[3] = {0.0, 0.0, 1.0};
+  TGE_CHECK(std::isinf(tge::cli::kl_from_unnormalized(ref, other, 3)));
+}
+
+TGE_TEST(cli_throughput_guards_zero_seconds) {
+  // Regression: a benchmark that finishes within one steady_clock tick
+  // measures 0 seconds; report_row divided by it, printing inf/NaN GFLOPS.
+  TGE_CHECK(tge::cli::throughput_gflops(2e9, 1.0) > 1.99);
+  TGE_CHECK(tge::cli::throughput_gflops(2e9, 1.0) < 2.01);
+  // Non-positive durations must yield a finite, non-negative rate. The bug
+  // produced +inf at 0 seconds (printed as "inf" in the GFLOPS column).
+  const double zero = tge::cli::throughput_gflops(2e9, 0.0);
+  TGE_CHECK(std::isfinite(zero));
+  TGE_CHECK(zero >= 0.0);
+  const double negative = tge::cli::throughput_gflops(2e9, -1.0);
+  TGE_CHECK(std::isfinite(negative));
+  TGE_CHECK(negative >= 0.0);
 }
 
 TGE_TEST(cli_preflight_rejects_impossible_combinations) {

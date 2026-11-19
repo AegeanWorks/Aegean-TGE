@@ -68,6 +68,14 @@ struct CpuInfo {
 
 CpuInfo detect();
 
+/// True only when the fused K-quant decode kernels are safe to execute. Those
+/// kernels (gemv_q4k_fused_avx2 / gemv_q6k_fused_avx2) use _mm256_fmadd_ps, so
+/// AVX2 alone is not enough: an AVX2-no-FMA CPU would raise SIGILL. Pure so the
+/// gate is unit-testable with synthetic feature sets.
+inline bool fused_kv_decode_safe(const Features& features) {
+  return features.avx2 && features.fma;
+}
+
 std::string describe(const CpuInfo& info);
 std::string to_json(const CpuInfo& info);
 

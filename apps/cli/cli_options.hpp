@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -70,6 +73,53 @@ inline std::string load_prompt_file(const std::string& path,
   }
   text = std::move(loaded);
   return {};
+}
+
+/// True when the sum of two positive ints exceeds `limit`, computed without
+/// forming the sum (which can overflow signed int for large CLI values). With
+/// a, b > 0: a + b > limit  <=>  a > limit - b, and `limit - b` cannot overflow
+/// when limit <= INT_MAX and b > 0. Pure so the overflow guard is testable.
+inline bool positive_sum_exceeds(int a, int b, int limit) {
+  return a > limit - b;
+}
+
+/// KL(reference || candidate) from unnormalized non-negative weights (already
+/// exponent-shifted by the caller). A term where the oracle has mass (p > 0)
+/// but the candidate has none (q <= 0) is +infinity: that is maximal divergence
+/// and must be reported, not skipped -- skipping it let a kernel that put zero
+/// mass where the oracle has mass report a small finite KL and pass the check.
+/// Pure so the divergence treatment is unit-testable without a model.
+inline double kl_from_unnormalized(const double* reference,
+                                   const double* candidate, std::size_t count) {
+  double ref_sum = 0.0;
+  double cand_sum = 0.0;
+  for (std::size_t i = 0; i < count; ++i) {
+    ref_sum += reference[i];
+    cand_sum += candidate[i];
+  }
+  if (!(ref_sum > 0.0)) {
+    return 0.0;
+  }
+  double kl = 0.0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double p = reference[i] / ref_sum;
+    if (p <= 0.0) {
+      continue;
+    }
+    const double q = cand_sum > 0.0 ? candidate[i] / cand_sum : 0.0;
+    if (q <= 0.0) {
+      return std::numeric_limits<double>::infinity();
+    }
+    kl += p * std::log(p / q);
+  }
+  return kl;
+}
+
+/// Throughput column for the bench tables. A kernel that finishes within one
+/// steady_clock tick measures as 0 seconds; dividing by that produced inf/NaN
+/// in the GFLOPS column. Pure so the guard is unit-testable without a benchmark.
+inline double throughput_gflops(double flops, double seconds) {
+  return seconds > 0.0 ? flops / seconds / 1e9 : 0.0;
 }
 
 /// --prompt-file may not be combined with --prompt or --tokens. Returns an empty
@@ -168,6 +218,39 @@ inline std::string command_usage(std::string_view command) {
   }
   if (command == "info") {
     return "usage: tge info [--json]\n";
+  }
+  return {};
+}
+
+/// Focused help for one `bench <name>` subcommand. The generic bench usage
+/// promises `tge bench <name> --help` shows that benchmark's options, so the
+/// promise must be real: dispatch routes --help with a subcommand here. Returns
+/// an empty string for an unknown/missing subcommand so the caller falls back
+/// to the generic usage. Pure so the help routing is unit-testable.
+inline std::string bench_subcommand_usage(std::string_view subcommand) {
+  if (subcommand == "gemm") {
+    return "usage: tge bench gemm [--m N] [--n N] [--k N] [--repeat N] "
+           "[--threads N]\n";
+  }
+  if (subcommand == "gemv") {
+    return "usage: tge bench gemv [--rows N] [--cols N] [--repeat N] "
+           "[--threads N]\n";
+  }
+  if (subcommand == "mem") {
+    return "usage: tge bench mem [--size-mb N] [--repeat N] [--threads N]\n";
+  }
+  if (subcommand == "batch") {
+    return "usage: tge bench batch [--rows N] [--cols N] [--tokens N] "
+           "[--repeat N] [--format F] [--kernel K]\n";
+  }
+  if (subcommand == "sessions") {
+    return "usage: tge bench sessions --model PATH [--sessions N] [--tokens N] "
+           "[--threads N] [--context N] [--kv T] [--pin-threads 1|0]\n";
+  }
+  if (subcommand == "continuous") {
+    return "usage: tge bench continuous --model PATH [--requests N] "
+           "[--tokens N] [--threads N] [--sequences N|auto] [--context N] "
+           "[--prompt-tokens N] [--prefill-threads N] [--vnni] [--kv T]\n";
   }
   return {};
 }
