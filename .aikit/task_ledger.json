@@ -1,271 +1,306 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-KEEPGRADE-INTEGRATION",
+    "task_id": "TGE-AUDIT-FINDINGS-FIX",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1794251246.1051533,
-    "owner": "commandcode:integrate-keep",
-    "started_by": "commandcode:integrate-keep",
+    "updated_at": 1795107340.0909822,
+    "owner": "opencode:session",
+    "lease_until": 1795114540.0909822,
+    "started_by": "opencode:session",
     "continuations": [],
-    "completed_at": 1794251246.6968207
+    "workspaces": [
+      {
+        "name": "aegean-tge",
+        "path": "projects/aegean-tge"
+      }
+    ],
+    "completed_at": 1795107350.2477233,
+    "completed_head": "d4627bad36024b10b1d9105dede837043b2e0b72",
+    "completed_tree": "07c82550fdfa5429de7ef15048d6a403bd6721ca"
   },
   "checkpoints": [
     {
-      "task_id": "TGE-F16-HOIST",
-      "phase": "in_progress",
-      "phase_num": 4,
-      "description": "[2/2] Kept: f16 2048 attention median 1.054x prefill 1.068x (6 pairs), 4096 attention 1.123x prefill 1.109x (4 pairs), ids identical, fidelity unchanged; 146/146, 4/4; checklists: passed",
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 7",
+      "phase_num": 3,
+      "description": "Reforge stage 7: window 363, 60 commit(s), 58 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794150620.0815897,
-      "timestamp_str": "2026-11-08 18:10:20",
-      "agent": "opencode:f16-hoist"
+      "timestamp": 1795039960.2831087,
+      "timestamp_str": "2026-11-19 01:12:40",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
     },
     {
-      "task_id": "TGE-F16-HOIST",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-F16-HOIST' completed successfully.",
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 7",
+      "phase_num": 3,
+      "description": "Reforge stage 7: stage 7 host review reviewed; run active; coverage 61/61",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795040230.5820358,
+      "timestamp_str": "2026-11-19 01:17:10",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 8",
+      "phase_num": 3,
+      "description": "Reforge stage 8: window 423, 60 commit(s), 99 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795040303.319786,
+      "timestamp_str": "2026-11-19 01:18:23",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 8",
+      "phase_num": 3,
+      "description": "Reforge stage 8: stage 8 host review reviewed; run active; coverage 270/270",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795040708.129572,
+      "timestamp_str": "2026-11-19 01:25:08",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 9",
+      "phase_num": 3,
+      "description": "Reforge stage 9: window 483, 60 commit(s), 63 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795040804.0141633,
+      "timestamp_str": "2026-11-19 01:26:44",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 9",
+      "phase_num": 3,
+      "description": "Reforge stage 9: stage 9 host review reviewed; run active; coverage 844/844",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795041157.7813046,
+      "timestamp_str": "2026-11-19 01:32:37",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 10",
+      "phase_num": 3,
+      "description": "Reforge stage 10: window 486, 3 commit(s), 48 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795041210.0215797,
+      "timestamp_str": "2026-11-19 01:33:30",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 10",
+      "phase_num": 3,
+      "description": "Reforge stage 10: stage 10 host review reviewed; run completed; coverage 89/89",
+      "files_affected": [],
       "status": "completed",
-      "timestamp": 1794150620.6965017,
-      "timestamp_str": "2026-11-08 18:10:20",
-      "agent": "opencode:f16-hoist"
+      "timestamp": 1795041239.0507433,
+      "timestamp_str": "2026-11-19 01:33:59",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
     },
     {
-      "task_id": "TGE-VALUE-TILE",
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 3",
+      "phase_num": 3,
+      "description": "Reforge stage 3: stage 3 host review reviewed; run completed; coverage 248/248",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795067551.3602872,
+      "timestamp_str": "2026-11-19 08:52:31",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 4",
+      "phase_num": 3,
+      "description": "Reforge stage 4: stage 4 host review reviewed; run completed; coverage 74/74",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795067982.205984,
+      "timestamp_str": "2026-11-19 08:59:42",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 6",
+      "phase_num": 3,
+      "description": "Reforge stage 6: stage 6 host review reviewed; run completed; coverage 121/121",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795068334.423138,
+      "timestamp_str": "2026-11-19 09:05:34",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 8",
+      "phase_num": 3,
+      "description": "Reforge stage 8: stage 8 host review reviewed; run completed; coverage 270/270",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795069015.0381687,
+      "timestamp_str": "2026-11-19 09:16:55",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 9",
+      "phase_num": 3,
+      "description": "Reforge stage 9: stage 9 host review reviewed; run completed; coverage 844/844",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795069395.5014126,
+      "timestamp_str": "2026-11-19 09:23:15",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "reforge:run-1",
+      "phase": "reforge stage 10",
+      "phase_num": 3,
+      "description": "Reforge stage 10: stage 10 host review reviewed; run completed; coverage 89/89",
+      "files_affected": [],
+      "status": "completed",
+      "timestamp": 1795069421.0658996,
+      "timestamp_str": "2026-11-19 09:23:41",
+      "agent": "opencode",
+      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
+    },
+    {
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 2",
       "phase_num": 2,
-      "description": "[1/2] Plan: adopt and price the in-flight 8-query value-accumulation tile in block prefill attention; baseline vs experiment at 2048/4096 on f32 and f16 KV; drop the temporary TGE_GQA_CHUNKS spike unless it earns a retune",
+      "description": "[1/2] Fix the 15 verified Reforge audit findings across CLI, core, GPU and tests; each with a failing-first regression test and before/after measurement-log entry",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794154108.536616,
-      "timestamp_str": "2026-11-08 19:08:28",
-      "agent": "commandcode:value-tile",
+      "timestamp": 1795091184.199072,
+      "timestamp_str": "2026-11-19 15:26:24",
+      "agent": "opencode:session",
       "impact_assessment": {
-        "why": "A prior session left an unrecorded value-tile edit and a TGE_GQA_CHUNKS env spike in the working tree; G-001/G-002 require a baseline, a measured verdict and a log entry before continuing.",
-        "benefits": "The tile keeps 8 x head_dim accumulators in L1 (2-4 KiB) instead of the 128-token block working set (~32-64 KiB); if pass-2 output traffic is the bottleneck it is a free, bit-identical prefill gain.",
-        "risks": "contract: ids and fidelity must stay bit-identical; dependency: block attention kernel only; concurrency: per-head stack scratch 8 x head_dim; state: tile re-streams each value row once per 8-query tile, so large blocks may lose bandwidth.",
-        "mitigation": "Same-source baseline and experiment binaries, interleaved same-binary pairs at 2048/4096 on f32 and f16, ids parity, block differential test, full 146-case suite, revert on no consistent win."
+        "why": "A full 486-commit Reforge audit produced 15 genuine host-review findings; this session verified them against HEAD and fixed them so the recorded review reflects real, corrected code.",
+        "benefits": "Correctness: f16 tie rounding, FMA dispatch, block-table ownership, draft slot init, P-core pinning, signed-overflow guard, KL divergence, Vulkan timeout teardown; plus 11 new regression tests (174->186 cases).",
+        "risks": "contract: public kernel/CLI helper signatures; dependency: none new (pure helpers in existing headers); concurrency: Vulkan fence-timeout paths; state: process-global multiprefix table and ledger.",
+        "mitigation": "Failing-first test per fix, full suite + 4/4 gates after each, codebase map regenerated, no commit/push without authorization."
       },
-      "plan_digest": "31fca18a09a59ae2136b91d00e388e6de76c627f61fa1d73afb44df465420918"
+      "plan_digest": "747ffd3fe29c31f48dd16c05e686c477d7401f42ee977bea2181a3f741ce0cff",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     },
     {
-      "task_id": "TGE-VALUE-TILE",
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[2/2] KEPT: 8-query value tile in block prefill attention; attention faster 10/10 pairs, medians 1.690x f16 / 1.576x f32 at 2049 and 2.09x / 2.006x at 4081; prefill medians ~1.14x / 1.31x; ids identical 10/10; fidelity unchanged (f32 1.020e-11, f16 3.252e-7, 399/399); dropped inert TGE_GQA_CHUNKS spike; 146/146, 4/4; checklists: passed; report reports/idea-invented-value-tile-keep.md",
+      "description": "[2/2] All 15 Reforge audit findings fixed and verified. Suite 174->186 cases, 0 failed; ctest 1/1; aikit check --all-gates 4/4; codebase map regenerated; every change recorded in docs/measurement-log.md. Two Vulkan timeout fixes verified by compile + normal GPU paths + inspection (timeout not hermetically reproducible). Left uncommitted (no commit authorization); reports inbox (294 files, git-ignored spike logs, 40/46 idea IDs not captured elsewhere) deliberately not bulk-deleted to avoid unrecoverable data loss.",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794157143.2939672,
-      "timestamp_str": "2026-11-08 19:59:03",
-      "agent": "commandcode:value-tile"
+      "timestamp": 1795091194.5246162,
+      "timestamp_str": "2026-11-19 15:26:34",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     },
     {
-      "task_id": "TGE-VALUE-TILE",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-VALUE-TILE' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794157143.9619212,
-      "timestamp_str": "2026-11-08 19:59:03",
-      "agent": "commandcode:value-tile"
-    },
-    {
-      "task_id": "TGE-VALUE-TILE-16",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan: price a 16-query value tile against the shipped 8-query tile in block prefill attention; 2049/4081 f16 and f32 pairs, ids parity, tests and fidelity; revert on a tie",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794158459.2371578,
-      "timestamp_str": "2026-11-08 20:20:59",
-      "agent": "commandcode:value-tile16",
-      "impact_assessment": {
-        "why": "The kept tile-8 report recorded a 16-query tile as the next lever: it is still L1-resident at head_dim 128 (8 KiB) and halves the value-row re-streams per 128-query chunk.",
-        "benefits": "If pass-2 value-row traffic matters, attention improves again with bit-identical output and no new flag.",
-        "risks": "contract: ids and fidelity must stay bit-identical; dependency: block attention kernel only; concurrency: per-head stack scratch grows from 4 to 8 KiB; state: larger stack frame, fewer tiles.",
-        "mitigation": "Same-source tile-8 vs tile-16 binaries, alternating pairs at 2049/4081 on f16 and f32, ids parity, block differential, 146 tests, fidelity, revert on no consistent win."
-      },
-      "plan_digest": "9c76710d55d6034ba9474978f97e5f2bb64f64fab14dad575018ead97a2ec20a"
-    },
-    {
-      "task_id": "TGE-VALUE-TILE-16",
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[2/2] REJECTED: 16-query value tile; attention tile16/tile8 median 0.962 at 2049 f16 (4 pairs), 0.890 at 4081 f16 (3 pairs), 0.927 across 7 pairs; ids identical 7/7; reverted to tile 8; matvec favored tile16 in 3/4 2049 pairs so not a window bias; 146/146, 4/4; checklists: passed; log + negative-results report section 4",
+      "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 git-ignored spike logs' verdicts preserved in tracked docs/idea-verdict-index.md, scratch deleted, inbox now empty. No commit/push (no authorization).",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794159629.4114745,
-      "timestamp_str": "2026-11-08 20:40:29",
-      "agent": "commandcode:value-tile16"
+      "timestamp": 1795091361.7604449,
+      "timestamp_str": "2026-11-19 15:29:21",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     },
     {
-      "task_id": "TGE-VALUE-TILE-16",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-VALUE-TILE-16' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794159629.7802067,
-      "timestamp_str": "2026-11-08 20:40:29",
-      "agent": "commandcode:value-tile16"
-    },
-    {
-      "task_id": "TGE-CHUNK8K-RETEST",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan: retest 128-row prefill chunks vs the shipped 64-row cap above 4096 after the value tile; 8161-token f16 pairs, total prefill and phase ratios, ids parity; revert if 64 still wins",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794159707.5410683,
-      "timestamp_str": "2026-11-08 20:41:47",
-      "agent": "commandcode:chunk8k",
-      "impact_assessment": {
-        "why": "The 8192-token chunk rule was decided before the value tile, when 128-row chunks lost 7-11% to attention working-set cost; the tile removed half that working set, and 128 halves the weight passes.",
-        "benefits": "If 128 now wins at 8k, long-prompt prefill gets the 1.18-1.49x chunk benefit that already applies at 2048/4096, with bit-identical ids.",
-        "risks": "contract: ids and fidelity must stay bit-identical; dependency: buffers are already sized for 128 rows; concurrency: prefill pool; state: one chunk-selection branch.",
-        "mitigation": "Same-source 64 vs 128 binaries, alternating pairs at 8161 tokens on f16, attention/matvec phase split, ids parity, 146 tests, fidelity, revert on no consistent win."
-      },
-      "plan_digest": "f201176e42e15bdeed68693149e2a3f9f6747f96c2091a9eded235b437d7fc40"
-    },
-    {
-      "task_id": "TGE-CHUNK8K-RETEST",
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[2/2] INCONCLUSIVE, 64 kept: 128 vs 64 at 8161 f16, four alternating pairs total ratios 1.085/0.832/0.743/1.164 (median 0.958) but identical-arm matvec drifted 152-289 s (1.90x); kernel bench 348.9 vs 335.6 GFLOPS at 64/128 tokens (64 3.8% better, FFN equal), so 128 does not reduce per-token matvec work; ids identical 4/4; reverted; 146/146, 4/4; checklists: passed; log + negative-results section 5",
+      "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 tracked spike logs' verdicts preserved in docs/idea-verdict-index.md, originals removed (recoverable from git history), inbox now empty. No commit/push (no authorization).",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794162847.075645,
-      "timestamp_str": "2026-11-08 21:34:07",
-      "agent": "commandcode:chunk8k"
+      "timestamp": 1795091431.5770042,
+      "timestamp_str": "2026-11-19 15:30:31",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     },
     {
-      "task_id": "TGE-CHUNK8K-RETEST",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-CHUNK8K-RETEST' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794162847.422556,
-      "timestamp_str": "2026-11-08 21:34:07",
-      "agent": "commandcode:chunk8k"
-    },
-    {
-      "task_id": "TGE-STATE-HARDENING",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/5] Plan: implement the PASS state-machine proposals P01-P11: KV precedence, pre-load validation, sampling error boundary, resolved-state report, info --json, stop-set guards, ISA gates, GGUF overflow checks, CLI error hygiene, docs, continuous-batch admission",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794164113.1611679,
-      "timestamp_str": "2026-11-08 21:55:13",
-      "agent": "commandcode:state-hardening",
-      "impact_assessment": {
-        "why": "The implicit state-machine audit found silent precedence leaks, missing end-of-generation ids, unguarded ISA calls, and failures that abort after a full model load; these hurt UX, DX and AX without any measured benefit.",
-        "benefits": "Deterministic flag semantics, fail-before-load errors, machine-readable info, and honest resolved state; no arithmetic or performance defaults change.",
-        "risks": "contract: exit codes/output lines; dependency: stdlib/git only; concurrency: none in the changed paths; state: CLI parsers, config read, GGUF bounds, docs.",
-        "mitigation": "Pure helpers with failing-first unit tests, append-only output, full 146+ suite, fidelity unchanged, aikit check 4/4, local commits then authorized push."
-      },
-      "plan_digest": "cf8ecde5616375daebbe8da9404ba46fee759abf510946fd00bc9b5a7cd94deb"
-    },
-    {
-      "task_id": "TGE-STATE-HARDENING",
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[5/5] Implemented PASS P01-P11: last-wins --kv in all four parsers, pre-load flag validation, sampling validation + error boundary, resolved-state line, complete info JSON, stop-set case/type guards, ISA effective gates, wrap-safe GGUF tensor checks, CLI help/error hygiene, docs corrections, continuous admission checks; 158/158 tests, fidelity f32 1.020e-11 / f16 3.252e-7 with 399/399, 4/4 gates; checklists: passed; report reports/state-machine-hardening-2026-11-08.md",
+      "description": "[2/2] All 15 audit findings fixed and verified (186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports triaged (294 verdicts -> docs/idea-verdict-index.md, inbox empty). Committed locally as d4624a2 (fixes) and d4627ba (triage). Commit/push authorization granted by user; push to origin/master authorized.",
       "files_affected": [],
       "status": "in_progress",
-      "timestamp": 1794165243.3838139,
-      "timestamp_str": "2026-11-08 22:14:03",
-      "agent": "commandcode:state-hardening"
+      "timestamp": 1795107340.0909822,
+      "timestamp_str": "2026-11-19 19:55:40",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     },
     {
-      "task_id": "TGE-STATE-HARDENING",
+      "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "completed",
       "phase_num": 5,
-      "description": "Task 'TGE-STATE-HARDENING' completed successfully.",
+      "description": "Task 'TGE-AUDIT-FINDINGS-FIX' completed successfully.",
       "status": "completed",
-      "timestamp": 1794165243.8842175,
-      "timestamp_str": "2026-11-08 22:14:03",
-      "agent": "commandcode:state-hardening"
-    },
-    {
-      "task_id": "TGE-STATE-DEFERRED",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan: implement the two deferred state items that are additive and testable: sequence-aware forward + per-slot reset, and placement that costs all requested KV slots at load",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794166075.1115453,
-      "timestamp_str": "2026-11-08 22:27:55",
-      "agent": "commandcode:state-deferred",
-      "impact_assessment": {
-        "why": "The audit's D1/D2a gaps are real API/admission lies: the model reports sequence_count but forward addresses slot 0, and load validates one slot while allocating sequences.",
-        "benefits": "A truthful multi-sequence API and a load decision that cannot be admitted over the KV budget it allocates.",
-        "risks": "contract: additive overloads; placement may clamp context for multi-session loads (correctly); dependency: none; concurrency: single per-instance assumption unchanged; state: KV slot indexing and reset range.",
-        "mitigation": "Synthetic phi model with sequences=2, slot-offset unit test, plan session test, full suite, fidelity unchanged, roadmap update, local commit then push."
-      },
-      "plan_digest": "13531b821f2f9533b6c77427efa08d7a3df589eab2d3447cb23399bf672a7cb9"
-    },
-    {
-      "task_id": "TGE-STATE-DEFERRED",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Closed D1/D2a: forward(sequence,token,position) and reset_cache(sequence) share kv_layer_offset and validate range; load placement costs max(1,sequences); i8 kv_dim%32 guard; 162/162 tests, fidelity f32 1.020e-11 with 399/399, 4/4; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794166449.987115,
-      "timestamp_str": "2026-11-08 22:34:09",
-      "agent": "commandcode:state-deferred"
-    },
-    {
-      "task_id": "TGE-STATE-DEFERRED",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-STATE-DEFERRED' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794166450.6442404,
-      "timestamp_str": "2026-11-08 22:34:10",
-      "agent": "commandcode:state-deferred"
-    },
-    {
-      "task_id": "TGE-KEEPGRADE-INTEGRATION",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/4] Verify and integrate the three keep-grade performance recipes (AVX2 argmax, top-p AVX2 exp, radix top-p sort) one at a time, re-running each A/B on the current tree; add the slot property tests if they still hold",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794249996.1678286,
-      "timestamp_str": "2026-11-09 21:46:36",
-      "agent": "commandcode:integrate-keep",
-      "impact_assessment": {
-        "why": "The loop measured four keep-grade ideas but reverted the spike code; the user asked to re-verify the performance on the current tree and implement only what persists.",
-        "benefits": "Exact kernel wins (22x argmax, 1.68x top-p sampler, 2.56x large-nucleus sort) become shipped code instead of report-only recipes; durable slot tests close the coverage gap.",
-        "risks": "contract: ids and fidelity; dependency: one new AVX2 TU and CMake entry; concurrency: none; state: sampler branch, model argmax, tests.",
-        "mitigation": "Re-run each kernel and end-to-end A/B on the current tree, full suite, aikit check 4/4, one conventional commit per item, no push without approval."
-      },
-      "plan_digest": "b932cc6a35d201a34c8db5e128efd0dd2ef74f75bb02fca59754b26fa7d26a69"
-    },
-    {
-      "task_id": "TGE-KEEPGRADE-INTEGRATION",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Verified and integrated all four keep-grade items: AVX2 argmax 147.5->7.7 us (19.2x), top-p AVX2 exp 787->628 us (1.25x peaked), radix top-p sort 13.51->3.86 ms (3.50x large nucleus), slot tests 165/165 with mutation caught; end-to-end top-p +2.5% 0.5B, flat +4.8%/+5.0%, ids identical; 165/165, 4/4; checklists: passed",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1794251246.1051533,
-      "timestamp_str": "2026-11-09 22:07:26",
-      "agent": "commandcode:integrate-keep"
-    },
-    {
-      "task_id": "TGE-KEEPGRADE-INTEGRATION",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-KEEPGRADE-INTEGRATION' completed successfully.",
-      "status": "completed",
-      "timestamp": 1794251246.696823,
-      "timestamp_str": "2026-11-09 22:07:26",
-      "agent": "commandcode:integrate-keep"
+      "timestamp": 1795107350.339244,
+      "timestamp_str": "2026-11-19 19:55:50",
+      "agent": "opencode:session",
+      "head": "d4627bad36024b10b1d9105dede837043b2e0b72",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
