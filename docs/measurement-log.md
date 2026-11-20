@@ -5128,3 +5128,9 @@ change. 24 interleaved decode pairs on the 300-token prompt (GQA active):
 **11 wins / 13 losses**, medians 73.41 -> 71.48 t/s (-2.6%). The existing
 formula is fine; fewer chunks leave parallelism unused. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Attention schedule re-check in the final configuration: `--attention head`
+vs `auto` (GQA) on the 300-token prompt, 24 interleaved pairs, quiet box
+(mem read 55.48/53.36 GB/s, x1/x4 clean both pairs): **9 wins / 15 losses
+for head**, medians 75.19 -> 74.04 t/s (-1.5%). Auto still selects the
+faster grouped schedule at long context. No config change. No code ships.
