@@ -5155,3 +5155,11 @@ byte-identical Q4_K_M ids; 187/187 with the change. Two 24-pair batches on
 0.5B Q4_K_M decode: 13W/11L (+1.1% median) then 10W/14L (-0.4%) — combined
 23W/25L with cancelling medians, same null verdict as the Q8_0 band tests.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Two FMA accumulators in dot_row_q8 (2026-11-21): completing the 1/4 pair
+already measured null. Health gate passed (mem read 50.17/55.30 GB/s,
+x1/x4 clean both pairs); byte-identical ids on story and 300-token prompts;
+187/187 with the change. Two 24-pair batches: 13W/11L (+1.2% median) then
+7W/17L (-1.5%) — combined 20W/28L with cancelling medians. All three
+accumulator counts (1, 2, 4) are now measured null; the kernel is
+bandwidth-bound. Reverted in full, rebuilt, 187/187 green. No code ships.
