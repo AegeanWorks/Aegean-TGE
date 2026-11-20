@@ -5190,3 +5190,9 @@ store + scalar eight-lane sum with shuffle-based reduction. Health gate passed
 then 9W/15L (-2.7%) — medians cancel. Expected: Q8_0 decode dispatches the
 Q8_0 GEMV, not the f32 one, so the change cannot move this workload. Reverted
 in full, rebuilt, 187/187 green. No code ships.
+
+int8 KV cache re-check (flag-only) on the 300-token prompt: byte-identical
+greedy ids vs f32, so the trace does not flip. Health gate passed (mem read
+54.77 GB/s, x1/x4 clean). Two 24-pair batches: 13W/11L (+0.9% median) then
+9W/15L (-2.2%) — combined 22W/26L with cancelling medians. i8 stays opt-in
+for long-context memory savings, not a speed default here. No code ships.
