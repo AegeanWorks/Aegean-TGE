@@ -4553,3 +4553,19 @@ flip inside this box's ±20% band, with OLD itself ranging 29-64 t/s. Per
 interleaved pairs count. Reverted in full (`git checkout` of the single
 kernel file, rebuilt, 187/187 green); no code ships. Next lever remains
 fewer streamed bytes per token (speculation), not ALU shaving.
+
+## 2026-11-20 - Two more decode experiments rejected (no code ships)
+
+Flag-only test of the opt-in integer decode kernels on 0.5B Q4_K_M:
+`--kq8d head,down` looked faster in 5/6 pairs (median 38.94 -> 47.92
+t/s), but the generated text **changed** completely (default "there was a
+young man named John..." vs kq8d "there was a man named John..."). The
+README already prices this as "lossy near-tie logits"; it cannot become a
+default without changing what the model says. Left opt-in.
+
+Then a scheduling-only change: `band_rows = rows / (threads * 8)` instead
+of `* 4` in `gemv_q8_0_avx2`, doubling the number of work-stealing bands
+for the bandwidth-bound output projection. Bit-exact, 187/187 green,
+but 10 interleaved pairs gave **6 wins / 4 losses** with OLD ranging
+40-68 t/s — a coin flip inside this box's ±20% band. Reverted in full
+(`git checkout`, rebuilt, 187/187 green). No code ships from either test.
