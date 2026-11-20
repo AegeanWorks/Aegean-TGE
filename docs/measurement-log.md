@@ -4666,3 +4666,22 @@ prompt: **11 wins / 13 losses**, medians **63.23 (pinned) vs 63.62
 (adaptive) t/s (+0.6%)**. Still no win, now on a verified quiet box, so the
 result is attributable: adaptive pinning does not pay for itself. Final
 verdict REJECTED; the global pin stays. No code ships.
+
+### Q8 scale conversion, 16-block revision: reverted (2026-11-20)
+
+The 8-block F16C revision was a coin flip; this revision batched 16 blocks
+with two independent `_mm256_cvtph_ps` converts (two 8-lane scale halves,
+two stores), amortizing the gather/store scaffolding over twice the work
+and giving the converts ILP. Health gate passed: mem read 54.03 / 21.98 /
+53.26 / 49.88 / 34.26 GB/s (4 of 5 >= 26), x1/x4 tripwire clean both pairs
+(16.48/20.40 vs 57.10/27.17 GFLOPS). Byte-identical `--print-ids` on
+story and 300-token prompts (64 tokens each) against the saved baseline;
+suite 188/188 with the change.
+
+24 interleaved decode pairs, 0.5B Q8_0 story, 64 tok, `--threads 10`:
+**10 wins / 14 losses**, medians **47.32 (baseline) vs 39.04 (new) t/s
+(-17.5%)**. The box loaded up during the window (baseline 8.86-83.51), so
+the exact magnitude is load narrative — but there is no sign of a win,
+which is the keep condition. Reverted in full (`git checkout` of the
+single kernel file, rebuilt, 187/187 green). No code ships. Q8 scale
+conversion stays scalar; this lever is now closed in both batch widths.
