@@ -23,30 +23,6 @@
   "checkpoints": [
     {
       "task_id": "TGE-DECODE-DETECT-CACHE",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan + implement cached cpu::detect() for decode dispatch",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795198055.670644,
-      "timestamp_str": "2026-11-20 21:07:35",
-      "agent": "opencode:session",
-      "impact_assessment": {
-        "why": "detect() reran CPUID and topology enumeration ~200x per decode token, absorbed into the norm phase",
-        "benefits": "fewer syscalls per token; load-proof decode speedup with zero arithmetic change",
-        "risks": "contract: detect() return type changes to const ref; dependency: none; concurrency: function-local static init is thread-safe; state: cached info is process-lifetime",
-        "mitigation": "differential via identical generated text, new caching regression test, full gates and interleaved A/B"
-      },
-      "plan_digest": "0c6975e6b35854898f5d1af6d14de4236f9d24f82611d8009e56d7c85e23c525",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-DECODE-DETECT-CACHE",
       "phase": "phase 4",
       "phase_num": 4,
       "description": "[2/2] Cached detect(): +8% Q8_0 / +18% Q4_K_M decode, norm phase -94%, 187/187 tests, 4/4 gates, text byte-identical",
@@ -318,6 +294,17 @@
         ],
         "forced": false
       }
+    },
+    {
+      "task_id": "chore-1795206035",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the 4-accumulator Q8 GEMV experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795206035.001757,
+      "timestamp_str": "2026-11-20 23:20:35",
+      "agent": "opencode"
     }
   ]
 }
