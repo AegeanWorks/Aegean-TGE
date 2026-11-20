@@ -5067,3 +5067,8 @@ Two-binary confirmation (old default 10 vs new default 12) was noisier —
 6/6 then 17/7, medians +0.7% / +1.7% — but never reversed. Kept on the
 56/16 same-binary evidence plus the clean byte-identical ids. Tests 187/187,
 gates 4/4. This is the seventh kept win.
+
+Thread-count ceiling check: 12 vs 14 on the current build, 24 interleaved
+pairs — **10 wins / 14 losses for 14**, medians 78.70 -> 76.16 t/s (-3.2%).
+12 is the peak; the earlier 16-thread collapse and this 14 result bracket the
+optimum. No config change. No code ships.
