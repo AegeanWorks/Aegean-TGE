@@ -5207,3 +5207,10 @@ starts. No code ships.
 Cumulative re-confirmation after the prefetch check: 24 interleaved pairs,
 original pre-win binary vs current HEAD, 0.5B Q8_0 story: **24 wins / 0
 losses**, medians 50.16 -> 83.74 t/s. No code change.
+
+Cross-model validation of the 12-thread default (2026-11-21): the win was
+measured on Q8_0, so checked Q4_K_M too — byte-identical greedy ids at both
+thread counts, 24 interleaved pairs on a quiet box (mem read 43.63 GB/s,
+x1/x4 clean): **23 wins / 1 loss for 12**, medians 57.32 -> 62.74 t/s
+(+9.5%). The default generalizes; no regression on the K-quant model.
+No code change.
