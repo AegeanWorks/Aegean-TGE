@@ -4766,3 +4766,20 @@ patch gates on the output tensor type. Q8_0 wins are sign-consistent across
 60 pairs; Q4_K_M is neutral inside noise. Kept on the repeated same-window
 pairs + byte-identical ids + unchanged K-quant path. Tests 187/187, gates
 4/4. This is the third kept win after cached detection and GPU default off.
+
+### Four FMA accumulators in dot_row_q8: reverted (2026-11-20)
+
+The sibling `dot_f32` documents that four accumulators hide the ~4-5 cycle
+FMA latency; `dot_row_q8` had a single `total` chain across all blocks.
+Changed it to four round-robin chains reduced once at the end (scalar Q8_0
+scale path, no other change). Health gate passed (mem read 50.65/36.95
+GB/s; x1/x4 clean 2/3 retries, none inverted). Byte-identical `--print-ids`
+on story and 300-token prompts despite the different accumulation order —
+no near-tie flipped in 64 tokens — and 187/187 with the change.
+
+24 interleaved decode pairs, 0.5B Q8_0 story, `--threads 10`: **9 wins /
+15 losses**, medians **68.68 (baseline) vs 68.44 (4-acc) t/s (-0.4%)**.
+The kernel is bandwidth-bound on the weight stream (§28ak), so hiding FMA
+latency buys nothing here — consistent with every other ALU-side attempt.
+Reverted in full (`git checkout` of the single kernel file, rebuilt,
+187/187 green). No code ships.
