@@ -4494,3 +4494,43 @@ decode medians move the same direction in every aggregate. Absolute `measure.ps1
 batch numbers are not compared across this change: mem read moved 33.66 →
 39.54 GB/s between the two snapshots (box load), so only the interleaved
 pairs count. Kept on the mechanism + the deterministic phase delta + parity.
+
+## 2026-11-20 - GPU offload default off: decode +26-28%, kept
+
+Target: token generation speed. `generate`/`fidelity` defaulted to
+`--gpu auto`, which calls `set_use_gpu(mode != "off")` — so on a ready
+backend it unconditionally requested GPU offload. On this box `tge info`
+reports a Vulkan **noop roundtrip of 3110 µs**, and each decode token's
+output projection added a full submit+fence around a 611 KB transfer:
+`gpu : output offload ~550 ms` over 63 tokens (~8.7 ms/token). The CPU Q8_0
+path is already at its bandwidth roof (§28ak), so the offload was pure loss.
+
+Change: default `gpu_mode` is now `"off"` in `generate` and `fidelity`;
+`--gpu auto` and `--gpu on` still request the old behavior explicitly, and
+the two usage strings say so. No kernel or arithmetic change — only which
+device runs the matvecs.
+
+Measurement: same binary, explicit `--gpu auto` vs `--gpu off`, interleaved,
+greedy story prompt, `--threads 10`.
+
+| Q8_0 0.5B, 4 pairs | auto | off |
+|---|---|---|
+| decode t/s | 42.59 / 42.22 / 40.58 / 46.63 | 47.30 / 51.41 / 60.63 / 56.92 |
+| median | 42.4 t/s | 54.2 t/s (**+28%**, 4/4 pairs) |
+| prefill, 3 pairs | 281 / 298 / 348 ms | 163 / 242 / 260 ms (faster too) |
+
+| Q8_0 1.5B, 3 pairs | auto | off |
+|---|---|---|
+| decode t/s | 18.03 / 19.36 / 15.64 | 23.25 / 22.36 / 22.68 |
+| median | 18.03 t/s | 22.68 t/s (**+26%**, 3/3 pairs) |
+
+Text output byte-identical on 0.5B (`..., As John traveled, he`). New default
+was re-verified: resolves `gpu=off`, no offload line, decode 50.99-57.69 t/s.
+Tests 187/187, `ctest` 1/1.
+
+Honesty note: this is this machine's Vulkan driver + single-channel DIMM. A
+box with a cheaper submit/fence and more bandwidth could still gain from the
+offload — that is why `auto`/`on` remain one flag away rather than being
+deleted. The claim is "default off wins here by 26-28% in every pair", not
+"GPU offload is always wrong". Kept on 7/7 favorable pairs across two model
+sizes plus faster prefill.

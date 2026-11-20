@@ -128,7 +128,8 @@ void print_usage(std::FILE* stream = stdout) {
       "        --kq8d S         opt-in integer decode scopes: head|down|attn|head,down\n"
       "                         (default off; lossy near-tie logits, see README)\n"
       "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
-      "        --gpu M          auto|off|on GPU offload (default auto)\n"
+      "        --gpu M          auto|off|on GPU offload (default off; auto=on\n"
+      "                         when a backend is ready, see measurement-log)\n"
       "        --prefetch       fault weights before first token, report ms\n"
       "        --print-ids      print generated token ids\n"
       "        --text           detokenize and print the generated text\n"
@@ -140,7 +141,8 @@ void print_usage(std::FILE* stream = stdout) {
       "        --kq8d S         compare against opt-in integer decode scopes:\n"
       "                         head|down|attn|head,down (default off)\n"
       "        --kv T           KV cache type: f32|f16|i8|auto (default f32)\n"
-      "        --gpu M          auto|off|on GPU offload (default auto)\n"
+      "        --gpu M          auto|off|on GPU offload (default off; auto=on\n"
+      "                         when a backend is ready, see measurement-log)\n"
       "        --sparse         price the static sparse subset on the candidate\n"
       "        --sparse-window N  most-recent kept positions (default 512)\n"
       "        --sparse-stride N  every N-th middle position kept (default 4)\n"
@@ -1969,7 +1971,11 @@ int run_generate(int argc, char** argv) {
   tge::models::SamplingParams sampling;
   int seed = 0;
   tge::models::SparseConfig sparse;
-  std::string gpu_mode = "auto";
+  // GPU offload costs more than it saves on this Vulkan/driver pair: the
+  // noop roundtrip is ~3 ms and per-token output offload ~8 ms, while the
+  // CPU Q8_0 path is at its bandwidth roof. Interleaved A/B measured
+  // +28% decode (0.5B Q8_0) and +26% (1.5B Q8_0) with off; see the log.
+  std::string gpu_mode = "off";
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--print-ids") == 0) {
@@ -2534,7 +2540,11 @@ int run_fidelity(int argc, char** argv) {
   bool kv_q8 = false;
   bool kv_auto = false;
   tge::models::SparseConfig sparse;
-  std::string gpu_mode = "auto";
+  // GPU offload costs more than it saves on this Vulkan/driver pair: the
+  // noop roundtrip is ~3 ms and per-token output offload ~8 ms, while the
+  // CPU Q8_0 path is at its bandwidth roof. Interleaved A/B measured
+  // +28% decode (0.5B Q8_0) and +26% (1.5B Q8_0) with off; see the log.
+  std::string gpu_mode = "off";
 
   for (int index = 2; index < argc; ++index) {
     if (std::strcmp(argv[index], "--vnni") == 0) {
