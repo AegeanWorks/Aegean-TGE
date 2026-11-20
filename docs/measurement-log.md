@@ -5134,3 +5134,10 @@ vs `auto` (GQA) on the 300-token prompt, 24 interleaved pairs, quiet box
 (mem read 55.48/53.36 GB/s, x1/x4 clean both pairs): **9 wins / 15 losses
 for head**, medians 75.19 -> 74.04 t/s (-1.5%). Auto still selects the
 faster grouped schedule at long context. No config change. No code ships.
+
+f16 KV cache re-check on the 300-token prompt with the final configuration:
+byte-identical greedy ids (`--kv f32` vs `--kv f16`), so the accuracy cost does
+not flip this trace. Two 24-pair batches: 14W/10L (+1.6% median) then
+12W/12L (+1.6% median) — combined 26W/22L, both medians inside noise and no
+sign consistency. f16 stays opt-in (its documented KL price is not worth
+~1.5% here). No config change. No code ships.
