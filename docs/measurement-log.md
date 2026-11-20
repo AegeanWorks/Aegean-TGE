@@ -5034,3 +5034,11 @@ byte-identical ids on story and 300-token prompts; 187/187 with the change.
 73.18 t/s (-1.4%). Parking the main/worker threads sooner costs more than
 the freed core saves. Reverted in full, rebuilt, 187/187 green. No code
 ships. Both spin directions are now measured null.
+
+### Decode thread count re-check after the priority wins (2026-11-21)
+
+With all six wins in place, 24 interleaved pairs of `--threads 10` (current
+default, physical cores) vs `--threads 6` (old P-core count) on a quiet box
+(mem read 56.79/55.84 GB/s, x1/x4 clean both pairs): **0 wins / 24 losses
+for 6**, medians 77.96 -> 67.24 t/s. The current 10-thread default is
+confirmed decisively; no config change. No code ships.
