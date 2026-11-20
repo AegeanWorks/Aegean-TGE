@@ -525,6 +525,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   // The caller is itself a parallel_for participant and runs the sampler;
   // match the one-notch worker priority so it is not preempted mid-step.
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+  // Lift the whole process one priority class as well, so the decode threads'
+  // ABOVE_NORMAL relative priority is not cancelled by a busy peer process.
+  // Measured in the 2026-11-21 entry of measurement-log.md.
+  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 #endif
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::cli::Preflight preflight{

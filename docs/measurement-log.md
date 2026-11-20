@@ -4940,3 +4940,29 @@ bar decisively. Kept. Tests 187/187, gates 4/4.
 Same tradeoff as the worker change applies (one notch above ordinary user
 threads, process-wide effect); it is now applied consistently to every
 thread doing decode work.
+
+### Process priority class ABOVE_NORMAL (KEPT, +7-10%)
+
+Completing the priority series: the process itself was at
+NORMAL_PRIORITY_CLASS, so ABOVE_NORMAL relative thread priorities could still
+be tripped by a busy peer process. `generate` now calls
+`SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)` once on
+Windows. No arithmetic change.
+
+Health gate passed (mem read 55.19/59.62 GB/s, x1/x4 clean both pairs).
+Byte-identical ids on story and 300-token prompts; 187/187 with the change.
+
+| set | wins/losses | median base | median process raised |
+|---|---|---|---|
+| Q8_0 batch 1 (24) | 23 / 1 | 71.58 t/s | 77.63 t/s (+8.5%) |
+| Q8_0 batch 2 (24) | 23 / 1 | 73.82 t/s | 80.82 t/s (+9.5%) |
+| Q4_K_M control (12) | 10 / 2 | 55.54 t/s | 59.21 t/s (+6.6%) |
+
+46/2 over 48 Q8_0 pairs (96%) with both medians strongly positive, plus a
+10/2 Q4_K_M control. Kept. Tests 187/187, gates 4/4.
+
+Tradeoff recorded: ABOVE_NORMAL_PRIORITY_CLASS is one notch above normal for
+the whole process, so the CLI can outrank other ordinary user processes while
+it runs. It is not HIGH_PRIORITY_CLASS or realtime, and the change is confined
+to the `generate` command; revisit if running alongside latency-sensitive
+work matters.
