@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-AUDIT-FINDINGS-FIX",
+    "task_id": "TGE-DECODE-DETECT-CACHE",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795107340.0909822,
+    "updated_at": 1795198062.6653223,
     "owner": "opencode:session",
-    "lease_until": 1795114540.0909822,
+    "lease_until": 1795205262.6653223,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,47 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795107350.2477233,
-    "completed_head": "d4627bad36024b10b1d9105dede837043b2e0b72",
-    "completed_tree": "07c82550fdfa5429de7ef15048d6a403bd6721ca"
+    "completed_at": 1795198104.2007642,
+    "completed_head": "f712453ca7939a093dc5ff7159288274f8d4c6dc",
+    "completed_tree": "53bd03d366c6d70c888ecf999271a29abe23ac28"
   },
   "checkpoints": [
-    {
-      "task_id": "reforge:run-1",
-      "phase": "reforge stage 7",
-      "phase_num": 3,
-      "description": "Reforge stage 7: window 363, 60 commit(s), 58 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795039960.2831087,
-      "timestamp_str": "2026-11-19 01:12:40",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
-    {
-      "task_id": "reforge:run-1",
-      "phase": "reforge stage 7",
-      "phase_num": 3,
-      "description": "Reforge stage 7: stage 7 host review reviewed; run active; coverage 61/61",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795040230.5820358,
-      "timestamp_str": "2026-11-19 01:17:10",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
-    {
-      "task_id": "reforge:run-1",
-      "phase": "reforge stage 8",
-      "phase_num": 3,
-      "description": "Reforge stage 8: window 423, 60 commit(s), 99 file(s) reviewed (unreviewed), 0 finding(s), 0 repaired, empty \u2014 nothing to commit",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795040303.319786,
-      "timestamp_str": "2026-11-19 01:18:23",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
     {
       "task_id": "reforge:run-1",
       "phase": "reforge stage 8",
@@ -295,6 +259,65 @@
       "timestamp_str": "2026-11-19 19:55:50",
       "agent": "opencode:session",
       "head": "d4627bad36024b10b1d9105dede837043b2e0b72",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
+    },
+    {
+      "task_id": "TGE-DECODE-DETECT-CACHE",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + implement cached cpu::detect() for decode dispatch",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795198055.670644,
+      "timestamp_str": "2026-11-20 21:07:35",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "detect() reran CPUID and topology enumeration ~200x per decode token, absorbed into the norm phase",
+        "benefits": "fewer syscalls per token; load-proof decode speedup with zero arithmetic change",
+        "risks": "contract: detect() return type changes to const ref; dependency: none; concurrency: function-local static init is thread-safe; state: cached info is process-lifetime",
+        "mitigation": "differential via identical generated text, new caching regression test, full gates and interleaved A/B"
+      },
+      "plan_digest": "0c6975e6b35854898f5d1af6d14de4236f9d24f82611d8009e56d7c85e23c525",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-DECODE-DETECT-CACHE",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Cached detect(): +8% Q8_0 / +18% Q4_K_M decode, norm phase -94%, 187/187 tests, 4/4 gates, text byte-identical",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795198062.6653223,
+      "timestamp_str": "2026-11-20 21:07:42",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-DECODE-DETECT-CACHE",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-DECODE-DETECT-CACHE' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795198104.3473282,
+      "timestamp_str": "2026-11-20 21:08:24",
+      "agent": "opencode:session",
+      "head": "f712453ca7939a093dc5ff7159288274f8d4c6dc",
       "delivery": {
         "roots": [
           "."
