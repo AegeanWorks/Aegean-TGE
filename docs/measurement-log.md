@@ -5117,3 +5117,14 @@ Health gate passed (mem read 47.54/45.66 GB/s, tripwire never inverted).
 38.09 t/s (-52%). Mechanism: pinning puts two workers on each of the six
 P-core logical pairs while the four E-cores sit idle — exactly the
 oversubscription the unpinned default avoids. No config change. No code ships.
+
+### GQA chunk cap 6 at 12 threads: reverted (2026-11-21)
+
+The GQA chunk count scaled with the thread default (12 threads -> 12 chunks
+per KV head, 24 tasks); tried capping it at 6 to cut online-softmax merge
+states. Health gate passed (mem read 61.60/47.63 GB/s, x1/x4 clean both
+pairs); byte-identical ids on story and 300-token prompts; 187/187 with the
+change. 24 interleaved decode pairs on the 300-token prompt (GQA active):
+**11 wins / 13 losses**, medians 73.41 -> 71.48 t/s (-2.6%). The existing
+formula is fine; fewer chunks leave parallelism unused. Reverted in full,
+rebuilt, 187/187 green. No code ships.
