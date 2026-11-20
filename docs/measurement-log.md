@@ -5108,3 +5108,12 @@ the drafter abstains (no `spec :` line). 24 interleaved pairs: **12 wins /
 regression does not reproduce in this configuration, but there is no gain
 either. Speculation stays opt-in — it pays only where the drafter finds
 repetition, which this prompt lacks. No code ships.
+
+### Pinned workers at the new 12-thread default: decisively rejected
+
+Re-checked `--pin-threads 1` after the default moved from 10 to 12 threads.
+Health gate passed (mem read 47.54/45.66 GB/s, tripwire never inverted).
+24 interleaved pairs: **0 wins / 24 losses for pinned**, medians 79.32 ->
+38.09 t/s (-52%). Mechanism: pinning puts two workers on each of the six
+P-core logical pairs while the four E-cores sit idle — exactly the
+oversubscription the unpinned default avoids. No config change. No code ships.
