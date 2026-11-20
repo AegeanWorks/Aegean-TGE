@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-GPU-DEFAULT-OFF",
+    "task_id": "TGE-OUTPUT-POOL",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795198455.6226182,
+    "updated_at": 1795205668.7317367,
     "owner": "opencode:session",
-    "lease_until": 1795205655.6226182,
+    "lease_until": 1795212868.7317367,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,64 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795198517.9960146,
-    "completed_head": "dab01badbdf2666754df1365498c5fd91911fed1",
-    "completed_tree": "a06ecae07f90ca27e248c3121dfe5dcf019235f2"
+    "completed_at": 1795205712.2875874,
+    "completed_head": "ae5376b5b99c84627735eed057a87991e51f07b1",
+    "completed_tree": "67797a02738b024acdff2ee28776e245d85583ea"
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-AUDIT-FINDINGS-FIX",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 tracked spike logs' verdicts preserved in docs/idea-verdict-index.md, originals removed (recoverable from git history), inbox now empty. No commit/push (no authorization).",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795091431.5770042,
-      "timestamp_str": "2026-11-19 15:30:31",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-AUDIT-FINDINGS-FIX",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] All 15 audit findings fixed and verified (186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports triaged (294 verdicts -> docs/idea-verdict-index.md, inbox empty). Committed locally as d4624a2 (fixes) and d4627ba (triage). Commit/push authorization granted by user; push to origin/master authorized.",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795107340.0909822,
-      "timestamp_str": "2026-11-19 19:55:40",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-AUDIT-FINDINGS-FIX",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-AUDIT-FINDINGS-FIX' completed successfully.",
-      "status": "completed",
-      "timestamp": 1795107350.339244,
-      "timestamp_str": "2026-11-19 19:55:50",
-      "agent": "opencode:session",
-      "head": "d4627bad36024b10b1d9105dede837043b2e0b72",
-      "delivery": {
-        "roots": [
-          "."
-        ],
-        "forced": false
-      }
-    },
     {
       "task_id": "TGE-DECODE-DETECT-CACHE",
       "phase": "phase 2",
@@ -312,6 +259,65 @@
       "timestamp": 1795205023.2279565,
       "timestamp_str": "2026-11-20 23:03:43",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-OUTPUT-POOL",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + route tall Q8_0 output projection through the wide prefill pool",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795205668.183695,
+      "timestamp_str": "2026-11-20 23:14:28",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "151936-row output matvec shared the 10-thread decode pool tuned for small layer matrices",
+        "benefits": "Q8_0 decode +6-17% across 60 sign-consistent pairs; K-quant path unchanged",
+        "risks": "contract: matvec gains optional pool/thread overrides, defaults unchanged; dependency: none; concurrency: prefill pool already exists, per-call only; state: none",
+        "mitigation": "byte-identical ids on two models and two prompt lengths, Q4_K_M control, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "1867b4d5283e41254cd1ab673073bc40322a0265749e8b6cca31fdd46cbc47a6",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-OUTPUT-POOL",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Wide pool for Q8_0 output: 16/8, 16/8, 9/3 pairs; Q4_K_M neutral; ids byte-identical; 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795205668.7317367,
+      "timestamp_str": "2026-11-20 23:14:28",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-OUTPUT-POOL",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-OUTPUT-POOL' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795205712.3498793,
+      "timestamp_str": "2026-11-20 23:15:12",
+      "agent": "opencode:session",
+      "head": "ae5376b5b99c84627735eed057a87991e51f07b1",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
