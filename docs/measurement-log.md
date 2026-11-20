@@ -5203,3 +5203,7 @@ ids vs plain. Health gate passed (mem read 59.75 GB/s, x1/x4 clean). Two
 21W/27L with cancelling medians. The synchronous page touch cannot help a
 model already resident in the page cache; prefetch stays opt-in for cold
 starts. No code ships.
+
+Cumulative re-confirmation after the prefetch check: 24 interleaved pairs,
+original pre-win binary vs current HEAD, 0.5B Q8_0 story: **24 wins / 0
+losses**, medians 50.16 -> 83.74 t/s. No code change.
