@@ -5079,3 +5079,9 @@ Output-pool width ceiling check in the new configuration: `--prefill-threads
 both pairs): **5 wins / 19 losses for 14**, medians 76.43 -> 73.24 t/s
 (-4.2%). 16 remains optimal for the output matvec too; the two pool widths
 are now bracketed on both sides. No config change. No code ships.
+
+Final cumulative check with all seven wins (24 interleaved pairs, original
+pre-win binary vs current HEAD, 0.5B Q8_0 story, quiet box):
+**24 wins / 0 losses**, medians **38.14 -> 82.02 t/s**. Every pair favors the
+current tree. Absolute magnitudes vary with box load, but the 100% sign
+consistency over 24 pairs confirms the seven changes compose cleanly.
