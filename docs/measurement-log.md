@@ -4579,3 +4579,28 @@ the ~10 decode workers spinning through the norm/attention gaps between
 the 169 parallel calls per token. 10 interleaved pairs: **4 wins / 6
 losses**, with OLD swinging 23-58 t/s (heavily loaded box). Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+### Quiet-box retest of the 12-thread default (2026-11-20)
+
+Health gate first: `bench mem` read **57.15 GB/s**, copy 43.26, decode probe
+60-70 t/s in 4/5 runs. The x1/x4 tripwire flipped once in two tries
+(q4k gate 49.64/74.33 then 16.59/15.41), so the box was not fully quiet —
+mixed bandwidth-good / ALU-contended, the §45 signature.
+
+24 interleaved `--threads 10` vs `--threads 12` pairs, same binary, story
+prompt, 64 tok: **13 wins / 11 losses**, medians **52.90 vs 53.41 t/s
+(+1%)**. The last third of the window flips hard against 12 (r14-r16,
+r22-r24 all losses), which is a load shift, not a thread effect. This does
+not reproduce the earlier 9/10 signal. The default stays at 10 physical
+cores; no code changed. Next scheduling candidate: `parallel_for` grain.
+
+Next candidate tested: `parallel_for(bands, 1, ...)` -> grain 2 in
+`gemv_q8_0_avx2` (one atomic fetch_add claims two bands instead of one,
+halving the ~6760 atomics per decode token). Bit-exact, 187/187 green,
+but 16 interleaved pairs gave **4 wins / 12 losses**, medians **57.27 ->
+53.02 t/s (-7%)**. Coarser stealing hurts load balance on the tall output
+projection. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Scheduling is now well-falsified in both directions (band x2/x8, spin,
+grain, threads 10/12). The two standing wins remain structural: cached
+detection and GPU default off.
