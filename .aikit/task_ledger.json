@@ -25,24 +25,6 @@
       "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[2/2] All 15 Reforge audit findings fixed and verified. Suite 174->186 cases, 0 failed; ctest 1/1; aikit check --all-gates 4/4; codebase map regenerated; every change recorded in docs/measurement-log.md. Two Vulkan timeout fixes verified by compile + normal GPU paths + inspection (timeout not hermetically reproducible). Left uncommitted (no commit authorization); reports inbox (294 files, git-ignored spike logs, 40/46 idea IDs not captured elsewhere) deliberately not bulk-deleted to avoid unrecoverable data loss.",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795091194.5246162,
-      "timestamp_str": "2026-11-19 15:26:34",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-AUDIT-FINDINGS-FIX",
-      "phase": "phase 4",
-      "phase_num": 4,
       "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 git-ignored spike logs' verdicts preserved in tracked docs/idea-verdict-index.md, scratch deleted, inbox now empty. No commit/push (no authorization).",
       "files_affected": [],
       "status": "in_progress",
@@ -325,6 +307,17 @@
       "chore": true,
       "timestamp": 1795204121.8474205,
       "timestamp_str": "2026-11-20 22:48:41",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795204548",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the GCC mtune experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795204548.59904,
+      "timestamp_str": "2026-11-20 22:55:48",
       "agent": "opencode"
     }
   ]
