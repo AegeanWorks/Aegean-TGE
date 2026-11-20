@@ -4833,3 +4833,21 @@ Health gate had passed (mem read 27.69/28.05 GB/s, tripwire clean 2/2), but
 a correctness gate outranks a speed experiment (PRINCIPLE-000 R6). Reverted
 in full (`git checkout apps/cli/draft.hpp`, rebuilt, 187/187 green). No code
 ships; no A/B run because the change never reached a valid state.
+
+### Dedicated 12-worker output pool: not decisive, reverted (2026-11-20)
+
+Narrow tuning of the kept wide-output win: the current path borrows the
+16-thread prefill pool; a dedicated 12-worker pool (one per physical core
+plus two) might avoid HT/E-core stragglers on the tall 151936-row matvec.
+Health gate passed (mem read 31.64/48.70/42.25/58.15 GB/s, x1/x4 clean).
+Byte-identical ids on story and 300-token prompts; 187/187 with the change.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story, `--threads 10`:
+batch 1 **12W/12L**, medians 60.62 -> 64.98 t/s (+7.2%); batch 2
+**12W/12L**, medians 68.47 -> 69.38 t/s (+1.3%). Medians lean positive but
+the sign count is an exact coin flip across 48 pairs (the first window also
+collapsed to 6.56 t/s mid-run), so this is not the sign-consistent evidence
+the kept 16-thread win had (16/8, 16/8, 9/3). Added complexity (a third pool
+and 12 extra threads) for an unproven delta. Reverted in full (`git checkout`
+of the two source files, rebuilt, 187/187 green); the committed
+16-thread output win is intact (verified by grep). No code ships.
