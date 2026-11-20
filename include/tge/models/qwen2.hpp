@@ -398,7 +398,12 @@ class Qwen2 {
   const float* vector(const char* name, int expected) const;
   void matvec(const Matrix& weight, const float* input, float* output,
               const cpu::Q8Quantized* quantized = nullptr,
-              bool allow_kq8d = false) const;
+              bool allow_kq8d = false,
+              // Per-call scheduling override: the full-vocabulary output
+              // projection is far taller than any layer matrix and may want a
+              // different pool width. Null/0 keeps the decode defaults.
+              core::ThreadPool* pool_override = nullptr,
+              int threads_override = 0) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
                     int tokens, const cpu::Q8Quantized* quantized = nullptr,
                     bool float_only = false) const;

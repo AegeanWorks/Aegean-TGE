@@ -857,8 +857,14 @@ const float* Qwen2::output_logits(float* hidden) {
   }
   const cpu::Q8Quantized q_out =
       vnni_ ? quantize_activations(hidden, 1, dim) : cpu::Q8Quantized{};
+  // The Q8_0 output matrix is ~151k rows — an order of magnitude taller than
+  // any layer weight — and the wide, unpinned prefill pool streams it better
+  // than the 10-thread decode pool (+6-10% end to end, two 24-pair batches).
+  // K-quant outputs (Q6_K here) did not gain and stay on the decode pool.
+  const bool wide_output = output_.type == gguf::TensorType::Q8_0;
   matvec(output_, hidden, logits_.data(), vnni_ ? &q_out : nullptr,
-         kq8d_head_);
+         kq8d_head_, wide_output ? &prefill_pool() : nullptr,
+         wide_output ? prefill_threads() : 0);
   return logits_.data();
 }
 
@@ -966,15 +972,21 @@ const float* Qwen2::vector(const char* name, int expected) const {
 
 void Qwen2::matvec(const Matrix& weight, const float* input,
                    float* output, const cpu::Q8Quantized* quantized,
-                   bool allow_kq8d) const {
+                   bool allow_kq8d, core::ThreadPool* pool_override,
+                   int threads_override) const {
   const std::uint64_t t0 = clock_ns();
   // Decode is memory-bound and synchronisation-sensitive, so it uses the
   // decode pool rather than one worker per logical processor. Sizing each call
   // to the matrix was measured and gave no gain over a flat count, so the
-  // simpler rule stands.
-  const int workers =
-      threads_ > 0 ? threads_ : cpu::resolve_decode_threads();
-  const cpu::GemvConfig config{workers, &decode_pool()};
+  // simpler rule stands. A caller may still override both for the tall output
+  // projection (see output_logits).
+  const int workers = threads_override > 0
+                          ? threads_override
+                          : (threads_ > 0 ? threads_
+                                          : cpu::resolve_decode_threads());
+  const cpu::GemvConfig config{workers,
+                               pool_override != nullptr ? pool_override
+                                                        : &decode_pool()};
   if (weight.type == gguf::TensorType::Q8_0) {
     if (vnni_ && quantized != nullptr && quantized->values != nullptr &&
         quantized->scales != nullptr) {

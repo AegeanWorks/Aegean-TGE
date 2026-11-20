@@ -4735,3 +4735,34 @@ link at all here, and the working form needs a fat-object workaround plus
 serial LTRANS. Reverted in full (`git checkout CMakeLists.txt`, full
 rebuild, 187/187 green). No code ships. Build-level levers are now closed
 (mtune and LTO both measured null).
+
+## 2026-11-20 - Wide pool for the tall Q8_0 output projection (KEPT, +6-17%)
+
+The full-vocabulary output matvec is ~151936 rows — an order of magnitude
+taller than any layer weight — yet it shared the 10-thread decode pool used
+for every small matvec. Added a per-call scheduling override to `matvec`
+(pool + thread count, defaulting to the decode values) and routed the CPU
+output projection through the wide, unpinned prefill pool (16 threads) only
+when `output_.type == Q8_0`; K-quant outputs stay on the decode pool.
+Scheduling only: no arithmetic, no output change.
+
+Health gate passed (mem read 44.31/57.31 GB/s; x1/x4 clean both pairs
+5.06/47.58 and 57.69/62.26 GFLOPS). Byte-identical `--print-ids` on story
+and 300-token prompts for both Q8_0 and Q4_K_M; 187/187 throughout.
+
+| Q8_0 0.5B, 24-pair batches, story, `--threads 10` | wins/losses | median base | median wide |
+|---|---|---|---|
+| batch 1 | 16 / 8 | 57.00 t/s | 62.78 t/s (+10.1%) |
+| batch 2 | 16 / 8 | 59.66 t/s | 63.20 t/s (+5.9%) |
+| gated re-check, 12 pairs | 9 / 3 | 63.38 t/s | 74.47 t/s (+17.5%) |
+
+| Q4_K_M control, 12 pairs | wins/losses | median base | median gated |
+|---|---|---|---|
+| ungated wide pool (rejected) | 4 / 8 | 45.26 t/s | 44.60 t/s |
+| gated (decode pool retained) | 5 / 7 | 55.26 t/s | 55.06 t/s (-0.4%) |
+
+The ungated form helped Q8_0 but nudged Q4_K_M the wrong way, so the final
+patch gates on the output tensor type. Q8_0 wins are sign-consistent across
+60 pairs; Q4_K_M is neutral inside noise. Kept on the repeated same-window
+pairs + byte-identical ids + unchanged K-quant path. Tests 187/187, gates
+4/4. This is the third kept win after cached detection and GPU default off.
