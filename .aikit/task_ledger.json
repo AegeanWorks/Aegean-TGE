@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-PROCESS-PRIORITY",
+    "task_id": "TGE-DECODE-THREADS12",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795210156.1267996,
+    "updated_at": 1795212747.969834,
     "owner": "opencode:session",
-    "lease_until": 1795217356.1267996,
+    "lease_until": 1795219947.969834,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,44 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795210197.974756,
-    "completed_head": "ccffe794027cbc7536e2913c499de8e2849b3769",
-    "completed_tree": "bdc6ee843281d3a7e4abcae9fa2ddd1ba25f2988"
+    "completed_at": 1795212776.08444,
+    "completed_head": "ca7bae256fef47997256aac09957994729512c08",
+    "completed_tree": "5df36f7d592cdba2f12743d675f0a82ac9c45ae4"
   },
   "checkpoints": [
-    {
-      "task_id": "chore-1795207559",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the two-substitution draft rejection in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795207559.5873024,
-      "timestamp_str": "2026-11-20 23:45:59",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795208140",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the dedicated output pool experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795208140.978451,
-      "timestamp_str": "2026-11-20 23:55:40",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795208382",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the cumulative verification in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795208382.138281,
-      "timestamp_str": "2026-11-20 23:59:42",
-      "agent": "opencode"
-    },
     {
       "task_id": "chore-1795208794",
       "phase": "chore",
@@ -318,6 +285,65 @@
       "timestamp": 1795212218.9206426,
       "timestamp_str": "2026-11-21 01:03:38",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-DECODE-THREADS12",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + change decode default to physical cores + 2 capped at logical",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795212747.3717778,
+      "timestamp_str": "2026-11-21 01:12:27",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "after the priority wins, 12 threads beat 10 in 56/16 same-binary interleaved pairs",
+        "benefits": "+2-6% decode, byte-identical output, portable cap",
+        "risks": "contract: no API change, --threads still overrides; dependency: none; concurrency: pool size changes; state: cached once",
+        "mitigation": "byte-identical ids on two models and prompt lengths, 72 interleaved pairs, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "541489d06bf7fbba8d31c680a6e6c8a6d55bb20f0d7e676291d5dc263ab833df",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-DECODE-THREADS12",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Decode default 12: 56/16 same-binary pairs (+2/+5/+6% medians), ids byte-identical, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795212747.969834,
+      "timestamp_str": "2026-11-21 01:12:27",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-DECODE-THREADS12",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-DECODE-THREADS12' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795212776.2214875,
+      "timestamp_str": "2026-11-21 01:12:56",
+      "agent": "opencode:session",
+      "head": "ca7bae256fef47997256aac09957994729512c08",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
