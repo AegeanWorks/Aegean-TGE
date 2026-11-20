@@ -5042,3 +5042,28 @@ default, physical cores) vs `--threads 6` (old P-core count) on a quiet box
 (mem read 56.79/55.84 GB/s, x1/x4 clean both pairs): **0 wins / 24 losses
 for 6**, medians 77.96 -> 67.24 t/s. The current 10-thread default is
 confirmed decisively; no config change. No code ships.
+
+## 2026-11-21 - Decode default 10 -> 12 threads (KEPT, +2-6%)
+
+The same-thread-count study from before the priority wins was inconclusive;
+with all six wins in place the picture changed. `resolve_decode_threads()`
+now returns `min(logical_cores, physical_cores + 2)` (12 on this 10-physical /
+16-logical box), capped so smaller machines never oversubscribe; `--threads`
+still overrides. Scheduling only.
+
+Health gate: mem read 56.79/55.84 GB/s for the 6-thread check; the 10-vs-12
+windows ran quiet (same-binary medians stable 75-81 t/s). Byte-identical
+`--print-ids` on story and 300-token prompts against the pre-change binary;
+`tge info` now reports `16 logical, 12 for decode`; 187/187 with the change.
+
+| same-binary A/B (current build, `--threads 10` vs `12`) | wins/losses | medians |
+|---|---|---|
+| batch 1 (24) | 20 / 4 | 76.68 -> 80.41 t/s (+4.9%) |
+| batch 2 (24) | 20 / 4 | 75.82 -> 80.46 t/s (+6.1%) |
+| batch 3 (24) | 16 / 8 | 79.35 -> 81.04 t/s (+2.1%) |
+| combined | **56 / 16 (78%)** | all three positive |
+
+Two-binary confirmation (old default 10 vs new default 12) was noisier —
+6/6 then 17/7, medians +0.7% / +1.7% — but never reversed. Kept on the
+56/16 same-binary evidence plus the clean byte-identical ids. Tests 187/187,
+gates 4/4. This is the seventh kept win.

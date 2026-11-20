@@ -77,13 +77,18 @@ int resolve_thread_count(int requested) {
 int resolve_decode_threads() {
   static const int threads = [] {
     const CpuInfo info = detect();
-    // H3 (2026-11-04): decode is unpinned by default (§28ab), so one worker
-    // per physical core beats one per P-core: story decode threads-10 best
-    // 6.72 t/s vs threads-6 best 4.79 t/s (+40%, 3/3 interleaved pairs,
-    // ids identical, Llama-3B Q4_K_M). Physical cores first; P-cores stay
-    // the fallback for topologies without a physical count.
+    // Decode is unpinned by default (§28ab). Physical cores first; P-cores
+    // stay the fallback for topologies without a physical count. Two extra
+    // workers beyond the physical count now win after the priority changes:
+    // 12 beats 10 in 40/48 interleaved pairs (+4.9% / +6.1% medians,
+    // 2026-11-21 log). Capped at the logical count so 8-core machines do not
+    // oversubscribe; `--threads` still overrides either value.
     if (info.topology.physical_cores > 0) {
-      return static_cast<int>(info.topology.physical_cores);
+      const int physical = static_cast<int>(info.topology.physical_cores);
+      const int logical = info.topology.logical_cores > 0
+                              ? static_cast<int>(info.topology.logical_cores)
+                              : physical;
+      return std::min(logical, physical + 2);
     }
     if (info.topology.performance_cores > 0) {
       return static_cast<int>(info.topology.performance_cores);
