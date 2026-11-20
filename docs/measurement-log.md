@@ -5011,3 +5011,15 @@ with the change. 24 interleaved decode pairs: **12 wins / 12 losses**,
 medians 76.28 -> 76.50 t/s (+0.3%). No win — the file is already hot in the
 page cache during decode, so the hint has nothing to do. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+### One 32-byte payload load per Q8 block: reverted (2026-11-21)
+
+`dot_row_q8` used four `_mm_loadl_epi64` (8-byte) loads per 32-weight block;
+tried a single `_mm256_loadu_si256` plus lane extracts, keeping the four
+widen-and-FMA steps in the same order (bit-exact). Health gate passed (mem
+read 38.55/56.66 GB/s, x1/x4 clean both pairs). Byte-identical ids on story
+and 300-token prompts; 187/187 with the change. 24 interleaved decode pairs:
+**8 wins / 16 losses**, medians 77.66 -> 77.16 t/s (-0.6%). The extra
+unpack shuffles cost more than the three saved load uops, and the kernel is
+bandwidth-bound anyway. Reverted in full, rebuilt, 187/187 green. No code
+ships.
