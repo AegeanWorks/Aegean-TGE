@@ -23,18 +23,6 @@
   "checkpoints": [
     {
       "task_id": "reforge:run-1",
-      "phase": "reforge stage 3",
-      "phase_num": 3,
-      "description": "Reforge stage 3: stage 3 host review reviewed; run completed; coverage 248/248",
-      "files_affected": [],
-      "status": "completed",
-      "timestamp": 1795067551.3602872,
-      "timestamp_str": "2026-11-19 08:52:31",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
-    {
-      "task_id": "reforge:run-1",
       "phase": "reforge stage 4",
       "phase_num": 3,
       "description": "Reforge stage 4: stage 4 host review reviewed; run completed; coverage 74/74",
@@ -344,6 +332,17 @@
       "chore": true,
       "timestamp": 1795200902.8903651,
       "timestamp_str": "2026-11-20 21:55:02",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795201188",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record band and spin experiment rejections in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795201188.8591113,
+      "timestamp_str": "2026-11-20 21:59:48",
       "agent": "opencode"
     }
   ]
