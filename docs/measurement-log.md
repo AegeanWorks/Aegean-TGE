@@ -5174,3 +5174,11 @@ with `--speculative` on story: **10 wins / 14 losses**, medians 83.04 ->
 81.53 t/s (-1.8%). The extra verify pass for a low-value proposal costs more
 than the occasional acceptance. Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Wide-output grain=2 (2026-11-21): the earlier grain test was on the 10-thread
+path; retried specifically for the 16-thread output pool (two bands per
+atomic claim). Health gate passed (mem read 44.90/56.97 GB/s, x1/x4 clean
+both pairs); byte-identical ids on story and 300-token prompts; 187/187 with
+the change. 24 interleaved decode pairs: **7 wins / 17 losses**, medians
+86.80 -> 84.66 t/s (-2.5%). Coarser claiming hurts load balance here too.
+Reverted in full, rebuilt, 187/187 green. No code ships.
