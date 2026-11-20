@@ -5097,3 +5097,14 @@ higher worker priority likely starves the still-ABOVE_NORMAL caller that
 participates in parallel_for. Reverted in full, rebuilt, 187/187 green.
 No code ships. The priority ladder is now fully bracketed (ABOVE_NORMAL
 best; HIGH class and HIGHEST thread both measured worse).
+
+### Greedy speculation on a non-repetitive prompt: now neutral (2026-11-21)
+
+Re-checked the old "speculation costs ~0.94x on the story prompt" claim with
+all seven wins in place. Health gate passed (mem read 47.62/55.07 GB/s,
+x1/x4 clean both pairs). Byte-identical ids with and without `--speculative`;
+the drafter abstains (no `spec :` line). 24 interleaved pairs: **12 wins /
+12 losses**, medians 83.55 (plain) vs 83.44 (spec) t/s (-0.1%). The earlier
+regression does not reproduce in this configuration, but there is no gain
+either. Speculation stays opt-in — it pays only where the drafter finds
+repetition, which this prompt lacks. No code ships.
