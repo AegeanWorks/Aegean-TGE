@@ -4971,3 +4971,19 @@ Post-priority cumulative re-check, same original pre-win binary vs current
 HEAD, 12 interleaved pairs: **12 wins / 0 losses**, medians **51.94 ->
 79.88 t/s (+53.8%)**. The three priority changes compose with the earlier
 three wins; no regression appears in the aggregate.
+
+### HIGH_PRIORITY_CLASS: reverted (2026-11-21)
+
+Last rung of the priority ladder: replace the kept
+ABOVE_NORMAL_PRIORITY_CLASS with HIGH_PRIORITY_CLASS. Health gate passed
+(mem read 51.08/54.10 GB/s, x1/x4 clean both pairs); byte-identical ids on
+story and 300-token prompts; 187/187 with the change.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story: batch 1 **15W/9L**,
+medians 78.06 -> 79.18 t/s (+1.4%); batch 2 **17W/7L**, medians 78.68 ->
+78.56 t/s (-0.2%). Combined 32/16 with cancelling medians — the extra
+priority buys nothing measurable on a box where ABOVE_NORMAL already won
+23/1 per batch. HIGH_PRIORITY_CLASS also risks starving ordinary user
+threads, so there is no trade that justifies it. Reverted in full
+(`git checkout apps/cli/main.cpp`, rebuilt, 187/187 green;
+ABOVE_NORMAL_PRIORITY_CLASS confirmed still present). No code ships.
