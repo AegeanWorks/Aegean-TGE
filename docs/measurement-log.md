@@ -5085,3 +5085,15 @@ pre-win binary vs current HEAD, 0.5B Q8_0 story, quiet box):
 **24 wins / 0 losses**, medians **38.14 -> 82.02 t/s**. Every pair favors the
 current tree. Absolute magnitudes vary with box load, but the 100% sign
 consistency over 24 pairs confirms the seven changes compose cleanly.
+
+### Worker priority HIGHEST instead of ABOVE_NORMAL: reverted (2026-11-21)
+
+Last priority rung: raise workers from THREAD_PRIORITY_ABOVE_NORMAL to
+THREAD_PRIORITY_HIGHEST. Health gate passed (mem read 50.99/36.18 GB/s,
+x1/x4 clean both pairs); byte-identical ids on story and 300-token prompts;
+187/187 with the change. 24 interleaved decode pairs: **9 wins / 15 losses**,
+medians 79.85 -> 77.37 t/s (-3.1%). ABOVE_NORMAL is the sweet spot — a
+higher worker priority likely starves the still-ABOVE_NORMAL caller that
+participates in parallel_for. Reverted in full, rebuilt, 187/187 green.
+No code ships. The priority ladder is now fully bracketed (ABOVE_NORMAL
+best; HIGH class and HIGHEST thread both measured worse).
