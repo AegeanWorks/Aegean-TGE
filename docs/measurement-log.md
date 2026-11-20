@@ -4534,3 +4534,22 @@ offload — that is why `auto`/`on` remain one flag away rather than being
 deleted. The claim is "default off wins here by 26-28% in every pair", not
 "GPU offload is always wrong". Kept on 7/7 favorable pairs across two model
 sizes plus faster prefill.
+
+## 2026-11-20 - Vectorised Q8 scale conversion: reverted (no resolvable win)
+
+Tried converting the eight per-block Q8_0 half scales with one F16C
+`_mm256_cvtph_ps` instead of eight scalar `half_to_float` calls in
+`dot_row_q8` (with a scalar fallback for CPUs without F16C). Exact by
+construction; 187/187 tests passed. After the cached `detect()` and GPU
+changes the decode path is 98% matvec and already at its bandwidth roof
+(§28ak), so the scalar ALU saving was unlikely to matter — the numbers
+settled it.
+
+Two interleaved batches, 0.5B Q8_0 story, 64 tok, `--threads 10`:
+batch 1 was 5 wins / 3 losses (medians 47.54 -> 51.18 t/s, +7.7%), batch 2
+was **4 wins / 8 losses**. Across all 20 pairs: 9 wins / 11 losses — a coin
+flip inside this box's ±20% band, with OLD itself ranging 29-64 t/s. Per
+§28m/§32, cross-window medians are load narrative and only sign-consistent
+interleaved pairs count. Reverted in full (`git checkout` of the single
+kernel file, rebuilt, 187/187 green); no code ships. Next lever remains
+fewer streamed bytes per token (speculation), not ALU shaving.
