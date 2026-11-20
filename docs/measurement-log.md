@@ -4819,3 +4819,17 @@ is only 1-11% of decode, so there was little to gain. Reverted in full
 (`git checkout src/models/qwen2.cpp` back to HEAD — the committed
 output-projection win is intact, verified by grep), rebuilt, 187/187 green.
 No code ships.
+
+### Two-substitution gapped draft: rejected at the test gate (2026-11-20)
+
+Extending `gapped_draft` from one to two substitutions as a second pass (the
+one-substitution pass first, so old proposals should be preserved) was
+stopped before any timing: the existing
+`draft_fills_all_slots_on_five_deep_fallback` regression failed —
+`FAIL draft[5] == draft[4]` — because that history now finds a 6-deep
+two-substitution match instead of the 5-deep fallback the test guards. That
+test protects the uninitialized-draft-slot fix; weakening it is not allowed.
+Health gate had passed (mem read 27.69/28.05 GB/s, tripwire clean 2/2), but
+a correctness gate outranks a speed experiment (PRINCIPLE-000 R6). Reverted
+in full (`git checkout apps/cli/draft.hpp`, rebuilt, 187/187 green). No code
+ships; no A/B run because the change never reached a valid state.
