@@ -5147,3 +5147,11 @@ quiet box (mem read 45.44/51.76 GB/s, x1/x4 clean both pairs): **11 wins /
 13 losses for 11**, medians 79.90 -> 79.26 t/s (-0.8%). Together with the
 earlier 10, 14 and 16 results, 12 is the measured peak. No config change.
 No code ships.
+
+K-quant band granularity re-check (2026-11-21): the fused Q4_K/Q6_K decode
+kernels and the batch K-quant kernel use `rows / (threads * 4)`; tried ×8.
+Health gate passed (mem read 55.84/56.79 GB/s, x1/x4 clean both pairs);
+byte-identical Q4_K_M ids; 187/187 with the change. Two 24-pair batches on
+0.5B Q4_K_M decode: 13W/11L (+1.1% median) then 10W/14L (-0.4%) — combined
+23W/25L with cancelling medians, same null verdict as the Q8_0 band tests.
+Reverted in full, rebuilt, 187/187 green. No code ships.
