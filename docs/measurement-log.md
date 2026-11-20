@@ -4631,3 +4631,29 @@ dequantized band and its 8x re-reads; the original scratch-row path already
 keeps each input row in L1 across the token loop. Reverted in full (three
 files `git checkout`, rebuilt, 187/187 green, only pre-existing untracked
 reforge state left). No code ships; §39's item is now measured, not open.
+
+### Adaptive speculation pin: byte-identical but no speed win, reverted
+
+Hypothesis: `--speculative` pinned the per-head attention schedule for the
+whole run, taxing abstaining steps where auto's GQA is faster at long
+context. Implemented an adaptive pin in `main.cpp`: keep the requested mode
+at the top of each decode step, switch to `Head` only when a draft is about
+to be verified (fused and non-fused branches), so the verifier and any
+correction forward still share arithmetic.
+
+Correctness gate passed first: `--print-ids` byte-identical between pinned
+and adaptive binaries on three families (short story, repetitive, 300-token
+long context where GQA engages) — 48 tokens each, all identical. Then a
+24-pair interleaved A/B on the 300-token prompt, same seed:
+
+```
+10 wins / 14 losses
+median pinned=64.09 t/s, adaptive=61.14 t/s
+```
+
+Health gate FAILED for a quiet box: `bench mem` read 6.04-12.57 GB/s
+(normal quiet windows here are 26-57), decode swinging 11-140 t/s between
+adjacent runs. So the negative result is not attributable with confidence —
+but it is certainly not a measured win, which is the keep condition.
+Reverted in full (`git checkout apps/cli/main.cpp`, rebuilt, 187/187 green).
+No code ships. A quiet-box retry is the only thing that could reopen this.
