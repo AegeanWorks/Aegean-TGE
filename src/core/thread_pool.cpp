@@ -272,6 +272,12 @@ void ThreadPool::parallel_for(int count, int grain,
 }
 
 void ThreadPool::worker() {
+#if defined(_WIN32)
+  // One notch above normal keeps decode workers from being preempted by
+  // unrelated background work between the ~169 back-to-back parallel calls
+  // per token. Measured in the 2026-11-21 entry of measurement-log.md.
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
   std::uint64_t seen = 0;
 
   for (;;) {

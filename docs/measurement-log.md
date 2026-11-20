@@ -4884,3 +4884,33 @@ batch 1 **14W/10L**, medians 68.37 -> 69.40 t/s (+1.5%); batch 2
 cancelling medians — no reproducible win, same verdict as the earlier
 global band x2/x8 tests. Reverted in full (`git checkout` of the single
 kernel file, rebuilt, 187/187 green). No code ships.
+
+## 2026-11-21 - Raise pool worker priority one notch (KEPT, +5-11%)
+
+Decode issues ~169 back-to-back `parallel_for` calls per token; on this
+shared box the workers get preempted between them. `ThreadPool::worker()`
+now calls `SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL)`
+once at startup on Windows (a single notch, not realtime). No arithmetic or
+scheduling order change, so output is byte-identical.
+
+Health gate: mem read 51.49/47.18 GB/s (quiet); x1/x4 flaky on the first
+pass (69.73>38.36) but clean 2/3 on retry (56.19→170.66, 78.82→154.37),
+so results are treated with the usual caution. Byte-identical `--print-ids`
+on story and 300-token prompts; 187/187 with the change.
+
+| set | wins/losses | median base | median raised |
+|---|---|---|---|
+| Q8_0 0.5B, 24-pair batch 1 | 17 / 7 | 65.25 t/s | 72.48 t/s (+11.1%) |
+| Q8_0 0.5B, 24-pair batch 2 | 16 / 8 | 70.65 t/s | 74.53 t/s (+5.5%) |
+| Q4_K_M 0.5B, 12 pairs | 7 / 5 | 51.34 t/s | 52.38 t/s (+2.0%) |
+
+All three sets favor the change (33/15 Q8_0, 7/5 Q4_K_M) with positive
+medians; it clears the sign-consistency bar the other scheduling attempts
+missed. Kept. Tests 187/187, gates 4/4.
+
+Honest tradeoff recorded: this applies to every ThreadPool in the process
+(prefill, decode and benchmark pools), not just decode. ABOVE_NORMAL is one
+notch above ordinary user threads — it reduces preemption here but can
+outrank other user processes on a shared machine. The alternative (a decode-
+only flag) needs plumbing through `set_pin_threads`/pool construction and
+was not built for this measurement; revisit if the side effect matters.
