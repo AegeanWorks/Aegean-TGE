@@ -23,24 +23,6 @@
   "checkpoints": [
     {
       "task_id": "TGE-DECODE-DETECT-CACHE",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Cached detect(): +8% Q8_0 / +18% Q4_K_M decode, norm phase -94%, 187/187 tests, 4/4 gates, text byte-identical",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795198062.6653223,
-      "timestamp_str": "2026-11-20 21:07:42",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-DECODE-DETECT-CACHE",
       "phase": "completed",
       "phase_num": 5,
       "description": "Task 'TGE-DECODE-DETECT-CACHE' completed successfully.",
@@ -304,6 +286,17 @@
       "chore": true,
       "timestamp": 1795206035.001757,
       "timestamp_str": "2026-11-20 23:20:35",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795206389",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the permute-broadcast Q8 scale experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795206389.4615178,
+      "timestamp_str": "2026-11-20 23:26:29",
       "agent": "opencode"
     }
   ]
