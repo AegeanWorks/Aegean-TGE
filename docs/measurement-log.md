@@ -4685,3 +4685,26 @@ the exact magnitude is load narrative — but there is no sign of a win,
 which is the keep condition. Reverted in full (`git checkout` of the
 single kernel file, rebuilt, 187/187 green). No code ships. Q8 scale
 conversion stays scalar; this lever is now closed in both batch widths.
+
+### GCC -mtune=alderlake: no win, reverted (2026-11-20)
+
+Build-level lever: add `-mtune=alderlake` to the GNU compile options. It
+changes instruction scheduling only (no ISA floor change, so runtime
+dispatch stays portable), and the shipped binary currently builds with
+GCC's generic tuning. Health gate passed (mem read 37.66/60.80 GB/s,
+x1/x4 clean 3/3 on retry). Full 56-TU rebuild, 187/187 green, byte-identical
+`--print-ids` on story and 300-token prompts.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story, `--threads 10`:
+
+| batch | wins/losses | median base | median tuned |
+|---|---|---|---|
+| 1 | 13 / 11 | 72.26 t/s | 74.56 t/s (+3.2%) |
+| 2 | 12 / 12 | 71.22 t/s | 69.37 t/s (-2.6%) |
+| combined | **25 / 23** | — | coin flip |
+
+The first batch's small gain does not reproduce; the second reverses it.
+No keep condition. Reverted in full (`git checkout CMakeLists.txt`, full
+rebuild, 187/187 green). Also a portability reason to decline: a
+CPU-family-specific tune in a binary shipped for general x86-64 could
+hurt other machines for no measured gain here. No code ships.
