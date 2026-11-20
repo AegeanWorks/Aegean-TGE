@@ -5000,3 +5000,14 @@ stable enough. Reverted in full, rebuilt, 187/187 green. No code ships.
 
 Note: the six kept wins were pushed to origin after this drive step
 (`master` 52 commits, `aikit.py push` ran 4/4 gates first).
+
+### FILE_FLAG_SEQUENTIAL_SCAN on the GGUF mapping: reverted (2026-11-21)
+
+`CreateFileW` opened the model with plain `FILE_ATTRIBUTE_NORMAL`; added
+`FILE_FLAG_SEQUENTIAL_SCAN` so the cache manager would prefetch ahead for the
+forward weight stream. Health gate passed (mem read 54.79/54.39 GB/s, x1/x4
+never inverted). Byte-identical ids on story and 300-token prompts; 187/187
+with the change. 24 interleaved decode pairs: **12 wins / 12 losses**,
+medians 76.28 -> 76.50 t/s (+0.3%). No win — the file is already hot in the
+page cache during decode, so the hint has nothing to do. Reverted in full,
+rebuilt, 187/187 green. No code ships.
