@@ -5141,3 +5141,9 @@ not flip this trace. Two 24-pair batches: 14W/10L (+1.6% median) then
 12W/12L (+1.6% median) — combined 26W/22L, both medians inside noise and no
 sign consistency. f16 stays opt-in (its documented KL price is not worth
 ~1.5% here). No config change. No code ships.
+
+Adjacent thread-count check: 11 vs the 12 default, 24 interleaved pairs on a
+quiet box (mem read 45.44/51.76 GB/s, x1/x4 clean both pairs): **11 wins /
+13 losses for 11**, medians 79.90 -> 79.26 t/s (-0.8%). Together with the
+earlier 10, 14 and 16 results, 12 is the measured peak. No config change.
+No code ships.
