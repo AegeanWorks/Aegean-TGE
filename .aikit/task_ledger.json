@@ -23,24 +23,6 @@
   "checkpoints": [
     {
       "task_id": "TGE-GPU-DEFAULT-OFF",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Default gpu=off: +28% 0.5B / +26% 1.5B decode, 7/7 pairs, 187/187 tests, 4/4 gates, text identical",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795198455.6226182,
-      "timestamp_str": "2026-11-20 21:14:15",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-GPU-DEFAULT-OFF",
       "phase": "completed",
       "phase_num": 5,
       "description": "Task 'TGE-GPU-DEFAULT-OFF' completed successfully.",
@@ -278,6 +260,17 @@
       "chore": true,
       "timestamp": 1795207559.5873024,
       "timestamp_str": "2026-11-20 23:45:59",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795208140",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the dedicated output pool experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795208140.978451,
+      "timestamp_str": "2026-11-20 23:55:40",
       "agent": "opencode"
     }
   ]
