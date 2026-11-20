@@ -4657,3 +4657,12 @@ adjacent runs. So the negative result is not attributable with confidence —
 but it is certainly not a measured win, which is the keep condition.
 Reverted in full (`git checkout apps/cli/main.cpp`, rebuilt, 187/187 green).
 No code ships. A quiet-box retry is the only thing that could reopen this.
+
+Quiet-box retry (same two saved binaries, no code re-applied): health gate
+passed this time — `bench mem` read 31.00 / 33.60 / 51.23 then 31.44 GB/s,
+and the x1/x4 tripwire was clean 3/3 (x1 2.75/3.94/3.66 vs x4
+19.86/99.74/109.59 GFLOPS). 24 fresh interleaved pairs, same 300-token
+prompt: **11 wins / 13 losses**, medians **63.23 (pinned) vs 63.62
+(adaptive) t/s (+0.6%)**. Still no win, now on a verified quiet box, so the
+result is attributable: adaptive pinning does not pay for itself. Final
+verdict REJECTED; the global pin stays. No code ships.
