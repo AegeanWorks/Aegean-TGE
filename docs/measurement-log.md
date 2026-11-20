@@ -5196,3 +5196,10 @@ greedy ids vs f32, so the trace does not flip. Health gate passed (mem read
 54.77 GB/s, x1/x4 clean). Two 24-pair batches: 13W/11L (+0.9% median) then
 9W/15L (-2.2%) — combined 22W/26L with cancelling medians. i8 stays opt-in
 for long-context memory savings, not a speed default here. No code ships.
+
+`--prefetch` re-check on the 300-token prompt (flag-only): byte-identical
+ids vs plain. Health gate passed (mem read 59.75 GB/s, x1/x4 clean). Two
+24-pair batches: 12W/12L (+1.7% median) then 9W/15L (-2.3%) — combined
+21W/27L with cancelling medians. The synchronous page touch cannot help a
+model already resident in the page cache; prefetch stays opt-in for cold
+starts. No code ships.
