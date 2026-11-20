@@ -66,7 +66,11 @@ struct CpuInfo {
   const char* best_isa() const;
 };
 
-CpuInfo detect();
+/// Detected CPU capabilities. The result is computed once and cached: CPU
+/// features and topology cannot change while the process runs, and the old
+/// per-call behaviour re-ran CPUID and GetLogicalProcessorInformationEx on
+/// every matvec/norm/RoPE/SiLU dispatch site (~200 times per decode token).
+const CpuInfo& detect();
 
 /// True only when the fused K-quant decode kernels are safe to execute. Those
 /// kernels (gemv_q4k_fused_avx2 / gemv_q6k_fused_avx2) use _mm256_fmadd_ps, so

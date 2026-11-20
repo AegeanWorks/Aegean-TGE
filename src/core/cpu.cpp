@@ -215,7 +215,10 @@ const char* CpuInfo::best_isa() const {
   return "scalar";
 }
 
-CpuInfo detect() {
+namespace {
+
+// One-shot implementation; the public detect() caches its result.
+CpuInfo detect_uncached() {
   CpuInfo info;
 
   const Regs leaf0 = cpuid(0);
@@ -309,6 +312,13 @@ CpuInfo detect() {
   }
 
   detect_topology(info.topology);
+  return info;
+}
+
+}  // namespace
+
+const CpuInfo& detect() {
+  static const CpuInfo info = detect_uncached();
   return info;
 }
 

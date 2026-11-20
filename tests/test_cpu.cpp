@@ -13,6 +13,19 @@ TGE_TEST(cpu_reports_identity_and_topology) {
   TGE_CHECK(info.topology.numa_nodes >= 1);
 }
 
+TGE_TEST(cpu_detect_is_cached) {
+  // detect() used to re-run CPUID and GetLogicalProcessorInformationEx on
+  // every call. The model calls it ~200 times per decode token (each matvec,
+  // rms_norm, RoPE and SiLU dispatch site), so the cache is a hot-path
+  // invariant, not a cosmetic one. Distinct addresses mean it regressed.
+  const tge::cpu::CpuInfo& first = tge::cpu::detect();
+  const tge::cpu::CpuInfo& second = tge::cpu::detect();
+  TGE_CHECK(&first == &second);
+  TGE_CHECK(first.brand == second.brand);
+  TGE_CHECK(first.features.avx2 == second.features.avx2);
+  TGE_CHECK(first.topology.logical_cores == second.topology.logical_cores);
+}
+
 TGE_TEST(fused_kv_decode_requires_fma_not_just_avx2) {
   // Regression: the fused Q4_K/Q6_K decode kernels use _mm256_fmadd_ps, but
   // the dispatch gate checked AVX2 alone. An AVX2-no-FMA CPU would SIGILL.

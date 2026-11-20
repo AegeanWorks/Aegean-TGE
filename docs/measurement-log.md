@@ -4451,3 +4451,46 @@ back to the generic usage, which is now an honest promise.
 | suite after fix | **186 cases, 0 failed**; `ctest --preset release` 1/1 passed |
 
 Kept: UX fix; no engine behavior change.
+
+## 2026-11-20 - Cache CPU detection: decode +8-18%, kept
+
+Target: token generation speed (decode). `cpu::detect()` was **not cached**:
+every call re-ran CPUID (11 leaves) *and* `detect_topology()`, which on Windows
+calls `GetLogicalProcessorInformationEx`. The model calls it at every
+dispatch site — `matvec`, `rms_norm`, `apply_rope`, `silu_gated` — roughly 200
+times per decode token. The phase timers were absorbing this in `norm`: on
+Q8_0 short decode the `norm` line read ~95 ms against matvec's ~800 ms, even
+though norms/RoPE/SiLU had been AVX2 since §28a/§28c.
+
+Change: `detect_uncached()` in an anonymous namespace plus a function-local
+`static const CpuInfo` in the public `const CpuInfo& detect()`. No arithmetic,
+no dispatch decision, no output change — the detection happens once instead
+of ~12,000 times a second. Regression test `cpu_detect_is_cached` asserts
+stable identity (it fails against the old by-value version by construction).
+
+Measurement: stash-built old binary kept at `Temp/opencode/tge_old.exe`,
+interleaved pairs, same window, greedy story prompt, `--threads 10`, 64 tok.
+
+| Q8_0, 6 interleaved pairs | before | after |
+|---|---|---|
+| decode t/s (each pair) | 45.75 / 37.60 / 43.47 / 44.01 / 48.72 / 47.09 | 41.62 / 50.22 / 43.69 / 50.26 / 51.95 / 51.43 |
+| median decode | 44.88 t/s | 50.24 t/s (**+8%**, 5/6 pairs) |
+| decode `norm` phase | 90.7-101.9 ms | 5.3-6.1 ms (**-94%**, load-proof) |
+
+| Q4_K_M, 4 interleaved pairs | before | after |
+|---|---|---|
+| decode t/s | 31.09 / 35.39 / 31.71 / 32.50 | 42.56 / 38.80 / 36.70 / 39.20 |
+| median decode | 32.10 t/s | 39.00 t/s (**+18%**, 4/4 pairs) |
+
+Text output byte-identical on both models (`..., As John traveled, he`).
+Tests **187/187** (186 + caching regression), `ctest` 1/1.
+
+Honesty note: the first Q8_0 pair runs NEW below OLD (41.62 vs 45.75) — it
+was the first invocation of the freshly linked binary (cold code pages). The
+`norm` phase delta is the decisive evidence: it is a work-count change
+(~200 topology enumerations per token → 0), not a t/s ratio subject to this
+box's ±20% load band, and it appears on both models. The Q8_0 and Q4_K_M
+decode medians move the same direction in every aggregate. Absolute `measure.ps1`
+batch numbers are not compared across this change: mem read moved 33.66 →
+39.54 GB/s between the two snapshots (box load), so only the interleaved
+pairs count. Kept on the mechanism + the deterministic phase delta + parity.
