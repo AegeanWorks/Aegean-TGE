@@ -4914,3 +4914,29 @@ notch above ordinary user threads — it reduces preemption here but can
 outrank other user processes on a shared machine. The alternative (a decode-
 only flag) needs plumbing through `set_pin_threads`/pool construction and
 was not built for this measurement; revisit if the side effect matters.
+
+### Raise the calling thread too (KEPT, +3-9% on top of the worker change)
+
+The calling thread is itself a `parallel_for` participant (it claims chunks)
+and runs the sampler, but stayed at normal priority while workers were
+ABOVE_NORMAL — so it could be preempted mid-step and hold up the join.
+`generate` now calls `SetThreadPriority(ABOVE_NORMAL)` on itself once at
+startup on Windows. No arithmetic change.
+
+Health gate passed (mem read 38.50/49.02 GB/s, x1/x4 clean both pairs).
+Byte-identical ids on story and 300-token prompts; 187/187 with the change.
+
+| set | wins/losses | median base | median caller raised |
+|---|---|---|---|
+| Q8_0 batch 1 (24) | 12 / 12 | 73.70 t/s | 75.97 t/s (+3.1%) |
+| Q8_0 batch 2 (24) | 17 / 7 | 67.62 t/s | 71.68 t/s (+6.0%) |
+| Q8_0 batch 3 (24) | 23 / 1 | 62.43 t/s | 67.97 t/s (+8.9%) |
+| Q4_K_M (12) | 12 / 0 | 48.36 t/s | 51.38 t/s (+6.2%) |
+
+Combined Q8_0 **52 wins / 20 losses over 72 pairs** with all three medians
+positive, plus a clean 12/0 Q4_K_M control. This clears the sign-consistency
+bar decisively. Kept. Tests 187/187, gates 4/4.
+
+Same tradeoff as the worker change applies (one notch above ordinary user
+threads, process-wide effect); it is now applied consistently to every
+thread doing decode work.

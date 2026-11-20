@@ -521,6 +521,11 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     std::fprintf(stderr, "generate: token count must be positive\n");
     return 2;
   }
+#if defined(_WIN32)
+  // The caller is itself a parallel_for participant and runs the sampler;
+  // match the one-notch worker priority so it is not preempted mid-step.
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
   const tge::cpu::CpuInfo cpu = tge::cpu::detect();
   const tge::cli::Preflight preflight{
       sparse.enabled, sparse.window, sparse.stride, kv_half, kv_q8, vnni,
