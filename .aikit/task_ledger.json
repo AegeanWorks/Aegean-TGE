@@ -23,18 +23,6 @@
   "checkpoints": [
     {
       "task_id": "reforge:run-1",
-      "phase": "reforge stage 9",
-      "phase_num": 3,
-      "description": "Reforge stage 9: stage 9 host review reviewed; run completed; coverage 844/844",
-      "files_affected": [],
-      "status": "completed",
-      "timestamp": 1795069395.5014126,
-      "timestamp_str": "2026-11-19 09:23:15",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
-    {
-      "task_id": "reforge:run-1",
       "phase": "reforge stage 10",
       "phase_num": 3,
       "description": "Reforge stage 10: stage 10 host review reviewed; run completed; coverage 89/89",
@@ -340,6 +328,17 @@
       "chore": true,
       "timestamp": 1795202394.5831707,
       "timestamp_str": "2026-11-20 22:19:54",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795203273",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record adaptive speculation pin experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795203273.5557804,
+      "timestamp_str": "2026-11-20 22:34:33",
       "agent": "opencode"
     }
   ]
