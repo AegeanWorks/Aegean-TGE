@@ -5023,3 +5023,14 @@ and 300-token prompts; 187/187 with the change. 24 interleaved decode pairs:
 unpack shuffles cost more than the three saved load uops, and the kernel is
 bandwidth-bound anyway. Reverted in full, rebuilt, 187/187 green. No code
 ships.
+
+### Spin attempts 2048 -> 1024: reverted (2026-11-21)
+
+Opposite direction to the earlier 8192 test: with priority-elevated workers
+responding faster, halve the spin before parking to free the core sooner.
+Health gate passed (mem read 57.44/39.13 GB/s, x1/x4 clean both pairs);
+byte-identical ids on story and 300-token prompts; 187/187 with the change.
+24 interleaved decode pairs: **9 wins / 15 losses**, medians 74.24 ->
+73.18 t/s (-1.4%). Parking the main/worker threads sooner costs more than
+the freed core saves. Reverted in full, rebuilt, 187/187 green. No code
+ships. Both spin directions are now measured null.
