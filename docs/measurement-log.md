@@ -4987,3 +4987,16 @@ priority buys nothing measurable on a box where ABOVE_NORMAL already won
 threads, so there is no trade that justifies it. Reverted in full
 (`git checkout apps/cli/main.cpp`, rebuilt, 187/187 green;
 ABOVE_NORMAL_PRIORITY_CLASS confirmed still present). No code ships.
+
+### Disable thread priority boost: reverted (2026-11-21)
+
+After the priority wins, tried `SetThreadPriorityBoost(FALSE)` on workers so
+Windows would not temporarily reduce their ABOVE_NORMAL priority after I/O
+events. Health gate passed (mem read 50.91/33.80 GB/s, x1/x4 clean 3/3 on
+retry); byte-identical ids on story and 300-token prompts; 187/187 with
+the change. 24 interleaved decode pairs: **12 wins / 12 losses**, medians
+76.44 -> 75.42 t/s (-1.3%). No win — the explicit priority is already
+stable enough. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Note: the six kept wins were pushed to origin after this drive step
+(`master` 52 commits, `aikit.py push` ran 4/4 gates first).
