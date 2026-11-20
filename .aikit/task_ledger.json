@@ -3,8 +3,8 @@
   "active_task": {
     "task_id": "TGE-GPU-DEFAULT-OFF",
     "last_phase": "phase 4",
-    "active_phase": 4,
-    "status": "in_progress",
+    "active_phase": 5,
+    "status": "completed",
     "updated_at": 1795198455.6226182,
     "owner": "opencode:session",
     "lease_until": 1795205655.6226182,
@@ -15,21 +15,12 @@
         "name": "aegean-tge",
         "path": "projects/aegean-tge"
       }
-    ]
+    ],
+    "completed_at": 1795198517.9960146,
+    "completed_head": "dab01badbdf2666754df1365498c5fd91911fed1",
+    "completed_tree": "a06ecae07f90ca27e248c3121dfe5dcf019235f2"
   },
   "checkpoints": [
-    {
-      "task_id": "reforge:run-1",
-      "phase": "reforge stage 9",
-      "phase_num": 3,
-      "description": "Reforge stage 9: stage 9 host review reviewed; run active; coverage 844/844",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795041157.7813046,
-      "timestamp_str": "2026-11-19 01:32:37",
-      "agent": "opencode",
-      "operator_task": "TGE-KEEPGRADE-INTEGRATION"
-    },
     {
       "task_id": "reforge:run-1",
       "phase": "reforge stage 10",
@@ -339,6 +330,23 @@
           "path": "projects/aegean-tge"
         }
       ]
+    },
+    {
+      "task_id": "TGE-GPU-DEFAULT-OFF",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-GPU-DEFAULT-OFF' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795198518.0602365,
+      "timestamp_str": "2026-11-20 21:15:18",
+      "agent": "opencode:session",
+      "head": "dab01badbdf2666754df1365498c5fd91911fed1",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
