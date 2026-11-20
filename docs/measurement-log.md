@@ -4868,3 +4868,19 @@ MEDIAN_OLD=43.04 t/s   MEDIAN_NOW=55.92 t/s   (+30.0%)
 Every pair favors the current tree. This is a re-measurement, not a new
 change — no code ships. It confirms the cached detection, GPU default off,
 and wide Q8_0 output pool gains survive together under current load.
+
+### Two bands per worker on the wide output path: reverted (2026-11-21)
+
+After the kept output win, that matvec runs 16 threads / ~152k rows / 64
+bands; tried two bands per worker (32 bands) to cut atomic steal traffic,
+scoped to `threads >= 16` so the 10-thread layer matvecs are untouched.
+Health gate passed (mem read 47.34/45.65/54.71 GB/s, x1/x4 clean both
+pairs). Byte-identical ids on story and 300-token prompts; 187/187 with
+the change.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story, `--threads 10`:
+batch 1 **14W/10L**, medians 68.37 -> 69.40 t/s (+1.5%); batch 2
+**13W/11L**, medians 71.46 -> 69.46 t/s (-2.8%). Combined 27W/21L with
+cancelling medians — no reproducible win, same verdict as the earlier
+global band x2/x8 tests. Reverted in full (`git checkout` of the single
+kernel file, rebuilt, 187/187 green). No code ships.
