@@ -5163,3 +5163,14 @@ x1/x4 clean both pairs); byte-identical ids on story and 300-token prompts;
 7W/17L (-1.5%) — combined 20W/28L with cancelling medians. All three
 accumulator counts (1, 2, 4) are now measured null; the kernel is
 bandwidth-bound. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Unigram last-resort drafter (2026-11-21): when exact/bigram/gapped paths
+abstain, propose the most frequent recent token. Test suite stayed 187/187
+(the two-substitution regression still passes because existing paths win on
+its history); byte-identical ids with `--speculative` on story and long
+prompts; the fallback fired on story (1 step, 1 accepted). Health gate passed
+(mem read 50.62/55.98 GB/s, x1/x4 clean both pairs). 24 interleaved pairs
+with `--speculative` on story: **10 wins / 14 losses**, medians 83.04 ->
+81.53 t/s (-1.8%). The extra verify pass for a low-value proposal costs more
+than the occasional acceptance. Reverted in full, rebuilt, 187/187 green.
+No code ships.
