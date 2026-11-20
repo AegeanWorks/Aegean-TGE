@@ -25,24 +25,6 @@
       "task_id": "TGE-AUDIT-FINDINGS-FIX",
       "phase": "phase 4",
       "phase_num": 4,
-      "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 git-ignored spike logs' verdicts preserved in tracked docs/idea-verdict-index.md, scratch deleted, inbox now empty. No commit/push (no authorization).",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795091361.7604449,
-      "timestamp_str": "2026-11-19 15:29:21",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-AUDIT-FINDINGS-FIX",
-      "phase": "phase 4",
-      "phase_num": 4,
       "description": "[2/2] All 15 Reforge audit findings fixed and verified (suite 174->186 cases, 0 failed; ctest 1/1; 4/4 gates). Reports inbox triaged: 294 tracked spike logs' verdicts preserved in docs/idea-verdict-index.md, originals removed (recoverable from git history), inbox now empty. No commit/push (no authorization).",
       "files_affected": [],
       "status": "in_progress",
@@ -318,6 +300,17 @@
       "chore": true,
       "timestamp": 1795204548.59904,
       "timestamp_str": "2026-11-20 22:55:48",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795205023",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the LTO experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795205023.2279565,
+      "timestamp_str": "2026-11-20 23:03:43",
       "agent": "opencode"
     }
   ]
