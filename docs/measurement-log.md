@@ -4851,3 +4851,20 @@ the kept 16-thread win had (16/8, 16/8, 9/3). Added complexity (a third pool
 and 12 extra threads) for an unproven delta. Reverted in full (`git checkout`
 of the two source files, rebuilt, 187/187 green); the committed
 16-thread output win is intact (verified by grep). No code ships.
+
+### Cumulative verification of the three kept wins (2026-11-20)
+
+End-to-end sanity check that the three kept changes compose rather than
+cancel: the original pre-win binary (saved at the start of this drive,
+GPU default auto, uncached detect, decode-pool output) vs current HEAD,
+24 interleaved pairs, quiet box (mem read 32.80/41.48 GB/s, x1/x4 clean
+both pairs), 0.5B Q8_0 story, 64 tok, `--threads 10`.
+
+```
+CUMULATIVE WINS=24 LOSSES=0
+MEDIAN_OLD=43.04 t/s   MEDIAN_NOW=55.92 t/s   (+30.0%)
+```
+
+Every pair favors the current tree. This is a re-measurement, not a new
+change — no code ships. It confirms the cached detection, GPU default off,
+and wide Q8_0 output pool gains survive together under current load.
