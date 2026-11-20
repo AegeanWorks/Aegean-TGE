@@ -4801,3 +4801,21 @@ so shaving scalar scale work cannot move it (same verdict as the 8- and
 16-block attempts and the 4-accumulator attempt). Reverted in full
 (`git checkout` of the single kernel file, rebuilt, 187/187 green).
 No code ships.
+
+### Wide pool for GQA decode attention: strongly reverted (2026-11-20)
+
+Extending the output-projection idea: `attention_gqa` had ~20 tasks on the
+10-thread decode pool; routed it to the 16-thread prefill pool while keeping
+the chunk count derived from `threads` (so online-softmax arithmetic is
+unchanged). Health gate passed (mem read 37.95/46.21/39.83/57.53 GB/s after
+two low samples, x1/x4 clean both pairs). Byte-identical ids on story and
+300-token prompts; 187/187 with the change.
+
+24 interleaved decode pairs, 300-token prompt (GQA engages), `--threads 10`:
+**6 wins / 18 losses**, medians **48.10 (baseline) vs 10.11 (wide) t/s**.
+The box also collapsed mid-window (values 1-62), so the exact magnitudes are
+load narrative — but 18/24 losses is a decisive negative sign, and attention
+is only 1-11% of decode, so there was little to gain. Reverted in full
+(`git checkout src/models/qwen2.cpp` back to HEAD — the committed
+output-projection win is intact, verified by grep), rebuilt, 187/187 green.
+No code ships.
