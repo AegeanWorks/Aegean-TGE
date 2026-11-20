@@ -4569,3 +4569,13 @@ for the bandwidth-bound output projection. Bit-exact, 187/187 green,
 but 10 interleaved pairs gave **6 wins / 4 losses** with OLD ranging
 40-68 t/s — a coin flip inside this box's ±20% band. Reverted in full
 (`git checkout`, rebuilt, 187/187 green). No code ships from either test.
+
+Follow-up on the band idea, opposite direction: `threads * 2` (larger bands,
+fewer stealable tasks) gave **3 wins / 7 losses** over 10 pairs. Both
+directions are noise around the shipped `* 4`; the setting stays.
+
+Also tested a longer worker spin (`kSpinAttempts` 2048 -> 8192) to keep
+the ~10 decode workers spinning through the norm/attention gaps between
+the 169 parallel calls per token. 10 interleaved pairs: **4 wins / 6
+losses**, with OLD swinging 23-58 t/s (heavily loaded box). Reverted in
+full, rebuilt, 187/187 green. No code ships.
