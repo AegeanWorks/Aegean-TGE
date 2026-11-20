@@ -5214,3 +5214,13 @@ thread counts, 24 interleaved pairs on a quiet box (mem read 43.63 GB/s,
 x1/x4 clean): **23 wins / 1 loss for 12**, medians 57.32 -> 62.74 t/s
 (+9.5%). The default generalizes; no regression on the K-quant model.
 No code change.
+
+Speculation value quantified in the final config (2026-11-21): on a
+repetitive prompt (fox-and-dog sentence x8), the drafter fires 9 steps at
+2.78 accepted/step, greedy ids byte-identical to the non-speculative run.
+24 interleaved pairs: **23 wins / 1 loss for --speculative**, medians 83.54
+-> 88.03 t/s (+5.4%). Together with the earlier neutral result on the
+non-repetitive story prompt (12/12, -0.1%), this confirms the opt-in design:
+a clear win where repetition exists, no cost where it does not. The flag
+stays opt-in (it also pins head attention at long context, which was not
+re-tested here). No code change.
