@@ -4783,3 +4783,21 @@ The kernel is bandwidth-bound on the weight stream (§28ak), so hiding FMA
 latency buys nothing here — consistent with every other ALU-side attempt.
 Reverted in full (`git checkout` of the single kernel file, rebuilt,
 187/187 green). No code ships.
+
+### Permute-broadcast Q8 scales: reverted (2026-11-20)
+
+Refined the F16C scale variant: convert 8 halves with one `_mm256_cvtph_ps`,
+then broadcast lane j with `_mm256_permutevar8x32_ps` instead of the earlier
+attempt's aligned store + 8 scalar loads + 8 `_mm256_set1_ps`. Removes the
+round-trip while keeping exact values. Health gate passed (mem read
+32.92/54.00/53.62 GB/s, x1/x4 clean both pairs). Byte-identical ids on story
+and 300-token prompts; 187/187 with the change.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story, `--threads 10`:
+batch 1 **11W/13L**, medians 73.19 -> 75.57 t/s (+3.3%); batch 2
+**11W/13L**, medians 72.88 -> 72.67 t/s (-0.3%). Combined 22W/26L with
+cancelling medians — no reproducible win. Q8_0 decode is bandwidth-bound,
+so shaving scalar scale work cannot move it (same verdict as the 8- and
+16-block attempts and the 4-accumulator attempt). Reverted in full
+(`git checkout` of the single kernel file, rebuilt, 187/187 green).
+No code ships.
