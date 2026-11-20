@@ -5072,3 +5072,10 @@ Thread-count ceiling check: 12 vs 14 on the current build, 24 interleaved
 pairs — **10 wins / 14 losses for 14**, medians 78.70 -> 76.16 t/s (-3.2%).
 12 is the peak; the earlier 16-thread collapse and this 14 result bracket the
 optimum. No config change. No code ships.
+
+Output-pool width ceiling check in the new configuration: `--prefill-threads
+14` vs default 16 (the wide Q8_0 output projection uses the prefill pool),
+24 interleaved pairs on a quiet box (mem read 40.68/34.20 GB/s, x1/x4 clean
+both pairs): **5 wins / 19 losses for 14**, medians 76.43 -> 73.24 t/s
+(-4.2%). 16 remains optimal for the output matvec too; the two pool widths
+are now bracketed on both sides. No config change. No code ships.
