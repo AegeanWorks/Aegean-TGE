@@ -4708,3 +4708,30 @@ No keep condition. Reverted in full (`git checkout CMakeLists.txt`, full
 rebuild, 187/187 green). Also a portability reason to decline: a
 CPU-family-specific tune in a binary shipped for general x86-64 could
 hurt other machines for no measured gain here. No code ships.
+
+### LTO: toolchain workaround needed, no reproducible win, reverted (2026-11-20)
+
+Build-level lever: `-flto` on compile + link for MinGW GCC. Goal was
+cross-TU inlining and devirtualizing the `KernelSet` function pointers.
+First build failed at link (`tge::gpu::shutdown`, `tge::cpu::to_json`,
+`tge::memory::pool_name` undefined) — MinGW's `ar`/`ranlib` index drops
+LTO-only symbols from the static archive; `-ffat-lto-objects` fixed it.
+Health gate passed (mem read 44.59/32.97 GB/s, x1/x4 clean both pairs).
+Full 56-TU rebuild, 187/187 green, byte-identical `--print-ids` on story
+and 300-token prompts.
+
+Two 24-pair interleaved batches, 0.5B Q8_0 story, `--threads 10`:
+
+| batch | wins/losses | median base | median LTO |
+|---|---|---|---|
+| 1 | 13 / 11 | 65.44 t/s | 66.00 t/s (+0.9%) |
+| 2 | 15 / 9 | 62.18 t/s | 61.64 t/s (-0.9%) |
+| combined | 28 / 20 | — | medians cancel |
+
+Sign count leans positive (58%) but the two median deltas have opposite
+signs and both sit inside the ±20% box band — not a reproducible win. Also
+a bad trade on build robustness: the plain `-flto` configuration does not
+link at all here, and the working form needs a fat-object workaround plus
+serial LTRANS. Reverted in full (`git checkout CMakeLists.txt`, full
+rebuild, 187/187 green). No code ships. Build-level levers are now closed
+(mtune and LTO both measured null).
