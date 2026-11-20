@@ -4966,3 +4966,8 @@ the whole process, so the CLI can outrank other ordinary user processes while
 it runs. It is not HIGH_PRIORITY_CLASS or realtime, and the change is confined
 to the `generate` command; revisit if running alongside latency-sensitive
 work matters.
+
+Post-priority cumulative re-check, same original pre-win binary vs current
+HEAD, 12 interleaved pairs: **12 wins / 0 losses**, medians **51.94 ->
+79.88 t/s (+53.8%)**. The three priority changes compose with the earlier
+three wins; no regression appears in the aggregate.
