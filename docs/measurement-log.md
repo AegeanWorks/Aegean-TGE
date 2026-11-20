@@ -5182,3 +5182,11 @@ both pairs); byte-identical ids on story and 300-token prompts; 187/187 with
 the change. 24 interleaved decode pairs: **7 wins / 17 losses**, medians
 86.80 -> 84.66 t/s (-2.5%). Coarser claiming hurts load balance here too.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+f32 GEMV horizontal reduction (2026-11-21): replaced `dot_row`'s aligned
+store + scalar eight-lane sum with shuffle-based reduction. Health gate passed
+(mem read 53.15 GB/s, x1/x4 clean); byte-identical ids on Q8_0 and Q4_K_M;
+187/187 with the change. Two 24-pair Q8_0 decode batches: 13W/11L (+0.9%)
+then 9W/15L (-2.7%) — medians cancel. Expected: Q8_0 decode dispatches the
+Q8_0 GEMV, not the f32 one, so the change cannot move this workload. Reverted
+in full, rebuilt, 187/187 green. No code ships.
