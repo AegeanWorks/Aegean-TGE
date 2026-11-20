@@ -22,17 +22,6 @@
   },
   "checkpoints": [
     {
-      "task_id": "chore-1795198961",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record reverted Q8 scale-vectorisation experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795198961.0802555,
-      "timestamp_str": "2026-11-20 21:22:41",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795200902",
       "phase": "chore",
       "phase_num": 1,
@@ -265,6 +254,17 @@
       "chore": true,
       "timestamp": 1795208382.138281,
       "timestamp_str": "2026-11-20 23:59:42",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795208794",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the wide-output band experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795208794.262059,
+      "timestamp_str": "2026-11-21 00:06:34",
       "agent": "opencode"
     }
   ]
