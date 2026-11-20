@@ -4604,3 +4604,30 @@ projection. Reverted in full, rebuilt, 187/187 green. No code ships.
 Scheduling is now well-falsified in both directions (band x2/x8, spin,
 grain, threads 10/12). The two standing wins remain structural: cached
 detection and GPU default off.
+
+### §39 two-phase prefill input residency: implemented, reverted (2026-11-20)
+
+Closed the log's long-standing §39 open item. `gemv_dequant_batch_avx2`
+now had two exported implementations: the original single-phase loop, and
+a two-phase form that dequantizes the whole band into a per-worker buffer
+once (q6k-down: 48 rows x 8192 = 1.5 MB), then runs token blocks of 8
+outer / rows inner. Gated to `tokens >= 8 && cols >= 4096` on Q4_K/Q6_K
+(prefill-wide only; decode tokens==1 untouched).
+
+Bit-exact differential written FIRST: `dequant_batch_two_phase_matches_single_phase_bitwise`
+calls both implementations on identical q6k/q4k bytes (rows 8, cols 8192,
+tokens 64) and `memcmp`s the outputs. It passed on first build; suite
+188/188 with it. Stash-built old/new binaries, interleaved, health gate
+checked first (`bench mem` read 26.45 GB/s, no x1>x4 inversion on q6k-down:
+x1 1.25/2.16 vs x4 55.49/13.78 GFLOPS).
+
+| q6k down 3072x8192 x64, 10 pairs | single-phase | two-phase |
+|---|---|---|
+| GFLOPS | 114.7 / 100.85 / 122.14 / 83.8 / 101.39 / 127.51 / 97.24 / 101.48 / 91.5 / 103.53 | 69.67 / 81.63 / 126.48 / 76.4 / 96.92 / 95.23 / 80.89 / 136.9 / 98.57 / 84.87 |
+| verdict | **3 wins / 7 losses** | slower |
+
+The L2-resident input block does not pay for the 1.5 MB per-worker
+dequantized band and its 8x re-reads; the original scratch-row path already
+keeps each input row in L1 across the token loop. Reverted in full (three
+files `git checkout`, rebuilt, 187/187 green, only pre-existing untracked
+reforge state left). No code ships; §39's item is now measured, not open.
