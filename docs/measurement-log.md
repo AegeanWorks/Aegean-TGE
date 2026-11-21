@@ -5530,3 +5530,23 @@ medians 71.78 -> 64.92 t/s (-9.6%). Each worker now jumps ~60 KB between its
 rows, defeating the hardware prefetcher that the contiguous band layout feeds.
 Reverted in full, rebuilt, 187/187 green. No code ships. Contiguous bands
 remain optimal.
+
+## 2026-11-21 - Lower the 128→64 prefill chunk split to 2048 (KEPT, +4%)
+
+The prefill loop used 128-row chunks up to 4096 prompt tokens and 64 above.
+With the wide output pool and other wins in place, 128-row chunks in the
+2048-4096 range are now slower: the extra attention work per larger chunk
+outweighs the weight-stream amortization. Lowered the split to 2048.
+
+Health gate passed (mem read 53.23 GB/s, x1/x4 clean both pairs). Byte-identical
+greedy ids on 300- and 3000-token prompts; 187/187 with the change. At 3000
+prompt tokens, prefill tok/s over two 24-pair batches:
+
+| batch | wins/losses | median 128-chunk | median 64-chunk |
+|---|---|---|---|
+| 1 | 21 / 3 | 250.25 t/s | 259.90 t/s (+3.9%) |
+| 2 | 22 / 2 | 249.45 t/s | 259.35 t/s (+4.0%) |
+
+Boundary check: 1500 tokens (unchanged path) 294.75 vs 294.25 t/s (noise);
+3500 tokens 245.3 -> 254.7 t/s. Kept on 43/48 pairs (90%) with consistent
+positive medians. Tests 187/187, gates 4/4. This is the eighth kept win.

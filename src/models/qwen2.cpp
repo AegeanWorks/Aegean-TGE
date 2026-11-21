@@ -2416,7 +2416,7 @@ const float* Qwen2::prefill_run(const int* tokens, int count, int start_position
     }
   }
   int last_rows = 0;
-  const int chunk_limit = count <= 4096 ? capacity : std::min(capacity, 64);
+  const int chunk_limit = count <= 2048 ? capacity : std::min(capacity, 64);
   while (consumed < count) {
     const int chunk = std::min(chunk_limit, count - consumed);
     const int* chunk_tokens = tokens + consumed;
