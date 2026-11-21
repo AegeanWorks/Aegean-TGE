@@ -5341,3 +5341,10 @@ identical ids on a 100-token prompt; 187/187 with the change. 24 interleaved
 pairs: **5 wins / 19 losses**, medians 93.88 -> 92.96 t/s (-1.0%). The
 parallel per-head path already pays off past 64 positions; keep the threshold.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Opposite direction of that threshold: 64 -> 32 (pool engages earlier). Health
+gate passed (mem read 57.79 GB/s, x1/x4 clean); byte-identical ids on story;
+187/187 with the change. 24 interleaved pairs: **12 wins / 12 losses**, medians
+100.20 -> 99.77 t/s (-0.4%). Both 32 and 128 measured worse than 64, so the
+existing inline-attention threshold is bracketed as optimal. Reverted in full,
+rebuilt, 187/187 green. No code ships.
