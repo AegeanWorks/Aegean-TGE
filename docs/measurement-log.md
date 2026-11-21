@@ -5720,3 +5720,10 @@ reduction order, and an 8-way tree changes rounding. This is why the original
 4-vs-1 sweep was confined to the Q8_0 kernel, which has no such exact-match
 contract. Reverted in full, rebuilt, 187/187 green. No code ships. No speed
 A/B was run — a failing correctness gate outranks it (PRINCIPLE-000 R6).
+
+Batch kernel parallel_for grain 1 -> 2 (2026-11-21): the reviewer noted grain
+was swept in the decode Q8_0 kernel but never the batch kernel. Byte-identical
+ids at 2048; 187/187 with the change. 24 interleaved prefill pairs:
+**2 wins / 22 losses**, medians 301.45 -> 295.85 t/s (-1.9%). Coarser claiming
+harms load balance here exactly as it did in the decode kernel — grain 1 is
+correct for both. Reverted in full, rebuilt, 187/187 green. No code ships.
