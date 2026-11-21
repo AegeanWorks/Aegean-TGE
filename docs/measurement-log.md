@@ -6003,3 +6003,13 @@ the change. Two 24-pair prefill batches at 2048: 6W/18L each — combined 12/48
 32 B), so re-reading it across groups costs more than the widening ALU saved —
 the same reason the two-phase dequant prefill (§39) failed. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Vectorized max scan in the block-attention softmax (2026-11-21): the exp and
+normalization passes had been tested (both rejected), but the scalar
+`std::max` scan over `span` scores had not. Replaced with _mm256_max_ps lanes +
+a bit-exact horizontal max. Health gate passed (mem read 49.42 GB/s, x1/x4
+clean); byte-identical ids at 4080 and 2048 f16; 187/187 with the change. Two
+24-pair prefill batches at 4080 --kv f16: 12W/12L (-2.3%) then 17W/7L (+0.7%)
+— combined 29/48 (60%), cancelling medians. The max scan is memory-bound (scores
+already in cache) so the SIMD reduction overhead is not repaid. Reverted in
+full, rebuilt, 187/187 green. No code ships.
