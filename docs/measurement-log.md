@@ -5248,3 +5248,14 @@ last build-level lever after mtune and LTO. Health gate passed (mem read
 medians 93.00 -> 92.90 t/s (-0.1%). The binary even grew (3.88 -> 3.99 MB),
 so there is no size or speed benefit. Reverted in full, rebuilt, 187/187
 green. No code ships. All three build-level levers are now measured null.
+
+f16 KV at 2048-token context (2026-11-21): byte-identical greedy ids vs f32
+on a 2048-id prompt (attention is 22% of decode there). Health gate passed
+(mem read 54.75 GB/s, x1/x4 clean). Two 24-pair batches: 16W/8L (+2.0%
+median) then 19W/5L (+7.8%) — combined 35W/13L, a real win where KV reads
+dominate. But it cannot become the default: `--kv auto` calls
+`auto_kv_half(context_limit)`, i.e. it keys on the ALLOCATED context (4096 by
+default), not actual prompt length, so it selects f16 even for a 4-token
+prompt — where the log already measured f16 slower. Making auto the default
+would regress short contexts. f16 stays explicitly opt-in for long contexts;
+no code change.
