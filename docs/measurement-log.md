@@ -5520,3 +5520,13 @@ medians 85.74 -> 84.08 t/s (-1.9%). The extra 17 MB scale stream competes with
 the weight stream for bandwidth, costing more than the saved scalar conversion
 (a known pattern: this kernel is bandwidth-bound). Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+Strided rows in the Q8_0 output GEMV (2026-11-21): abstract memory-layout idea
+— assign each of the 16 workers every 16th row (index = band + k*bands) so the
+concurrent streams stay inside a ~60 KB region instead of far-apart 2 MB
+bands, improving DRAM row-buffer/L3 locality. Bit-exact (story and long ids),
+187/187 with the change. 24 interleaved decode pairs: **4 wins / 20 losses**,
+medians 71.78 -> 64.92 t/s (-9.6%). Each worker now jumps ~60 KB between its
+rows, defeating the hardware prefetcher that the contiguous band layout feeds.
+Reverted in full, rebuilt, 187/187 green. No code ships. Contiguous bands
+remain optimal.
