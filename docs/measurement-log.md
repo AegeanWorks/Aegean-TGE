@@ -5560,3 +5560,21 @@ once per output row, and a 256-row activation block no longer fits in cache —
 exactly the constraint documented at the kPrefillChunk definition. Reverted in
 full, rebuilt, 187/187 green. No code ships. 64/128 are now bracketed as the
 chunk sizes.
+
+## 2026-11-21 - Lower the 128→64 prefill split from 2048 to 1024 (KEPT, +2.5%)
+
+After the 2048 win, tested whether the crossover is lower still. Lowered the
+split to 1024 so prompts above it use 64-row chunks.
+
+Health gate passed (mem read 58.71 GB/s, x1/x4 clean both pairs). Byte-identical
+greedy ids at 300/1500/3000 tokens; 187/187 with the change. Prefill tok/s at
+1500 prompt tokens over two 24-pair batches:
+
+| batch | wins/losses | median 128-chunk | median 64-chunk |
+|---|---|---|---|
+| 1 | 18 / 6 | 286.65 t/s | 293.55 t/s (+2.4%) |
+| 2 | 21 / 3 | 276.25 t/s | 283.75 t/s (+2.7%) |
+
+Boundary check: 800 tokens (unchanged) 292.85 vs 290.70 (noise); 1100 tokens
+282.70 -> 287.90 t/s. Kept on 39/48 pairs (81%) with consistent medians.
+Tests 187/187, gates 4/4. This is the ninth kept win.
