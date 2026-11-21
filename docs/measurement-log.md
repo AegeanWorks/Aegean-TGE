@@ -5799,3 +5799,16 @@ construction — elementwise, unchanged exp values). Health gate passed (mem rea
 round-trip costs what the parallel merge saves — same pattern as the earlier
 parallel-argmax test. Reverted in full (two coordinated files), rebuilt, 187/187
 green. No code ships.
+
+AVX2 elementwise vectorisation of the GQA chunk-merge reduction (2026-11-21):
+the reviewer noted the elementwise loop (reduction[i] = reduction[i]*alpha +
+chunk_acc[i]*beta, head_dim wide) was never vectorised, only parallelised across
+heads (flat at ec1cdf5). Wired a GqaMergeFn through the kernels() dispatch —
+scalar in attention_scalar.cpp (mul+mul+add, no FMA, so exact) and AVX2 in
+attention_avx2.cpp, plus dispatch.hpp/.cpp and kernels.hpp (6 files). Health gate
+passed (mem read 52.46 GB/s, x1/x4 clean); byte-identical ids on Q8/Q4KM 2048 and
+Q8 story; 187/187 with the change. Two 24-pair decode batches at 2048:
+12W/12L (+0.1% median) then 11W/13L (+0.4%) — combined 23/48 (48%), flat. The
+merge is simply not a decode bottleneck; the extra dispatch call per chunk
+(eleven per head) costs what the 8-wide loop saves. Reverted in full (6 files),
+rebuilt, 187/187 green. No code ships.
