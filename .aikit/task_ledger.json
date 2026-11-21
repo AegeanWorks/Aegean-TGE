@@ -81,17 +81,6 @@
       }
     },
     {
-      "task_id": "chore-1795223462",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the one-band-per-worker experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795223462.1581178,
-      "timestamp_str": "2026-11-21 04:11:02",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795223760",
       "phase": "chore",
       "phase_num": 1,
@@ -265,6 +254,17 @@
       "chore": true,
       "timestamp": 1795248387.3273845,
       "timestamp_str": "2026-11-21 11:06:27",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795248951",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the parallel argmax experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795248951.7659671,
+      "timestamp_str": "2026-11-21 11:15:51",
       "agent": "opencode"
     }
   ]
