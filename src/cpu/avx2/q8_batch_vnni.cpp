@@ -44,7 +44,7 @@ inline __m256i lane_sums(__m256i bytes, __m256i ones8, __m256i ones16) {
   return _mm256_madd_epi16(pairs, ones16);
 }
 
-constexpr int kGroup = 6;
+constexpr int kGroup = 8;
 
 }  // namespace
 

@@ -5644,3 +5644,23 @@ the change. 24 interleaved prefill pairs: **8 wins / 16 losses**, medians 299.7
 -> 295.7 t/s (-1.3%). Ten accumulators plus four weight vectors finally do
 spill, so 8 is the measured optimum (6 loses to 8, 8 beats 10). Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+## 2026-11-21 - VNNI batch group 6 -> 8 (KEPT, +3% on opt-in path)
+
+The paired VNNI kernel (`q8_batch_vnni.cpp`) kept its own `kGroup = 6` after
+the float batch kernel moved to 8. Raised it to 8 as well.
+
+Health gate passed (mem read 53.29 GB/s, x1/x4 clean). Byte-identical ids
+between group-6 and group-8 **both with --vnni** at 2048 tokens (VNNI's known
+KL trade vs f32 is unchanged by group size); 187/187 with the change. Prefill
+tok/s at 2048 with --vnni over two 24-pair batches:
+
+| batch | wins/losses | median group-6 | median group-8 |
+|---|---|---|---|
+| 1 | 21 / 3 | 241.70 t/s | 249.05 t/s (+3.0%) |
+| 2 | 22 / 2 | 245.45 t/s | 254.20 t/s (+3.6%) |
+
+Kept on 43/48 pairs (90%) with consistent medians. Tests 187/187, gates 4/4.
+This is the eleventh kept win. Both batch kernels now use group 8; the VNNI
+group-10 optimum was not tested (float 10 already spills, VNNI has a different
+register budget) — left as a future bracket if the opt-in path matters.
