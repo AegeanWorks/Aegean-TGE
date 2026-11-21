@@ -5333,3 +5333,11 @@ a period-2 "ab ab..." prompt no-fuse lost 0/12 (305.28 -> 230.32 t/s, -25%),
 and on non-repetitive story it lost 5/7 (99.44 -> 97.68). The win is
 prompt-specific; fusion stays the default and `--no-fuse` stays an A/B flag.
 No code change.
+
+Inline-attention threshold 64 -> 128 (2026-11-21): the per-head path runs
+inline until `position < 64`; tried staying inline to 128 with the new 12-thread
+schedule. Health gate passed (mem read 59.48/62.20 GB/s, x1/x4 clean); byte-
+identical ids on a 100-token prompt; 187/187 with the change. 24 interleaved
+pairs: **5 wins / 19 losses**, medians 93.88 -> 92.96 t/s (-1.0%). The
+parallel per-head path already pays off past 64 positions; keep the threshold.
+Reverted in full, rebuilt, 187/187 green. No code ships.
