@@ -5954,3 +5954,15 @@ change. Two 24-pair decode batches at 4040 --kv f16: 13W/11L (+2.3%) then
 2048: the gapped KV stride is already covered by the hardware prefetcher, and a
 higher attention fraction does not change that. Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+attention_group_avx2 half-KV QK^T accumulators 2 -> 4, re-test at 4040 decode
+context (2026-11-21): the decode-side counterpart to the block-attention win —
+reviewer noted the earlier 2048 test (28/48) might have been diluted. At 4040
+decode attention is 30% (vs 20% at 2048). Health gate passed (mem read 46.44
+GB/s, x1/x4 clean); byte-identical ids at 4040 and 2048 f16; 187/187 with the
+change. Two 24-pair decode batches at 4040 --kv f16: 14W/10L (+0.7%) then
+12W/12L (+0.8%) — combined 26/48 (54%), below the ~78% bar. Unlike the prefill
+block kernel (where the same change won at long context), the decode GQA dot is
+a smaller slice of a much shorter phase and the gain stays diluted. This closes
+the half-KV accumulator question at both contexts and both kernels; reverted in
+full, rebuilt, 187/187 green. No code ships.
