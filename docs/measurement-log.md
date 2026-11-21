@@ -5483,3 +5483,10 @@ long ids byte-identical); 187/187 with the change. Two 24-pair batches:
 The saved load uops are offset by the shift and register pressure; no win.
 Reverted in full, rebuilt, 187/187 green. No code ships. All load widths
 (8, 16, 32 bytes) are now measured null.
+
+`-march=x86-64-v3` global ISA uplift (2026-11-21): build-level lever meant to
+speed scalar tokenizer/dispatch code via BMI2/LZCNT/MOVBE beyond what `-mtune`
+(null) offers. The build succeeds but the test suite crashes with 0xC0000005
+partway through, so it fails the correctness gate before any A/B. The shipped
+per-TU AVX2 flags plus runtime dispatch are the safe configuration. Reverted
+in full, rebuilt, 187/187 green. No code ships.
