@@ -5943,3 +5943,14 @@ f16 dot (which had only two accumulators), dot_avx2 already has four independent
 chains over head_dim 128, so eight adds no ILP and a larger reduction tree.
 This closes the dot_avx2 accumulator question at both contexts; reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Next-row KV prefetch in attention_group_avx2, re-test at 4040 context (2026-11-21):
+the reviewer noted the earlier 2048 test (30/48) might have been diluted. This
+is a DECODE-path kernel (attention_gqa), so measured decode tok/s, not prefill —
+at 4040 decode attention is 30% (vs 20% at 2048). Health gate passed (mem read
+54.10 GB/s, x1/x4 clean); byte-identical ids at 4040 f16; 187/187 with the
+change. Two 24-pair decode batches at 4040 --kv f16: 13W/11L (+2.3%) then
+13W/11L (+1.7%) — combined 26/48 (54%), below the ~78% bar. Same verdict as at
+2048: the gapped KV stride is already covered by the hardware prefetcher, and a
+higher attention fraction does not change that. Reverted in full, rebuilt,
+187/187 green. No code ships.
