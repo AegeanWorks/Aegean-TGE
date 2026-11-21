@@ -5313,3 +5313,14 @@ unchanged there (9 steps, 2.78/step). Two 24-pair batches: 14W/10L (+0.2%)
 then 13W/11L (-0.1%) — combined 27W/23L with cancelling medians. No new
 matches worth a verify pass in these prompts. Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+Verifier batch 6 -> 8 (2026-11-21): raised kSpeculativeBatch and widened the
+drafter/accept loops accordingly (total four coordinated files). Health gate
+passed (mem read 61.06 GB/s from the preceding window, x1/x4 clean);
+byte-identical speculative ids on story and repetitive prompts; 187/187 with
+the change. Acceptance was unchanged on the repetitive prompt (9 steps,
+2.78/step) — the wider batch found no extra matches. 24 interleaved decode
+pairs with --speculative: **0 wins / 24 losses**, medians 103.60 -> 90.74
+t/s (-12%). The larger batched verifier costs more than the unchanged number
+of emitted tokens saves. Reverted in full, rebuilt, 187/187 green. No code
+ships.
