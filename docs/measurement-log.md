@@ -5490,3 +5490,13 @@ speed scalar tokenizer/dispatch code via BMI2/LZCNT/MOVBE beyond what `-mtune`
 partway through, so it fails the correctness gate before any A/B. The shipped
 per-TU AVX2 flags plus runtime dispatch are the safe configuration. Reverted
 in full, rebuilt, 187/187 green. No code ships.
+
+Short spin on the 16-wide prefill/output pool (2026-11-21): abstract idea —
+those workers spin 2048 pauses after each output projection, competing with
+the decode pool for logical cores while the next token's early layers run.
+Added a per-pool spin parameter and set 64 for the prefill pool only.
+Byte-identical ids (story and 300-token), 187/187 with the change. Two
+24-pair batches: 10W/14L (+0.4%) then 11W/13L (-3.2%) — combined 21/27 with
+flipping medians. Parking sooner does not help; the pool is reused one token
+later so the spin is not wasted. Reverted in full (three files), rebuilt,
+187/187 green. No code ships.
