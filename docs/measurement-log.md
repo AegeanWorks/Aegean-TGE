@@ -5464,3 +5464,12 @@ Q4_K_M, story and 300-token) were byte-identical; 187/187 with the change.
 t/s (-2.8%). The second accumulator set raises register pressure and the
 scheduler cannot hide the extra dependency chains; the saved activation loads
 (hot in L1) do not pay. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Block-level load pipelining in dot_row_q8 (2026-11-21): issue all four weight
+and four activation loads for a 32-value block up front, then widen+FMA in the
+original order (bit-identical; story and 300-token ids byte-identical, Q4_K_M
+control too). Health gate passed (mem read 58.79 GB/s, x1/x4 clean); 187/187
+with the change. Two 24-pair batches: 14W/10L (+0.3%) then 12W/12L (+0.9%) —
+combined 26/24 with marginal medians, far below the ~78% bar. The compiler
+already schedules the loads adequately at -O3; explicit batching just uses
+more registers. Reverted in full, rebuilt, 187/187 green. No code ships.
