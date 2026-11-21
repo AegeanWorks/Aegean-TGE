@@ -5734,3 +5734,21 @@ Byte-identical ids at 2048; 187/187 with the change. Two 24-pair decode batches
 at 2048 context (where GQA engages): 13W/11L (+0.6%) then 17W/7L (+0.7%) —
 combined 30/48 (62.5%) with marginal medians. Below the bar; grain 1 stays.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+f16 KV store vectorisation with _mm256_cvtps_ph (2026-11-21): investigated and
+NOT run — triaged as noise before spending an A/B cycle. The scalar
+float_to_half store runs 3072 conversions/token (kv_dim 128 x 24 layers),
+roughly 0.01 ms/token against a ~10 ms/token matvec (<0.1%). The phase
+breakdown confirms it: decode matvec 81%, attn 18%, norm 1%. The scalar
+float_to_half is already round-to-nearest-even, so _mm256_cvtps_ph would be
+bit-exact, but the win is far below this box's noise floor. Same dead-kernel
+triage as the f32 dot_row gemv. No code change.
+
+Dequant batch kernel parallel_for grain 1 -> 2 (2026-11-21): the last
+unexamined parallel_for in the AVX2 kernels — grain was swept in q8_gemv,
+q8_batch and attention_gqa but never the Q4_K_M dequant batch prefill kernel.
+Health gate passed (mem read 38.68 GB/s, x1/x4 clean); byte-identical Q4_K_M
+ids at 2048; 187/187 with the change. 24 interleaved prefill pairs:
+**1 win / 23 losses**, medians 260.55 -> 252.85 t/s (-3.0%). Coarser claiming
+harms load balance exactly as in the other three kernels. grain 1 is now
+optimal in all four; reverted in full, rebuilt, 187/187 green. No code ships.
