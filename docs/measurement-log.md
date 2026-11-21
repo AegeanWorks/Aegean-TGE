@@ -5704,3 +5704,9 @@ batches:
 37/48 pairs (77%), both medians positive and consistent across batches. Kept
 on the consistency; a marginal win but on a live kernel with no downside.
 Tests 187/187, gates 4/4. This is the twelfth kept win.
+
+Batch band factor 16 (2026-11-21): tested the next bracket after the kept 8.
+Byte-identical ids at 2048; 187/187 with the change. 24 interleaved prefill
+pairs: **9 wins / 15 losses**, medians 295.35 -> 295.15 t/s (flat). Factor 8
+remains optimal; 16 gives too few bands for the 16-thread pool to balance.
+Reverted in full, rebuilt, 187/187 green. No code ships.
