@@ -5812,3 +5812,16 @@ Q8 story; 187/187 with the change. Two 24-pair decode batches at 2048:
 merge is simply not a decode bottleneck; the extra dispatch call per chunk
 (eleven per head) costs what the 8-wide loop saves. Reverted in full (6 files),
 rebuilt, 187/187 green. No code ships.
+
+Degree-7 vector exp in the attention online softmax (2026-11-21): the reviewer
+noted the earlier shared-Polynomial attempt failed only the 1e-4 scalar-parity
+gate (degree-5 error accumulating over the run). Added a dedicated degree-7
+Taylor exp in attention_avx2.cpp for the two softmax call sites — accurate
+enough to pass parity (187/187) while avoiding a libm call. Byte-identical ids
+on Q8 2048 f16, Q4KM 2048, Q8 story f16. 24 interleaved decode pairs at 2048
+--kv f16: **3 wins / 21 losses**, medians 72.62 -> 69.61 t/s (-4.1%). The
+one-lane 8-wide degree-7 polynomial (~8 FMAs + range reduction) costs far more
+than libm's scalar std::exp when only lane 0 is used — the online softmax is
+sequential so there is no cross-lane batching to amortise it. This closes the
+vectorised-exp direction: both accuracy levels lose or fail. Reverted in full,
+rebuilt, 187/187 green. No code ships.
