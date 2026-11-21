@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-VNNI-GROUP8",
+    "task_id": "TGE-BBAND8",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795262650.060036,
+    "updated_at": 1795264967.8250775,
     "owner": "opencode:session",
-    "lease_until": 1795269850.060036,
+    "lease_until": 1795272167.8250775,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,74 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795262685.7474127,
-    "completed_head": "b13729fa3ae0bd0f70e45e084d585a41a1046119",
-    "completed_tree": "0605ea3923d832eadecdec664884510085fa57cd"
+    "completed_at": 1795265019.2065246,
+    "completed_head": "d4cea2d3802263296b9ea95cb960bd9d7aea677e",
+    "completed_tree": "25e9825bfd28d7d35012fafbc6581dd23ca8a6f5"
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-PREFILL-SPLIT2048",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan + lower prefill 128->64 chunk split from 4096 to 2048 tokens",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795255571.2128553,
-      "timestamp_str": "2026-11-21 13:06:11",
-      "agent": "opencode:session",
-      "impact_assessment": {
-        "why": "with the wide output pool and priority wins, 128-row chunks in the 2048-4096 range do more attention work per chunk than the weight-stream amortization saves",
-        "benefits": "+4% prefill tok/s at 3000-3500 tokens; short prompts unchanged; byte-identical ids",
-        "risks": "contract: only a threshold constant; dependency: none; concurrency: none; state: none",
-        "mitigation": "byte-identical ids at 300 and 3000 tokens, boundary check at 1500/3500, 48 interleaved pairs, 187/187 tests, 4/4 gates"
-      },
-      "plan_digest": "cafac1ca97646161d95ec5813d3bf5b66a261c882f12c8598726995d3a59ec67",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-PREFILL-SPLIT2048",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Split 2048: prefill 43/48 pairs (+4% both batches), short prompts unchanged, ids byte-identical, 187/187 tests, 4/4 gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795255571.756108,
-      "timestamp_str": "2026-11-21 13:06:11",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-PREFILL-SPLIT2048",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-PREFILL-SPLIT2048' completed successfully.",
-      "status": "completed",
-      "timestamp": 1795255629.4227972,
-      "timestamp_str": "2026-11-21 13:07:09",
-      "agent": "opencode:session",
-      "head": "342960ece2f00cc03bad821b425a9679c27dfbf3",
-      "delivery": {
-        "roots": [
-          "."
-        ],
-        "forced": false,
-        "ignored": [
-          ".aikit/cache/"
-        ],
-        "ignore_reason": "tool-generated hygiene cache, not part of this task"
-      }
-    },
     {
       "task_id": "chore-1795256248",
       "phase": "chore",
@@ -348,6 +285,65 @@
       "timestamp": 1795263916.6085746,
       "timestamp_str": "2026-11-21 15:25:16",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-BBAND8",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + raise prefill batch GEMV band factor 4->8",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795264967.356652,
+      "timestamp_str": "2026-11-21 15:42:47",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "the batch kernel's band factor was never swept; fewer larger bands may stream the 151936-row output projection better",
+        "benefits": "+1% prefill, byte-identical ids",
+        "risks": "contract: internal kernel constant; dependency: none; concurrency: none; state: none",
+        "mitigation": "byte-identical ids at 2048, 37/48 pairs, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "e60f3088473a5d51232dcbee580d1c8c2c6e0fd04b45fe6744df1227b688937a",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-BBAND8",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Batch band8: prefill 37/48 pairs (+0.9%/+1.6% medians), ids byte-identical, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795264967.8250775,
+      "timestamp_str": "2026-11-21 15:42:47",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-BBAND8",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-BBAND8' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795265019.2728932,
+      "timestamp_str": "2026-11-21 15:43:39",
+      "agent": "opencode:session",
+      "head": "d4cea2d3802263296b9ea95cb960bd9d7aea677e",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
