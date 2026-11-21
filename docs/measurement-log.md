@@ -5224,3 +5224,10 @@ non-repetitive story prompt (12/12, -0.1%), this confirms the opt-in design:
 a clear win where repetition exists, no cost where it does not. The flag
 stays opt-in (it also pins head attention at long context, which was not
 re-tested here). No code change.
+
+Cross-scale validation of the 12-thread default on qwen2.5-coder-1.5b-Q8_0:
+byte-identical greedy ids at both counts, 24 interleaved pairs (mem read
+26.20 GB/s, x1/x4 clean): **24 wins / 0 losses for 12**, medians 27.92 ->
+30.27 t/s (+8.4%). With the earlier Q8_0-0.5B (56/16) and Q4_K_M-0.5B
+(23/1) results, the default is validated across all three local model
+sizes/formats. No code change.
