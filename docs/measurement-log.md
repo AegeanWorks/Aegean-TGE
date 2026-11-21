@@ -5510,3 +5510,13 @@ pairs: **0 wins / 24 losses**, medians 84.28 -> 63.63 t/s (-24%). The E cores
 contribute real memory bandwidth to the weight stream; excluding them hurts
 far more than any schedule regularity helps. Reverted in full (three files),
 rebuilt, 187/187 green. No code ships.
+
+Pre-dequantized output scales at load (2026-11-21): abstract lever — convert
+the output matrix's ~4.25M Q8_0 half scales to float once at model load into a
+parallel array, so the per-token GEMV skips the half->float work. Four
+coordinated files; byte-identical ids on Q8_0 and Q4_K_M, story and long;
+187/187 with the change. 24 interleaved decode pairs: **7 wins / 17 losses**,
+medians 85.74 -> 84.08 t/s (-1.9%). The extra 17 MB scale stream competes with
+the weight stream for bandwidth, costing more than the saved scalar conversion
+(a known pattern: this kernel is bandwidth-bound). Reverted in full, rebuilt,
+187/187 green. No code ships.
