@@ -5348,3 +5348,12 @@ gate passed (mem read 57.79 GB/s, x1/x4 clean); byte-identical ids on story;
 100.20 -> 99.77 t/s (-0.4%). Both 32 and 128 measured worse than 64, so the
 existing inline-attention threshold is bracketed as optimal. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+More GQA chunks (threads*3 instead of *2, 16 vs 12 chunks per KV head):
+health gate passed (mem read 59.63 GB/s, x1/x4 clean); byte-identical ids on
+the 2048-token prompt; 187/187 with the change. Two 24-pair batches at 2048:
+17W/7L (+1.8%) then 16W/8L (+2.9%) — combined 33/15 (69%) with both medians
+positive. Short context (GQA inactive) was 4W/8L (-0.6%) — noise. Rejected:
+69% sign consistency does not clear the bar the kept wins met (78-96%), and
+the earlier cap-6 test already showed chunk counts are noisy. Reverted in
+full, rebuilt, 187/187 green. No code ships.
