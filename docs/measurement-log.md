@@ -5363,3 +5363,11 @@ ids byte-identical and acceptance identical (10 steps, 5.10/step) with the
 path on or off — the prompt-lookup path finds the same matches. 24 interleaved
 pairs: **9 wins / 15 losses for no-skip**, medians 306.17 -> 299.24 t/s
 (-2.3%). No win; SKIP stays default. No code change.
+
+GQA chunks 18 (cap 24, threads*3) at 2048 context: byte-identical ids, health
+gate passed (mem read 54.64 GB/s, x1/x4 clean), 187/187 with the change. Two
+24-pair batches: 11W/13L (+1.1%) then 13W/11L (+1.3%) — combined 24W/24L,
+exactly even sign count despite slightly positive medians. Far below the
+~78% pair-win bar the kept wins cleared. Reverted in full, rebuilt, 187/187
+green. No code ships. All three chunk counts (12 default, 16, 18) are now
+measured null or below bar.
