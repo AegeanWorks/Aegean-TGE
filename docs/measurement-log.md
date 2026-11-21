@@ -5763,3 +5763,17 @@ batches at 2048 --kv f16: 15W/9L (+0.3% median) then 13W/11L (+1.7%) —
 combined 28/48 (58%) with marginal medians. Below the ~78% bar; the extra
 accumulators do not pay here (attention is only ~18% of decode and the dot is
 a fraction of that). Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Next-row KV-cache prefetch in attention_group_avx2 (2026-11-21): reviewer's
+lever — software prefetch was only ever tested in GEMV kernels (rejected), never
+attention. Unlike GEMV's contiguous stream, each GQA task reads head_dim=128
+halves (256 B) per token at kv_stride=kv_dim=256 halves, i.e. a 256 B used /
+256 B skipped gapped stride. Prefetched the full next key+value rows (4 cache
+lines each, 8 uops/token) into L1 at the top of the half-KV token loop. Health
+gate passed (mem read 42.06 GB/s, x1/x4 clean). Byte-identical ids on three
+--kv f16 cases (Q8 2048, Q8 story, Q4KM 1024) — prefetch changes no math;
+187/187 with the change. Two 24-pair decode batches at 2048 --kv f16:
+13W/11L (+1.0% median) then 17W/7L (+1.8%) — combined 30/48 (62.5%) with small
+positive medians but below the ~78% win bar. The gapped stride lets the
+hardware prefetcher cover most of it; the 8 extra uops/token are not paid back.
+Reverted in full, rebuilt, 187/187 green. No code ships.
