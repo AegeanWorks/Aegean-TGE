@@ -5381,3 +5381,11 @@ story and 300-token prompts; 187/187 with the change. Two 24-pair batches:
 ~78% bar the kept wins cleared. Q8_0 decode is bandwidth-bound, so the L2
 lookup cannot move it, same as every other scale-conversion attempt.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Fused residual add + rms_norm (2026-11-21): reviewer-suggested structural
+change — fold `x += h` into the AVX2 norm's sum-of-squares pass, removing one
+full-width pass over the 896-element residual vector. Four coordinated files;
+byte-identical ids on Q8_0 and Q4_K_M; 187/187 with the change. 24 interleaved
+decode pairs: **11 wins / 13 losses**, medians 103.62 -> 103.26 t/s (-0.3%).
+The norm phase is only ~1% of decode, so the saved pass cannot move the total.
+Reverted in full, rebuilt, 187/187 green. No code ships.
