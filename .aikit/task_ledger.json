@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-UNROLL",
+    "task_id": "TGE-BLKACC4",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795275471.0572731,
+    "updated_at": 1795281369.08019,
     "owner": "opencode:session",
-    "lease_until": 1795282671.0572731,
+    "lease_until": 1795288569.08019,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,44 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795275492.9137542,
-    "completed_head": "45dfaae4a9fcee22ef181e08bea344296ca7ce53",
-    "completed_tree": "eb03292428a761add4cf2f60055351282324052a"
+    "completed_at": 1795281402.4524498,
+    "completed_head": "d049118da3b4caa1d1b8f692ca7d485b136e1941",
+    "completed_tree": "3c044b4f6e36f8cd7916b9875c32680115dc101a"
   },
   "checkpoints": [
-    {
-      "task_id": "chore-1795265631",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the band-16 experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795265631.1562204,
-      "timestamp_str": "2026-11-21 15:53:51",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795265854",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the dot_f32 8-accumulator experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795265854.6042085,
-      "timestamp_str": "2026-11-21 15:57:34",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795266475",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the batch grain-2 experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795266475.9427993,
-      "timestamp_str": "2026-11-21 16:07:55",
-      "agent": "opencode"
-    },
     {
       "task_id": "chore-1795267470",
       "phase": "chore",
@@ -266,6 +233,65 @@
       "timestamp": 1795278987.0112975,
       "timestamp_str": "2026-11-21 19:36:27",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-BLKACC4",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + raise block-attention f16 QK^T accumulators 2->4",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795281368.5509932,
+      "timestamp_str": "2026-11-21 20:16:08",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "earlier 2048 rejection was a real -3.5% attention-phase gain diluted below bar; attention is ~32% at 4080",
+        "benefits": "+1.2% prefill at 4080, byte-identical ids, no f32 regression",
+        "risks": "contract: internal kernel constant; dependency: none; concurrency: none; state: none",
+        "mitigation": "byte-identical ids 4080/2048 f16, 39/48 pairs, attention phase 12/12, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "e6a01ac79903026f291dcebbca371b68d0789100344939ac3dd22b19e003bfad",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-BLKACC4",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Block f16 QK^T acc4: 39/48 pairs (+1.25%/+1.2% medians at 4080), attention phase 12/12 (-5%), ids byte-identical, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795281369.08019,
+      "timestamp_str": "2026-11-21 20:16:09",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-BLKACC4",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-BLKACC4' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795281402.5178692,
+      "timestamp_str": "2026-11-21 20:16:42",
+      "agent": "opencode:session",
+      "head": "d049118da3b4caa1d1b8f692ca7d485b136e1941",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
