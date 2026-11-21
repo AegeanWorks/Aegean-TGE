@@ -5265,3 +5265,9 @@ were Q8_0, so ran 24 interleaved pairs of the original pre-win binary vs
 current HEAD on the K-quant model. **24 wins / 0 losses**, medians 45.79 ->
 72.12 t/s (+57.5%). The combined gains generalize to the K-quant decode
 path too. No code change.
+
+Cumulative verification on qwen2.5-coder-1.5b-Q8_0: 24 interleaved pairs,
+original pre-win binary vs current HEAD: **24 wins / 0 losses**, medians
+23.81 -> 33.08 t/s (+38.9%). With Q8_0-0.5B (+67%) and Q4_K_M-0.5B
+(+57.5%), the seven wins are now cumulatively verified on all three local
+models. No code change.
