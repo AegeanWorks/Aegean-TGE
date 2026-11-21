@@ -5500,3 +5500,13 @@ Byte-identical ids (story and 300-token), 187/187 with the change. Two
 flipping medians. Parking sooner does not help; the pool is reused one token
 later so the spin is not wasted. Reverted in full (three files), rebuilt,
 187/187 green. No code ships.
+
+Process affinity to P-cores only (2026-11-21): abstract systems lever — set
+`SetProcessAffinityMask` to the 12 SMT threads of the 6 P cores before any
+worker starts, so E-core stragglers cannot slow the pool (distinct from the
+earlier per-worker `--pin-threads`, which was 0/24). Added a `--p-cores` A/B
+gate; byte-identical ids; 187/187 with the change. 24 interleaved decode
+pairs: **0 wins / 24 losses**, medians 84.28 -> 63.63 t/s (-24%). The E cores
+contribute real memory bandwidth to the weight stream; excluding them hurts
+far more than any schedule regularity helps. Reverted in full (three files),
+rebuilt, 187/187 green. No code ships.
