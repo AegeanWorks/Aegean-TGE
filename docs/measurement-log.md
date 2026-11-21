@@ -5444,3 +5444,13 @@ and 300-token prompts, both models checked). 4 coordinated files; 187/187 with
 the change. 24 interleaved decode pairs: **12 wins / 12 losses**, both medians
 85.66 t/s. The pool round-trip costs exactly what the parallel scan saves.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Fused argmax inside the Q8_0 output GEMV (2026-11-21): reviewer-suggested
+structural lever — each per-band worker tracks the max output row it wrote, so
+a pure-greedy no-penalty caller skips the second 608 KB scan. Five coordinated
+files; byte-identical ids on story and 300-token prompts; 187/187 with the
+change. Two 24-pair batches: 16W/8L (+1.7%) then 12W/12L (-0.2%) — combined
+28/20 with cancelling medians, below the ~78% bar. Mechanism check: `timers`
+shows sample is only 0.7% of decode (0.07 ms/token), so the saved scan is
+below this box's noise floor. Reverted in full, rebuilt, 187/187 green.
+No code ships.
