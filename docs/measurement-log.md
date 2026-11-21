@@ -6067,3 +6067,24 @@ ids at 2048; 187/187 with the change. Two 24-pair decode batches: 15W/9L (+0.4%)
 then 15W/9L (-0.1%) — combined 30/48 (62.5%), flat medians. Both directions now
 rejected; 64 bands is confirmed optimal for the wide pool. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+## 2026-11-22 - Cross-model validation of the scale-hoist win (generalization check)
+
+Methodological gap: every prior speed A/B used qwen2.5-0.5b-instruct-q8_0;
+Q4_K_M was only used for byte-identical checks. "Faster" was unproven on other
+models. New rule adopted: a win is kept only if it A/B-wins on >=2 models.
+
+Validated the kept scale-hoist (fadd95f) by building a before binary from its
+parent (bcf225d, which retains the unroll win) and comparing to current HEAD,
+on two additional Q8_0 models (same batch-GEMV path the win touches; F16 GGUFs
+are rejected at load so only Q8_0/Q4_K variants are usable):
+
+| model | shape | wins/losses | median before -> after |
+|---|---|---|---|
+| qwen2.5-coder-0.5b-Q8_0 | 24L/896/14-2 | 23 / 1 (96%) | 303.15 -> 314.20 t/s (+3.6%) |
+| qwen2.5-coder-1.5b-Q8_0 | 28L/1536/12-2 | 22 / 2 (92%) | 89.35 -> 92.25 t/s (+3.2%) |
+
+Both byte-identical ids (1500-tok prompts). The win generalizes across all three
+Q8_0 models tested (the original 0.5B instruct plus these two). No code change —
+this validates an existing kept win and records the two-model rule for future
+changes. 187/187 tests, 4/4 gates.
