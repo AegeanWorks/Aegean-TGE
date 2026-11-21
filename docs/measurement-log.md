@@ -5435,3 +5435,12 @@ t/s (-6.5%). The four extra prefetch uops per row cost more than the latency
 they hide — the hardware prefetcher already covers the contiguous stream,
 exactly as the early f32-GEMV prefetch experiment found. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Parallel greedy argmax on the warm decode pool (2026-11-21): abstract idea —
+the 151936-logit argmax is single-threaded while a 12-worker pool sits idle
+between output projections. Split the scan into 8-aligned chunks, each chunk's
+AVX2 first-max, reduce with earliest-index-on-ties (byte-identical ids on story
+and 300-token prompts, both models checked). 4 coordinated files; 187/187 with
+the change. 24 interleaved decode pairs: **12 wins / 12 losses**, both medians
+85.66 t/s. The pool round-trip costs exactly what the parallel scan saves.
+Reverted in full, rebuilt, 187/187 green. No code ships.
