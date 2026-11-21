@@ -5898,3 +5898,12 @@ on Q8 2048/600/story with default f32 KV; 187/187 with the change. Two 24-pair
 prefill batches at 2048: 15W/9L (+0.5%) then 11W/13L (-0.2%) — combined 26/48
 (54%) with cancelling medians. No reliable win. Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+Vectorized softmax normalization in attention_block_head_avx2 (2026-11-21):
+the final `scores[i] *= inverse` pass was scalar; replaced with a broadcast
+_mm256_mul_ps loop (bit-exact by construction). Health gate passed (mem read
+46.52 GB/s, x1/x4 clean); byte-identical ids on Q8 2048 f32 and f16; 187/187
+with the change. Two 24-pair prefill batches at 2048: 11W/13L (+0.06%) then
+11W/13L (-0.1%) — combined 22/48 (46%), flat medians. The pass is memory-bound
+on the scores buffer and the scalar loop was already efficient. Reverted in
+full, rebuilt, 187/187 green. No code ships.
