@@ -6045,3 +6045,15 @@ std::max bookkeeping in pass 1's tight inner loop costs more than the pass it
 removes. This closes the softmax three-pass restructuring direction (max, exp,
 normalize all fail or are gated). Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+F16C scale conversion in the batch GEMV scale hoist (2026-11-21): the batch
+kernel still converts each row's scales with branchy scalar half_to_float once
+per block; F16C cvtph_ps variants were only tested on the decode dot_row_q8
+(null), never the batch kernel. Gathered 8 strided scales and converted with one
+_mm256_cvtph_ps. Health gate passed (mem read 55-59 GB/s after a busy-box retry,
+x1/x4 clean); byte-identical ids at 2048/600/2050; 187/187 with the change.
+Two 24-pair prefill batches at 2048: 14W/10L (+0.5%) then 13W/11L (+0.55%) —
+combined 27/48 (56%), flat medians. The gather still needs 8 strided loads, so
+the only saving (8 scalar converts -> 1 vector convert) is negligible against
+the batch kernel's FMA work. Reverted in full, rebuilt, 187/187 green.
+No code ships.
