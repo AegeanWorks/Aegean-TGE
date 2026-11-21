@@ -5670,3 +5670,11 @@ Byte-identical ids under --vnni; 187/187 with the change. 24 interleaved
 prefill pairs: **5 wins / 19 losses**, medians 265.30 -> 255.55 t/s (-3.7%).
 Group 8 is now the measured optimum for both batch kernels. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Group 7 in the float Q8 batch kernel (2026-11-21): the odd bracket between the
+proven 6 and 8. Byte-identical ids at 2048 tokens; 187/187 with the change.
+24 interleaved prefill pairs: **1 win / 23 losses**, medians 298.30 -> 276.70
+t/s (-7.2%). The 64-token prefill chunk divides evenly into 8 (8 groups) but
+leaves a 1-token tail at 7 (9 groups + 1), and that tail re-reads a weight row
+per token — the exact cost the group kernel exists to avoid. Group 8 is the
+clear optimum; reverted in full, rebuilt, 187/187 green. No code ships.
