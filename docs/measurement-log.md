@@ -5473,3 +5473,13 @@ with the change. Two 24-pair batches: 14W/10L (+0.3%) then 12W/12L (+0.9%) —
 combined 26/24 with marginal medians, far below the ~78% bar. The compiler
 already schedules the loads adequately at -O3; explicit batching just uses
 more registers. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+16-byte int8 payload loads in dot_row_q8 (2026-11-21): the remaining untested
+load width — one `_mm_loadu_si128` per 16 values plus a 64-bit shift for the
+high half, instead of four `_mm_loadl_epi64` loads, without the expensive
+cross-lane shuffles the failed 32-byte attempt needed. Bit-identical (story and
+long ids byte-identical); 187/187 with the change. Two 24-pair batches:
+14W/10L each, medians 83.82 -> 83.70 then 82.59 -> 82.25 (-0.2%/-0.4%).
+The saved load uops are offset by the shift and register pressure; no win.
+Reverted in full, rebuilt, 187/187 green. No code ships. All load widths
+(8, 16, 32 bytes) are now measured null.
