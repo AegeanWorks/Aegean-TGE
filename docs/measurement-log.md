@@ -5295,3 +5295,12 @@ ids on story and 300-token prompts; 187/187 with the change. 24 interleaved
 decode pairs: **10 wins / 14 losses**, medians 99.43 -> 97.65 t/s (-1.8%).
 The spin is useful for load balancing the slow tail of the output matvec, not
 wasted. Reverted in full (four files, rebuilt, 187/187 green). No code ships.
+
+One band per output worker (2026-11-21): the other extreme of the band sweep
+(default 4 per thread, ×2 tested null) — one band per worker removes ~60
+atomic claims per token. Health gate passed (mem read 60.49 GB/s, x1/x4
+clean); byte-identical ids on story and 300-token prompts; 187/187 with the
+change. 24 interleaved decode pairs: **3 wins / 21 losses**, medians 95.27
+-> 92.38 t/s (-3.0%). Work-stealing granularity is worth its atomics here;
+the earlier ×2 and default ×4 results already bracketed the optimum.
+Reverted in full, rebuilt, 187/187 green. No code ships.
