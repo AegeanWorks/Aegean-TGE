@@ -5931,3 +5931,15 @@ at 4080 --kv f16:
 measurement at 4080: 12/12 faster, median 5298 -> 5033 ms (-5%). Kept on the
 long-context evidence; no regression at 2048 (the earlier 28/48 there had
 positive medians). Tests 187/187, gates 4/4. This is the fourteenth kept win.
+
+Shared dot_avx2 accumulators 4 -> 8, re-test at 4080 context (2026-11-21): the
+reviewer noted the earlier 2048 test (26/48, cancelling medians) might have been
+diluted, as the block-attention f16 change was. Re-tested on default f32 KV at
+4080 where attention is ~32% of prefill (4686 ms of 14820 ms). Health gate passed
+(mem read 50.72 GB/s, x1/x4 clean); byte-identical ids at 4080 and 2048 f32;
+187/187 with the change. Two 24-pair prefill batches at 4080: 9W/15L (-0.2%)
+then 5W/19L (-0.5%) — combined 14/48 (29%), flat/negative medians. Unlike the
+f16 dot (which had only two accumulators), dot_avx2 already has four independent
+chains over head_dim 128, so eight adds no ILP and a larger reduction tree.
+This closes the dot_avx2 accumulator question at both contexts; reverted in full,
+rebuilt, 187/187 green. No code ships.
