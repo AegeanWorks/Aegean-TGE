@@ -6033,3 +6033,15 @@ the fused version violates even though the attention output would match. The
 earlier attempt only vectorized that pass (also rejected as memory-bound); this
 removal is blocked by the same test contract. Reverted in full, rebuilt, 187/187
 green. No code ships. No speed A/B run — a failing correctness gate outranks it.
+
+Fuse the block-attention max scan into pass 1 (2026-11-21): pass 1 writes every
+score in a token's causal prefix, so accumulated a running per-token max there
+(order-independent => byte-identical) to remove the separate max-scan pass.
+Health gate passed (mem read 49.31 GB/s, x1/x4 clean); byte-identical ids at 4080,
+2048, 600 f16; 187/187 with the change. Two 24-pair prefill batches at 4080 f16:
+8W/16L (-1.1%) then 12W/12L (flat) — combined 20/48 (42%), no win. The standalone
+max scan is memory-bound over cache-resident scores and cheap; the extra
+std::max bookkeeping in pass 1's tight inner loop costs more than the pass it
+removes. This closes the softmax three-pass restructuring direction (max, exp,
+normalize all fail or are gated). Reverted in full, rebuilt, 187/187 green.
+No code ships.
