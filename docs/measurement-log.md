@@ -5847,3 +5847,23 @@ losses**, medians 306.15 -> 287.20 tok/s (-6.2%). Unlike group 8 (which disprove
 the spill claim), 16 accumulators plus four weight vectors genuinely spill the
 16 YMM registers. Group 8 remains the measured optimum; reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+## 2026-11-21 - Unrolled full-group fold in the batch GEMV (KEPT, +2% prefill)
+
+The batch GEMV's `accumulators[kGroup]` was indexed by the runtime `group`
+value, which forces the eight YMM accumulators to spill to a stack array every
+block. Added a compile-time-unrolled full-group path with eight named
+accumulators (a0-a7) held in registers; the partial tail keeps the generic path.
+Per-token FMA order is identical, so this is byte-identical by construction.
+
+Health gate passed (mem read 55.95 GB/s, x1/x4 clean). Byte-identical ids at
+2048, 600, 2050 and 999 tokens (the latter two exercise the partial-group tail);
+187/187 with the change. Prefill tok/s at 2048 over two 24-pair batches:
+
+| batch | wins/losses | median baseline | median unrolled |
+|---|---|---|---|
+| 1 | 17 / 7 | 306.65 t/s | 314.10 t/s (+2.4%) |
+| 2 | 23 / 1 | 312.05 t/s | 318.30 t/s (+2.0%) |
+
+40/48 pairs (83%), both medians positive and consistent. Kept. Tests 187/187,
+gates 4/4. This is the thirteenth kept win.
