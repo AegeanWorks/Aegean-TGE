@@ -5585,3 +5585,11 @@ Lowering the split further to 512 (2026-11-21): byte-identical ids at
 (60%), second median flat. Below ~1024 the 128-row chunk is as good or better;
 the crossover from the split-1024 win is bracketed near 1024. Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+Split 768 (bracket between rejected 512 and kept 1024, 2026-11-21):
+byte-identical ids at 700/900/1500 tokens; 187/187 with the change. At 900
+prompt tokens over two 24-pair batches: 19W/5L (+2.3%) then 16W/8L (+1.2%)
+— combined 35/48 (73%), both medians positive but below the ~78% kept bar,
+and the second batch weaker than the first. Rejected to stay consistent with
+the bar; 1024 remains the tuned split. Reverted in full, rebuilt, 187/187
+green. No code ships.
