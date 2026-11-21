@@ -5837,3 +5837,13 @@ median 1321.6 -> 1342.4 ms (~1.6% slower). The extra value-row re-streams cost
 more than the smaller footprint saves, mirroring the tile-16 result from the
 other side. Tile 8 is now bracketed on both sides; reverted in full, rebuilt,
 187/187 green. No code ships.
+
+Batch GEMV token group 8 -> 16 (2026-11-21): the group sweep had covered 6/7/8/10
+but never 16 — now that partial-group handling exists, 16 divides the 64-token
+chunk evenly and doubles weight-widening amortization. Health gate passed (mem
+read 52.82 GB/s, x1/x4 clean); byte-identical ids at 2048 and 600 tokens;
+187/187 with the change. 24 interleaved prefill pairs at 2048: **0 wins / 24
+losses**, medians 306.15 -> 287.20 tok/s (-6.2%). Unlike group 8 (which disproved
+the spill claim), 16 accumulators plus four weight vectors genuinely spill the
+16 YMM registers. Group 8 remains the measured optimum; reverted in full,
+rebuilt, 187/187 green. No code ships.
