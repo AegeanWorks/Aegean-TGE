@@ -5403,3 +5403,10 @@ post-priority config: byte-identical ids; health gate passed (mem read 58.13
 GB/s, x1/x4 clean). 24 interleaved pairs: **8 wins / 16 losses**, medians
 99.46 -> 99.12 t/s (-0.3%). With 14 (earlier) and now 18 both worse, 16 is
 the measured optimum for the wide output projection. No code change.
+
+`-funroll-loops` (2026-11-21): last untested common build flag after mtune,
+LTO and gc-sections. Health gate passed (mem read 59.26 GB/s, x1/x4 clean);
+byte-identical ids on story and 300-token prompts; 187/187 with the change.
+Two 24-pair batches: 13W/11L (+0.7%) then 14W/10L (-0.7%) — combined 27/21
+with cancelling medians. All four build-level levers are now measured null.
+Reverted in full, rebuilt, 187/187 green. No code ships.
