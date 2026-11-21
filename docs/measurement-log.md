@@ -5286,3 +5286,12 @@ Health gate passed (mem read 53.52 GB/s, x1/x4 clean). 24 interleaved pairs:
 (35/13, +2-8% at this context), i8's quant/dequant overhead cancels the
 narrower KV stream for this small model. i8 stays opt-in for memory only.
 No code change.
+
+Zero-spin dedicated output pool (2026-11-21): the output matvec runs once
+per token ~10 ms apart, so its 15 workers always park after the 2048-pause
+spin; tried a dedicated 16-thread pool with worker spin=0 to skip those
+pauses. Health gate passed (mem read 57.38 GB/s, x1/x4 clean); byte-identical
+ids on story and 300-token prompts; 187/187 with the change. 24 interleaved
+decode pairs: **10 wins / 14 losses**, medians 99.43 -> 97.65 t/s (-1.8%).
+The spin is useful for load balancing the slow tail of the output matvec, not
+wasted. Reverted in full (four files, rebuilt, 187/187 green). No code ships.
