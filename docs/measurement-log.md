@@ -6057,3 +6057,13 @@ combined 27/48 (56%), flat medians. The gather still needs 8 strided loads, so
 the only saving (8 scalar converts -> 1 vector convert) is negligible against
 the batch kernel's FMA work. Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Wide-output band factor 4 -> 8 (128 bands) at 16 threads (2026-11-21): the
+wide output matvec (16 threads, ~152k rows, 64 bands) had only been tested in
+the FEWER-bands direction (32 bands, rejected); the earlier band x8 test was at
+10 threads before the wide pool. Scoped the more-bands direction (threads*8 =>
+128 bands) to threads>=16 so the 12-thread decode pool is untouched. Byte-identical
+ids at 2048; 187/187 with the change. Two 24-pair decode batches: 15W/9L (+0.4%)
+then 15W/9L (-0.1%) — combined 30/48 (62.5%), flat medians. Both directions now
+rejected; 64 bands is confirmed optimal for the wide pool. Reverted in full,
+rebuilt, 187/187 green. No code ships.
