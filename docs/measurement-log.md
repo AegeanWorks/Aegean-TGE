@@ -5710,3 +5710,13 @@ Byte-identical ids at 2048; 187/187 with the change. 24 interleaved prefill
 pairs: **9 wins / 15 losses**, medians 295.35 -> 295.15 t/s (flat). Factor 8
 remains optimal; 16 gives too few bands for the 16-thread pool to balance.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+dot_f32 accumulators 4 -> 8 (2026-11-21): the reviewer's live-kernel variant
+of the accumulator sweep (dequant_batch_avx2.cpp, used by Q4_K_M prefill).
+Rejected at the correctness gate before any A/B: the two
+`dequant_q{4,6}k_fused_row_matches_batch` memcmp tests failed — the fused
+single-row K-quant decode kernels depend on dot_f32's exact 4-accumulator
+reduction order, and an 8-way tree changes rounding. This is why the original
+4-vs-1 sweep was confined to the Q8_0 kernel, which has no such exact-match
+contract. Reverted in full, rebuilt, 187/187 green. No code ships. No speed
+A/B was run — a failing correctness gate outranks it (PRINCIPLE-000 R6).
