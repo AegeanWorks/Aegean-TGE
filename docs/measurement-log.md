@@ -5877,3 +5877,15 @@ nothing. Health gate passed (mem read 55.48 GB/s, x1/x4 clean); byte-identical
 VNNI ids at 2048 and 600; 187/187 with the change. 24 interleaved prefill pairs
 at 2048 with --vnni: **11 wins / 13 losses**, medians 273.30 -> 273.00 tok/s
 (flat). Reverted in full, rebuilt, 187/187 green. No code ships.
+
+attention_block_head_avx2 f16 QK^T accumulators 2 -> 4 (2026-11-21): the
+prefill block kernel (distinct from the decode attention_group path already
+swept) used two accumulators over row_f32 while sibling dot_avx2 uses four.
+Health gate passed (mem read 49.45 GB/s, x1/x4 clean); byte-identical ids at
+2048 and 600 with --kv f16; 187/187 with the change. Two 24-pair prefill batches
+at 2048 --kv f16: 13W/11L (+1.2%) then 15W/9L (+1.3%) — combined 28/48 (58%),
+below the ~78% bar. Direct attention-phase measurement over 16 pairs was
+strongly positive (15/16 faster, median 1352.6 -> 1304.8 ms, -3.5%), so the
+kernel itself gains, but attention is only ~20% of prefill and the end-to-end
+pair fraction dilutes it below the keep bar. Reverted in full, rebuilt, 187/187
+green. No code ships.
