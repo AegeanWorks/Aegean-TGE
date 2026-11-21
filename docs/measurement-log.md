@@ -5424,3 +5424,14 @@ the change. 24 interleaved decode pairs: **1 win / 23 losses**, medians 81.74
 -> 75.74 t/s (-7%). Fewer, larger bands hurt load balance badly. Reverted in
 full, rebuilt, 187/187 green. No code ships. The band factor is now bracketed
 on both sides for both kernels (default ×4 is optimal).
+
+Next-row software prefetch in the Q8_0 decode GEMV (2026-11-21): abstract
+idea — each worker walks a contiguous band of ~2374 whole 952-byte rows, so
+prefetching the next row's first four cache lines into L1 at the row boundary
+should hide the row-start latency. Health gate passed (mem read 55.49 GB/s,
+x1/x4 clean); byte-identical ids on Q8_0 and Q4_K_M; 187/187 with the change.
+24 interleaved decode pairs: **0 wins / 24 losses**, medians 86.82 -> 81.19
+t/s (-6.5%). The four extra prefetch uops per row cost more than the latency
+they hide — the hardware prefetcher already covers the contiguous stream,
+exactly as the early f32-GEMV prefetch experiment found. Reverted in full,
+rebuilt, 187/187 green. No code ships.
