@@ -5867,3 +5867,13 @@ Health gate passed (mem read 55.95 GB/s, x1/x4 clean). Byte-identical ids at
 
 40/48 pairs (83%), both medians positive and consistent. Kept. Tests 187/187,
 gates 4/4. This is the thirteenth kept win.
+
+Named-accumulator unroll in the VNNI batch kernel (2026-11-21): tried the same
+structural lever that won in the float batch kernel. Unlike that kernel (whose
+`group` was a runtime min and forced a stack array), the VNNI full-group loop is
+bounded by the compile-time `kGroup`, so the compiler already keeps the eight
+accumulators in registers despite the ~15 live YMM values; explicit names change
+nothing. Health gate passed (mem read 55.48 GB/s, x1/x4 clean); byte-identical
+VNNI ids at 2048 and 600; 187/187 with the change. 24 interleaved prefill pairs
+at 2048 with --vnni: **11 wins / 13 losses**, medians 273.30 -> 273.00 tok/s
+(flat). Reverted in full, rebuilt, 187/187 green. No code ships.
