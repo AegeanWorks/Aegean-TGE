@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-DECODE-THREADS12",
+    "task_id": "TGE-PREFILL-SPLIT2048",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795212747.969834,
+    "updated_at": 1795255571.756108,
     "owner": "opencode:session",
-    "lease_until": 1795219947.969834,
+    "lease_until": 1795262771.756108,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,70 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795212776.08444,
-    "completed_head": "ca7bae256fef47997256aac09957994729512c08",
-    "completed_tree": "5df36f7d592cdba2f12743d675f0a82ac9c45ae4"
+    "completed_at": 1795255629.2997963,
+    "completed_head": "342960ece2f00cc03bad821b425a9679c27dfbf3",
+    "completed_tree": "78726a3dfb6bc6ebaa9f564db40aac34a5a429d7"
   },
   "checkpoints": [
-    {
-      "task_id": "TGE-DECODE-THREADS12",
-      "phase": "phase 2",
-      "phase_num": 2,
-      "description": "[1/2] Plan + change decode default to physical cores + 2 capped at logical",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795212747.3717778,
-      "timestamp_str": "2026-11-21 01:12:27",
-      "agent": "opencode:session",
-      "impact_assessment": {
-        "why": "after the priority wins, 12 threads beat 10 in 56/16 same-binary interleaved pairs",
-        "benefits": "+2-6% decode, byte-identical output, portable cap",
-        "risks": "contract: no API change, --threads still overrides; dependency: none; concurrency: pool size changes; state: cached once",
-        "mitigation": "byte-identical ids on two models and prompt lengths, 72 interleaved pairs, 187/187 tests, 4/4 gates"
-      },
-      "plan_digest": "541489d06bf7fbba8d31c680a6e6c8a6d55bb20f0d7e676291d5dc263ab833df",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-DECODE-THREADS12",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Decode default 12: 56/16 same-binary pairs (+2/+5/+6% medians), ids byte-identical, 187/187 tests, 4/4 gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795212747.969834,
-      "timestamp_str": "2026-11-21 01:12:27",
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "task_id": "TGE-DECODE-THREADS12",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-DECODE-THREADS12' completed successfully.",
-      "status": "completed",
-      "timestamp": 1795212776.2214875,
-      "timestamp_str": "2026-11-21 01:12:56",
-      "agent": "opencode:session",
-      "head": "ca7bae256fef47997256aac09957994729512c08",
-      "delivery": {
-        "roots": [
-          "."
-        ],
-        "forced": false
-      }
-    },
     {
       "task_id": "chore-1795227907",
       "phase": "chore",
@@ -266,6 +207,69 @@
       "timestamp": 1795253609.1520274,
       "timestamp_str": "2026-11-21 12:33:29",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-PREFILL-SPLIT2048",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + lower prefill 128->64 chunk split from 4096 to 2048 tokens",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795255571.2128553,
+      "timestamp_str": "2026-11-21 13:06:11",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "with the wide output pool and priority wins, 128-row chunks in the 2048-4096 range do more attention work per chunk than the weight-stream amortization saves",
+        "benefits": "+4% prefill tok/s at 3000-3500 tokens; short prompts unchanged; byte-identical ids",
+        "risks": "contract: only a threshold constant; dependency: none; concurrency: none; state: none",
+        "mitigation": "byte-identical ids at 300 and 3000 tokens, boundary check at 1500/3500, 48 interleaved pairs, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "cafac1ca97646161d95ec5813d3bf5b66a261c882f12c8598726995d3a59ec67",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-PREFILL-SPLIT2048",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Split 2048: prefill 43/48 pairs (+4% both batches), short prompts unchanged, ids byte-identical, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795255571.756108,
+      "timestamp_str": "2026-11-21 13:06:11",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-PREFILL-SPLIT2048",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-PREFILL-SPLIT2048' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795255629.4227972,
+      "timestamp_str": "2026-11-21 13:07:09",
+      "agent": "opencode:session",
+      "head": "342960ece2f00cc03bad821b425a9679c27dfbf3",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false,
+        "ignored": [
+          ".aikit/cache/"
+        ],
+        "ignore_reason": "tool-generated hygiene cache, not part of this task"
+      }
     }
   ]
 }
