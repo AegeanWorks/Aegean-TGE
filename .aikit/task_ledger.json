@@ -22,17 +22,6 @@
   },
   "checkpoints": [
     {
-      "task_id": "chore-1795228855",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the single-pass argmax experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795228855.8961434,
-      "timestamp_str": "2026-11-21 05:40:55",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795247733",
       "phase": "chore",
       "phase_num": 1,
@@ -296,6 +285,17 @@
         ],
         "forced": false
       }
+    },
+    {
+      "task_id": "chore-1795257850",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the split-512 experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795257850.945888,
+      "timestamp_str": "2026-11-21 13:44:10",
+      "agent": "opencode"
     }
   ]
 }
