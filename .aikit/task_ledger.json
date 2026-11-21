@@ -22,17 +22,6 @@
   },
   "checkpoints": [
     {
-      "task_id": "chore-1795250745",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the 16-byte load experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795250745.6264508,
-      "timestamp_str": "2026-11-21 11:45:45",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795251186",
       "phase": "chore",
       "phase_num": 1,
@@ -322,6 +311,17 @@
         ],
         "forced": false
       }
+    },
+    {
+      "task_id": "chore-1795261568",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the group-10 experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795261568.447786,
+      "timestamp_str": "2026-11-21 14:46:08",
+      "agent": "opencode"
     }
   ]
 }
