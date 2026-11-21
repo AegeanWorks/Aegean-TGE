@@ -5889,3 +5889,12 @@ strongly positive (15/16 faster, median 1352.6 -> 1304.8 ms, -3.5%), so the
 kernel itself gains, but attention is only ~20% of prefill and the end-to-end
 pair fraction dilutes it below the keep bar. Reverted in full, rebuilt, 187/187
 green. No code ships.
+
+Shared dot_avx2 accumulators 4 -> 8 (2026-11-21): the reviewer's f32 QK^T path
+(used by the default kv=f32 attention in both the prefill block and decode group
+kernels); unlike dot_f32/dot_row_q8/half-QK^T, this accumulator count was never
+swept. Health gate passed (mem read 53.72 GB/s, x1/x4 clean); byte-identical ids
+on Q8 2048/600/story with default f32 KV; 187/187 with the change. Two 24-pair
+prefill batches at 2048: 15W/9L (+0.5%) then 11W/13L (-0.2%) — combined 26/48
+(54%) with cancelling medians. No reliable win. Reverted in full, rebuilt,
+187/187 green. No code ships.
