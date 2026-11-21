@@ -6023,3 +6023,13 @@ the change. Two 24-pair prefill batches at 2048: 14W/10L (+1.1%) then 10W/14L
 (+0.3%) — combined 24/48 (50%), flat medians. The hardware prefetcher already
 covers the contiguous row stream, same as GEMV/attention. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Fuse away the block-attention normalization pass (2026-11-21): creative lever —
+drop the third `scores[i] *= inverse` pass and multiply the per-token inverse
+into pass 2's score read instead (same float product => downstream bit-identical).
+Rejected at the correctness gate: `attention_block_matches_head_path` asserts the
+scores BUFFER itself holds normalized values (104 assertions failed), a contract
+the fused version violates even though the attention output would match. The
+earlier attempt only vectorized that pass (also rejected as memory-bound); this
+removal is blocked by the same test contract. Reverted in full, rebuilt, 187/187
+green. No code ships. No speed A/B run — a failing correctness gate outranks it.
