@@ -5752,3 +5752,14 @@ ids at 2048; 187/187 with the change. 24 interleaved prefill pairs:
 **1 win / 23 losses**, medians 260.55 -> 252.85 t/s (-3.0%). Coarser claiming
 harms load balance exactly as in the other three kernels. grain 1 is now
 optimal in all four; reverted in full, rebuilt, 187/187 green. No code ships.
+
+attention_group_avx2 half-KV QK^T accumulators 2 -> 4 (2026-11-21): reviewer's
+live-kernel lever — the half-KV dot used two FMA chains while the plain float
+dot_avx2 already used four. Health gate passed (mem read 56.70 GB/s, x1/x4
+clean). Reduction order changes, so byte-identical was checked FIRST on three
+cases: Q8_0 2048 with --kv f16, Q8_0 story prompt with --kv f16, and Q4_K_M
+1024 with --kv f16 — all IDENTICAL; 187/187 with the change. Two 24-pair decode
+batches at 2048 --kv f16: 15W/9L (+0.3% median) then 13W/11L (+1.7%) —
+combined 28/48 (58%) with marginal medians. Below the ~78% bar; the extra
+accumulators do not pay here (attention is only ~18% of decode and the dot is
+a fraction of that). Reverted in full, rebuilt, 187/187 green. No code ships.
