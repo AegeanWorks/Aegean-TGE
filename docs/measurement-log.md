@@ -5259,3 +5259,9 @@ default), not actual prompt length, so it selects f16 even for a 4-token
 prompt — where the log already measured f16 slower. Making auto the default
 would regress short contexts. f16 stays explicitly opt-in for long contexts;
 no code change.
+
+Cumulative verification on Q4_K_M (2026-11-21): all prior cumulative checks
+were Q8_0, so ran 24 interleaved pairs of the original pre-win binary vs
+current HEAD on the K-quant model. **24 wins / 0 losses**, medians 45.79 ->
+72.12 t/s (+57.5%). The combined gains generalize to the K-quant decode
+path too. No code change.
