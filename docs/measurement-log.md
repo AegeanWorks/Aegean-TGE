@@ -5678,3 +5678,29 @@ t/s (-7.2%). The 64-token prefill chunk divides evenly into 8 (8 groups) but
 leaves a 1-token tail at 7 (9 groups + 1), and that tail re-reads a weight row
 per token — the exact cost the group kernel exists to avoid. Group 8 is the
 clear optimum; reverted in full, rebuilt, 187/187 green. No code ships.
+
+Note on the suggested f32 `dot_row` accumulator sweep: investigated and NOT
+run — the f32 GEMV is a dead kernel for every runnable local model (Q8_0 and
+K-quants use their own kernels; the only F32 tensors are 1D norms/biases that
+never reach `gemv_f32`; F16 GGUFs are rejected at load). Changing it would
+measure pure noise. Critical triage before spending an A/B cycle.
+
+## 2026-11-21 - Batch kernel band factor 4 -> 8 (KEPT, +1% prefill)
+
+The prefill batch GEMV's band factor (`rows/(threads*4)`) had never been swept
+(the Q8_0 decode kernel's factor was, but these are different kernels).
+Tested 8 — fewer, larger contiguous bands for the 151936-row output
+projection during prefill.
+
+Health gate passed (mem read 52.58 GB/s, x1/x4 clean). Byte-identical ids at
+2048 tokens; 187/187 with the change. Prefill tok/s at 2048 over two 24-pair
+batches:
+
+| batch | wins/losses | median factor-4 | median factor-8 |
+|---|---|---|---|
+| 1 | 19 / 5 | 302.80 t/s | 305.60 t/s (+0.9%) |
+| 2 | 18 / 6 | 304.25 t/s | 309.00 t/s (+1.6%) |
+
+37/48 pairs (77%), both medians positive and consistent across batches. Kept
+on the consistency; a marginal win but on a live kernel with no downside.
+Tests 187/187, gates 4/4. This is the twelfth kept win.

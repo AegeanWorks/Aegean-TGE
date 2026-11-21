@@ -58,7 +58,7 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
   core::ThreadPool& pool =
       config.pool != nullptr ? *config.pool : core::acquire_pool(threads);
 
-  int band_rows = rows / (threads * 4);
+  int band_rows = rows / (threads * 8);
   if (band_rows < 1) {
     band_rows = 1;
   }
