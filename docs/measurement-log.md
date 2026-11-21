@@ -5389,3 +5389,11 @@ byte-identical ids on Q8_0 and Q4_K_M; 187/187 with the change. 24 interleaved
 decode pairs: **11 wins / 13 losses**, medians 103.62 -> 103.26 t/s (-0.3%).
 The norm phase is only ~1% of decode, so the saved pass cannot move the total.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+16-thread decode re-test in the post-priority configuration: the original
+collapse was measured before the priority wins, so re-checked `--threads 16`
+against the 12 default. Health gate passed (mem read 60.78/63.03 GB/s, x1/x4
+clean both pairs); byte-identical ids at both counts. 24 interleaved pairs:
+**0 wins / 24 losses for 16**, medians 102.18 -> 93.00 t/s (-9%). The HT-pair
+and E-core straggler contention is not fixed by priority; 12 remains the
+optimum. No code change.
