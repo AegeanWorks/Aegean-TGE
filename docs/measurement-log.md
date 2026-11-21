@@ -5578,3 +5578,10 @@ greedy ids at 300/1500/3000 tokens; 187/187 with the change. Prefill tok/s at
 Boundary check: 800 tokens (unchanged) 292.85 vs 290.70 (noise); 1100 tokens
 282.70 -> 287.90 t/s. Kept on 39/48 pairs (81%) with consistent medians.
 Tests 187/187, gates 4/4. This is the ninth kept win.
+
+Lowering the split further to 512 (2026-11-21): byte-identical ids at
+300/700/1500 tokens, 187/187 with the change. At 700 prompt tokens over two
+24-pair batches: 14W/10L (+1.2% median) then 15W/9L (+0.1%) — combined 29/48
+(60%), second median flat. Below ~1024 the 128-row chunk is as good or better;
+the crossover from the split-1024 win is bracketed near 1024. Reverted in
+full, rebuilt, 187/187 green. No code ships.
