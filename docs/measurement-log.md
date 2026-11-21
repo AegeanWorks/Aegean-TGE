@@ -6013,3 +6013,13 @@ clean); byte-identical ids at 4080 and 2048 f16; 187/187 with the change. Two
 — combined 29/48 (60%), cancelling medians. The max scan is memory-bound (scores
 already in cache) so the SIMD reduction overhead is not repaid. Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+Next-row weight prefetch in the batch GEMV (2026-11-21): software _mm_prefetch
+was only ever tested in GEMV and attention (both rejected), never the batch
+kernel, where each row is re-read 8x (once per token group). Prefetched the next
+row's first 4 cache lines into L1 at the row boundary. Health gate passed (mem
+read 61.00 GB/s, x1/x4 clean); byte-identical ids at 2048/600/2050; 187/187 with
+the change. Two 24-pair prefill batches at 2048: 14W/10L (+1.1%) then 10W/14L
+(+0.3%) — combined 24/48 (50%), flat medians. The hardware prefetcher already
+covers the contiguous row stream, same as GEMV/attention. Reverted in full,
+rebuilt, 187/187 green. No code ships.
