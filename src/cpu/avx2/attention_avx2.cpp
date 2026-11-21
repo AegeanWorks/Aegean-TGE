@@ -721,21 +721,31 @@ void attention_block_head_avx2(const AttentionBlockArgs& args, int head) {
           static_cast<std::size_t>(token) * args.query_stride + head_offset;
       float score = 0.0F;
       if (args.half) {
+        // Four accumulators over row_f32 (matching dot_avx2): the two-accumulator
+        // form lost ~5% on the attention phase at long f16 prefill contexts;
+        // see the 2026-11-21 measurement-log entry.
         __m256 acc0 = _mm256_setzero_ps();
         __m256 acc1 = _mm256_setzero_ps();
+        __m256 acc2 = _mm256_setzero_ps();
+        __m256 acc3 = _mm256_setzero_ps();
         int index = 0;
-        for (; index + 16 <= head_dim; index += 16) {
+        for (; index + 32 <= head_dim; index += 32) {
           const __m256 k0 = _mm256_loadu_ps(row_f32 + index);
           const __m256 k1 = _mm256_loadu_ps(row_f32 + index + 8);
+          const __m256 k2 = _mm256_loadu_ps(row_f32 + index + 16);
+          const __m256 k3 = _mm256_loadu_ps(row_f32 + index + 24);
           acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k0, acc0);
-          acc1 =
-              _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 8), k1, acc1);
+          acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 8), k1, acc1);
+          acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 16), k2, acc2);
+          acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index + 24), k3, acc3);
         }
         for (; index + 8 <= head_dim; index += 8) {
           const __m256 k = _mm256_loadu_ps(row_f32 + index);
           acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(query + index), k, acc0);
         }
-        score = horizontal_sum(_mm256_add_ps(acc0, acc1));
+        const __m256 sum01 = _mm256_add_ps(acc0, acc1);
+        const __m256 sum23 = _mm256_add_ps(acc2, acc3);
+        score = horizontal_sum(_mm256_add_ps(sum01, sum23));
         for (; index < head_dim; ++index) {
           score += query[index] * row_f32[index];
         }

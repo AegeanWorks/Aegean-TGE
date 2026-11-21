@@ -5907,3 +5907,27 @@ with the change. Two 24-pair prefill batches at 2048: 11W/13L (+0.06%) then
 11W/13L (-0.1%) — combined 22/48 (46%), flat medians. The pass is memory-bound
 on the scores buffer and the scalar loop was already efficient. Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+## 2026-11-21 - Block-attention f16 QK^T accumulators 2 -> 4 (KEPT at long context, +1.2%)
+
+Re-test of the earlier 2048 rejection: that change was a real kernel gain
+(attention phase 15/16 faster, -3.5%) diluted below the keep bar because
+attention is only ~20% of a 2048 prefill. At 4080 tokens (the build's context
+cap is 4096), attention grows to ~32% of prefill (4949 ms of 15413 ms), so the
+same change should show end-to-end. Reapplied the four-accumulator f16 QK^T dot
+in attention_block_head_avx2 (confined to the `args.half` branch; default f32
+untouched).
+
+Health gate passed (mem read 54.94 GB/s, x1/x4 clean). Byte-identical ids at
+4080 and 2048 with --kv f16; 187/187 with the change. Two 24-pair prefill batches
+at 4080 --kv f16:
+
+| batch | wins/losses | median baseline | median acc4 |
+|---|---|---|---|
+| 1 | 19 / 5 | 243.90 t/s | 246.95 t/s (+1.25%) |
+| 2 | 20 / 4 | 240.90 t/s | 243.85 t/s (+1.2%) |
+
+39/48 pairs (81%), both medians positive and consistent. Direct attention-phase
+measurement at 4080: 12/12 faster, median 5298 -> 5033 ms (-5%). Kept on the
+long-context evidence; no regression at 2048 (the earlier 28/48 there had
+positive medians). Tests 187/187, gates 4/4. This is the fourteenth kept win.
