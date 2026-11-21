@@ -5416,3 +5416,11 @@ remove the second full-vocabulary scan. Stopped at the correctness gate —
 `argmax_avx2_matches_scalar_first_index` failed 9 assertions (first-index tie
 semantics). No speed A/B was run; the expected gain was only ~0.2% of decode.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+K-quant band factor 2 (2026-11-21): the remaining untested direction of the
+band sweep (×8 null, ×4 default, ×2 now tested). Health gate passed (mem read
+53.70 GB/s, x1/x4 clean both pairs); byte-identical Q4_K_M ids; 187/187 with
+the change. 24 interleaved decode pairs: **1 win / 23 losses**, medians 81.74
+-> 75.74 t/s (-7%). Fewer, larger bands hurt load balance badly. Reverted in
+full, rebuilt, 187/187 green. No code ships. The band factor is now bracketed
+on both sides for both kernels (default ×4 is optimal).
