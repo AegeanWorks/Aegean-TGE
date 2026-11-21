@@ -5279,3 +5279,10 @@ x1/x4 clean). Two 24-pair batches: 16W/8L (+1.3% median) then 12W/12L
 (+0.7%) — combined 28W/20L, medians barely positive and no sign
 consistency. Also not actionable as a default: the right value depends on
 the prompt length, which is not known at KV-allocation time. No code change.
+
+int8 KV at 2048 context (2026-11-21): byte-identical greedy ids vs f32.
+Health gate passed (mem read 53.52 GB/s, x1/x4 clean). 24 interleaved pairs:
+**10 wins / 14 losses**, medians 74.93 -> 74.98 t/s (+0.1%). Unlike f16
+(35/13, +2-8% at this context), i8's quant/dequant overhead cancels the
+narrower KV stream for this small model. i8 stays opt-in for memory only.
+No code change.
