@@ -5603,3 +5603,13 @@ that band use the worse 128-row path. Byte-identical ids at 1200/1500/1800;
 confirmed; 1024 remains optimal. Reverted in full, rebuilt, 187/187 green.
 No code ships. The split sweep is now fully bracketed: 512 (60%), 768 (73%),
 1024 (81%, kept), 1536 (21%), 2048 (90% over 4096), 4096 (original).
+
+`--sparse` attention A/B at 2048 context (2026-11-21): the shipped-but-never-
+A/B-tested static sparse config (sink 0, window 512, stride 4). Byte-identical
+greedy ids on 2048 random-id and two natural prompts — the dropped middle
+positions carry negligible attention mass here, though sparse remains a
+fidelity trade in general. Health gate passed (mem read 57.85 GB/s, x1/x4
+clean). 24 interleaved decode pairs: **10 wins / 14 losses**, medians 66.91 ->
+65.96 t/s (-1.4%). At this context the stride-4 gather saves little attention
+work and its gather path costs more; sparse stays off by default. Flag-only
+test, no code change.
