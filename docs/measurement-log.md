@@ -5825,3 +5825,15 @@ than libm's scalar std::exp when only lane 0 is used — the online softmax is
 sequential so there is no cross-lane batching to amortise it. This closes the
 vectorised-exp direction: both accuracy levels lose or fail. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+Prefill block-attention value tile 8 -> 4 (2026-11-21): only tile 8 (kept) and
+tile 16 (rejected) had been measured; tile 4 was the untested third direction
+(smaller accumulator footprint, more value-row re-streams). Health gate passed
+(mem read 54.42 GB/s, x1/x4 clean); byte-identical ids on Q8 2048 f32/f16 and
+Q4KM 2048; 187/187 with the change. 24 interleaved prefill pairs at 2048:
+7W/17L, median 301.85 -> 301.15 tok/s (-0.2%). Because attention is only ~20%
+of prefill, measured the attention phase directly over 16 pairs: 3/16 faster,
+median 1321.6 -> 1342.4 ms (~1.6% slower). The extra value-row re-streams cost
+more than the smaller footprint saves, mirroring the tile-16 result from the
+other side. Tile 8 is now bracketed on both sides; reverted in full, rebuilt,
+187/187 green. No code ships.
