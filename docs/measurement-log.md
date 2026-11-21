@@ -5993,3 +5993,13 @@ usual ~300, but both arms ran in the same windows so pairs are valid):
 
 58/72 pairs (81%), all medians positive; the clean-box batch 3 is the trustworthy
 estimate. Kept. Tests 187/187, gates 4/4. This is the fifteenth kept win.
+
+Pre-widen weight row in the batch GEMV (2026-11-21): after the scale hoist won,
+tried the analogous hoist for the int8->float weight widening, also repeated for
+each of the 8 token groups walking a row. Widened each row once into a per-worker
+float buffer and loaded from it. Byte-identical ids at 2048/600/2050; 187/187 with
+the change. Two 24-pair prefill batches at 2048: 6W/18L each — combined 12/48
+(25%), decisively worse. The widened float row is 4x the bytes (128 B/block vs
+32 B), so re-reading it across groups costs more than the widening ALU saved —
+the same reason the two-phase dequant prefill (§39) failed. Reverted in full,
+rebuilt, 187/187 green. No code ships.
