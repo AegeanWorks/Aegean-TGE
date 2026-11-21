@@ -5240,3 +5240,11 @@ prompts; 187/187 with the change. 24 interleaved decode pairs: **12 wins /
 12 losses**, medians 90.42 -> 90.58 t/s (+0.2%). Vulkan init is a one-time
 startup cost with no lasting decode contention. Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+`-ffunction-sections` / `-fdata-sections` + `-Wl,--gc-sections` (2026-11-21):
+last build-level lever after mtune and LTO. Health gate passed (mem read
+55.17 GB/s, x1/x4 clean); byte-identical ids on story and 300-token prompts;
+187/187 with the change. 24 interleaved decode pairs: **14 wins / 10 losses**,
+medians 93.00 -> 92.90 t/s (-0.1%). The binary even grew (3.88 -> 3.99 MB),
+so there is no size or speed benefit. Reverted in full, rebuilt, 187/187
+green. No code ships. All three build-level levers are now measured null.
