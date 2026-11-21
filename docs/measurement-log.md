@@ -5550,3 +5550,13 @@ prompt tokens, prefill tok/s over two 24-pair batches:
 Boundary check: 1500 tokens (unchanged path) 294.75 vs 294.25 t/s (noise);
 3500 tokens 245.3 -> 254.7 t/s. Kept on 43/48 pairs (90%) with consistent
 positive medians. Tests 187/187, gates 4/4. This is the eighth kept win.
+
+256-row prefill chunks (2026-11-21): tested the other direction after the
+128->64 split win — larger chunks might amortize the weight stream better on
+short prompts. Byte-identical ids at 300/1500/3000 tokens; 187/187 with the
+change. At 1500 prompt tokens, 24 interleaved pairs: **0 wins / 24 losses**,
+medians 284.7 -> 266.8 t/s (-6.3%). The batch kernel re-reads activation rows
+once per output row, and a 256-row activation block no longer fits in cache —
+exactly the constraint documented at the kPrefillChunk definition. Reverted in
+full, rebuilt, 187/187 green. No code ships. 64/128 are now bracketed as the
+chunk sizes.
