@@ -5966,3 +5966,30 @@ block kernel (where the same change won at long context), the decode GQA dot is
 a smaller slice of a much shorter phase and the gain stays diluted. This closes
 the half-KV accumulator question at both contexts and both kernels; reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+## 2026-11-21 - Hoist Q8 scale conversion out of the batch token loop (KEPT, +3-4% prefill)
+
+The prefill batch GEMV walks a weight row once per token group (kGroup=8, so a
+64-token chunk walks each row 8 times), and each walk re-ran the branchy scalar
+`half_to_float()` on all `blocks` scales — the identical values 8 times over.
+Scale-variant experiments had all been on the decode path; the batch kernel was
+explicitly left untouched. Precomputed each row's scales once into a per-worker
+thread_local buffer (thread_local declared INSIDE the parallel_for lambda — a
+captured outer thread_local is shared across workers and crashed with 0xC0000005)
+and read from it in both the unrolled and tail group paths. FMA order and values
+unchanged => byte-identical.
+
+Health gate passed (mem read 54.34 / 52.47 / 61.32 GB/s across the three batches,
+x1/x4 clean). Byte-identical ids at 2048, 600, 2050 tokens (last exercises the
+partial-group tail); 187/187 with the change. Three 24-pair prefill batches at
+2048 (box was under variable load — absolute tok/s depressed to 150-230 vs the
+usual ~300, but both arms ran in the same windows so pairs are valid):
+
+| batch | wins/losses | median baseline | median hoist |
+|---|---|---|---|
+| 1 | 17 / 7 | 152.15 t/s | 158.30 t/s (+4.0%) |
+| 2 | 23 / 1 | 161.65 t/s | 232.45 t/s (+44%, load-skewed) |
+| 3 (clean, mem 61 GB/s) | 18 / 6 | 153.50 t/s | 157.75 t/s (+2.8%) |
+
+58/72 pairs (81%), all medians positive; the clean-box batch 3 is the trustworthy
+estimate. Kept. Tests 187/187, gates 4/4. This is the fifteenth kept win.

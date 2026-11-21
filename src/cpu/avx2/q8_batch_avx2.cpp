@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #include <immintrin.h>
 
@@ -67,6 +68,13 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
   const int bands = (rows + band_rows - 1) / band_rows;
 
   pool.parallel_for(bands, 1, [&](int band) {
+    // One scale row per worker, filled once per weight row and reused by every
+    // token group. The same branchy half_to_float was previously recomputed for
+    // each of the (tokens/kGroup) groups walking the identical row.
+    thread_local std::vector<float> scale_row;
+    if (static_cast<int>(scale_row.size()) < blocks) {
+      scale_row.resize(static_cast<std::size_t>(blocks));
+    }
     const int begin = band * band_rows;
     const int end = std::min(rows, begin + band_rows);
     const std::uint8_t* weight_row =
@@ -74,6 +82,12 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
 
     for (int row = begin; row < end; ++row) {
       int token = 0;
+      // Convert this row's scales once; every token group reuses them.
+      for (int b = 0; b < blocks; ++b) {
+        std::uint16_t sb = 0;
+        std::memcpy(&sb, weight_row + b * kQ8BlockBytes, sizeof(sb));
+        scale_row[static_cast<std::size_t>(b)] = half_to_float(sb);
+      }
 
       // Full and partial groups share one widened weight block across every
       // token in the group. The old tail re-read the same block once per
@@ -105,9 +119,8 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
           const float* x7 = args.input + static_cast<std::size_t>(token + 7) * cols;
           for (int block = 0; block < blocks; ++block) {
             const std::uint8_t* entry = weight_row + block * kQ8BlockBytes;
-            std::uint16_t scale_bits = 0;
-            std::memcpy(&scale_bits, entry, sizeof(scale_bits));
-            const __m256 scale = _mm256_set1_ps(half_to_float(scale_bits));
+            const __m256 scale =
+                _mm256_set1_ps(scale_row[static_cast<std::size_t>(block)]);
             const auto* values = reinterpret_cast<const std::int8_t*>(entry + 2);
             const __m256 w0 = widen(values + 0);
             const __m256 w1 = widen(values + 8);
@@ -154,9 +167,8 @@ void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config) {
 
         for (int block = 0; block < blocks; ++block) {
           const std::uint8_t* entry = weight_row + block * kQ8BlockBytes;
-          std::uint16_t scale_bits = 0;
-          std::memcpy(&scale_bits, entry, sizeof(scale_bits));
-          const __m256 scale = _mm256_set1_ps(half_to_float(scale_bits));
+          const __m256 scale =
+              _mm256_set1_ps(scale_row[static_cast<std::size_t>(block)]);
 
           const auto* values = reinterpret_cast<const std::int8_t*>(entry + 2);
           const __m256 w0 = widen(values + 0);
