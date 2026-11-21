@@ -5727,3 +5727,10 @@ ids at 2048; 187/187 with the change. 24 interleaved prefill pairs:
 **2 wins / 22 losses**, medians 301.45 -> 295.85 t/s (-1.9%). Coarser claiming
 harms load balance here exactly as it did in the decode kernel — grain 1 is
 correct for both. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+GQA attention parallel_for grain 1 -> 2 (2026-11-21): the reviewer noted grain
+was swept in the q8_gemv and q8_batch kernels but never the attention kernels.
+Byte-identical ids at 2048; 187/187 with the change. Two 24-pair decode batches
+at 2048 context (where GQA engages): 13W/11L (+0.6%) then 17W/7L (+0.7%) —
+combined 30/48 (62.5%) with marginal medians. Below the bar; grain 1 stays.
+Reverted in full, rebuilt, 187/187 green. No code ships.
