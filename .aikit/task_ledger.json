@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-BLKACC4",
+    "task_id": "TGE-SCALEHOIST",
     "last_phase": "phase 4",
     "active_phase": 5,
     "status": "completed",
-    "updated_at": 1795281369.08019,
+    "updated_at": 1795290536.514955,
     "owner": "opencode:session",
-    "lease_until": 1795288569.08019,
+    "lease_until": 1795297736.514955,
     "started_by": "opencode:session",
     "continuations": [],
     "workspaces": [
@@ -16,44 +16,11 @@
         "path": "projects/aegean-tge"
       }
     ],
-    "completed_at": 1795281402.4524498,
-    "completed_head": "d049118da3b4caa1d1b8f692ca7d485b136e1941",
-    "completed_tree": "3c044b4f6e36f8cd7916b9875c32680115dc101a"
+    "completed_at": 1795290571.8741965,
+    "completed_head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
+    "completed_tree": "7a33faedb611e535c8bf5f1149a3b90007e19169"
   },
   "checkpoints": [
-    {
-      "task_id": "chore-1795270304",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the attention KV prefetch experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795270304.0556664,
-      "timestamp_str": "2026-11-21 17:11:44",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795270525",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the vectorised-exp-in-online-softmax correctness rejection",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795270525.1725242,
-      "timestamp_str": "2026-11-21 17:15:25",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795271146",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the parallel GQA merge experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795271146.2802851,
-      "timestamp_str": "2026-11-21 17:25:46",
-      "agent": "opencode"
-    },
     {
       "task_id": "chore-1795272193",
       "phase": "chore",
@@ -292,6 +259,65 @@
       "timestamp": 1795287824.9000745,
       "timestamp_str": "2026-11-21 22:03:44",
       "agent": "opencode"
+    },
+    {
+      "task_id": "TGE-SCALEHOIST",
+      "phase": "phase 2",
+      "phase_num": 2,
+      "description": "[1/2] Plan + hoist Q8 scale conversion out of the batch token loop",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795290536.0308554,
+      "timestamp_str": "2026-11-21 22:48:56",
+      "agent": "opencode:session",
+      "impact_assessment": {
+        "why": "each weight row is walked 8x per chunk, re-running branchy half_to_float on identical scales 8x",
+        "benefits": "+3-4% prefill, byte-identical ids",
+        "risks": "contract: internal kernel buffer; dependency: none; concurrency: per-worker thread_local inside lambda; state: none",
+        "mitigation": "byte-identical ids 2048/600/2050, 58/72 pairs, 187/187 tests, 4/4 gates"
+      },
+      "plan_digest": "891166e7c80a3c530bd0b404b153f7f4758076ce600fe5b5bbb51226a245e799",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-SCALEHOIST",
+      "phase": "phase 4",
+      "phase_num": 4,
+      "description": "[2/2] Scale hoist: prefill 58/72 pairs, clean-box +2.8% median, ids byte-identical incl. tail, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "status": "in_progress",
+      "timestamp": 1795290536.514955,
+      "timestamp_str": "2026-11-21 22:48:56",
+      "agent": "opencode:session",
+      "checklists": "passed",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "task_id": "TGE-SCALEHOIST",
+      "phase": "completed",
+      "phase_num": 5,
+      "description": "Task 'TGE-SCALEHOIST' completed successfully.",
+      "status": "completed",
+      "timestamp": 1795290572.162139,
+      "timestamp_str": "2026-11-21 22:49:32",
+      "agent": "opencode:session",
+      "head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
+      "delivery": {
+        "roots": [
+          "."
+        ],
+        "forced": false
+      }
     }
   ]
 }
