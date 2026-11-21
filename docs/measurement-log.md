@@ -5410,3 +5410,9 @@ byte-identical ids on story and 300-token prompts; 187/187 with the change.
 Two 24-pair batches: 13W/11L (+0.7%) then 14W/10L (-0.7%) — combined 27/21
 with cancelling medians. All four build-level levers are now measured null.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Single-pass AVX2 argmax (2026-11-21): tried carrying max and index together to
+remove the second full-vocabulary scan. Stopped at the correctness gate —
+`argmax_avx2_matches_scalar_first_index` failed 9 assertions (first-index tie
+semantics). No speed A/B was run; the expected gain was only ~0.2% of decode.
+Reverted in full, rebuilt, 187/187 green. No code ships.
