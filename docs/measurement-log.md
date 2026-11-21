@@ -5593,3 +5593,13 @@ prompt tokens over two 24-pair batches: 19W/5L (+2.3%) then 16W/8L (+1.2%)
 and the second batch weaker than the first. Rejected to stay consistent with
 the bar; 1024 remains the tuned split. Reverted in full, rebuilt, 187/187
 green. No code ships.
+
+Split 1536 (2026-11-21): bracket between the kept 1024 and rejected 2048.
+Predicted to regress from first principles — the split-1024 win proved 64-row
+chunks beat 128-row chunks in the 1024-2048 band, so raising the split makes
+that band use the worse 128-row path. Byte-identical ids at 1200/1500/1800;
+187/187 with the change. At 1200 prompt tokens, 24 interleaved pairs:
+**5 wins / 19 losses**, medians 294.25 -> 287.20 t/s (-2.4%). Prediction
+confirmed; 1024 remains optimal. Reverted in full, rebuilt, 187/187 green.
+No code ships. The split sweep is now fully bracketed: 512 (60%), 768 (73%),
+1024 (81%, kept), 1536 (21%), 2048 (90% over 4096), 4096 (original).
