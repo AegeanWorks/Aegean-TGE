@@ -5304,3 +5304,12 @@ change. 24 interleaved decode pairs: **3 wins / 21 losses**, medians 95.27
 -> 92.38 t/s (-3.0%). Work-stealing granularity is worth its atomics here;
 the earlier ×2 and default ×4 results already bracketed the optimum.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Eight-token match spans in prompt_lookup_draft (2026-11-21): the drafter
+searched spans 6..1; tried 8..1 as a strict superset for more matches. Health
+gate passed (mem read 61.06 GB/s, x1/x4 clean); byte-identical speculative
+ids on the repetitive prompt; 187/187 with the change. Acceptance was
+unchanged there (9 steps, 2.78/step). Two 24-pair batches: 14W/10L (+0.2%)
+then 13W/11L (-0.1%) — combined 27W/23L with cancelling medians. No new
+matches worth a verify pass in these prompts. Reverted in full, rebuilt,
+187/187 green. No code ships.
