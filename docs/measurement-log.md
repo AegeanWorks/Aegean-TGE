@@ -5371,3 +5371,13 @@ exactly even sign count despite slightly positive medians. Far below the
 ~78% pair-win bar the kept wins cleared. Reverted in full, rebuilt, 187/187
 green. No code ships. All three chunk counts (12 default, 16, 18) are now
 measured null or below bar.
+
+64K-entry half-to-float LUT in dot_row_q8 (2026-11-21): reviewer-suggested
+alternative to the F16C scale variants — one L2 load per block instead of the
+branchy conversion. Table built once from half_to_float, so bit-identical.
+Health gate passed (mem read 60.86 GB/s, x1/x4 clean); byte-identical ids on
+story and 300-token prompts; 187/187 with the change. Two 24-pair batches:
+16W/8L (+1.2%) then 14W/10L (+0.4%) — combined 30W/18L (62.5%), below the
+~78% bar the kept wins cleared. Q8_0 decode is bandwidth-bound, so the L2
+lookup cannot move it, same as every other scale-conversion attempt.
+Reverted in full, rebuilt, 187/187 green. No code ships.
