@@ -5397,3 +5397,9 @@ clean both pairs); byte-identical ids at both counts. 24 interleaved pairs:
 **0 wins / 24 losses for 16**, medians 102.18 -> 93.00 t/s (-9%). The HT-pair
 and E-core straggler contention is not fixed by priority; 12 remains the
 optimum. No code change.
+
+Output pool width 18 (oversubscribe the 16 logical cores by two) in the
+post-priority config: byte-identical ids; health gate passed (mem read 58.13
+GB/s, x1/x4 clean). 24 interleaved pairs: **8 wins / 16 losses**, medians
+99.46 -> 99.12 t/s (-0.3%). With 14 (earlier) and now 18 both worse, 16 is
+the measured optimum for the wide output projection. No code change.
