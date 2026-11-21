@@ -5324,3 +5324,12 @@ pairs with --speculative: **0 wins / 24 losses**, medians 103.60 -> 90.74
 t/s (-12%). The larger batched verifier costs more than the unchanged number
 of emitted tokens saves. Reverted in full, rebuilt, 187/187 green. No code
 ships.
+
+Fused vs no-fuse speculation (2026-11-21): on the fox-and-dog repetitive
+prompt, `--no-fuse` won 41/7 over two 24-pair batches (medians 107.52 ->
+109.50, then 106.96 -> 110.94; +1.8%/+3.7%), with byte-identical ids.
+Mechanism: same 25 accepted drafts in 7 verifier passes instead of 9. But on
+a period-2 "ab ab..." prompt no-fuse lost 0/12 (305.28 -> 230.32 t/s, -25%),
+and on non-repetitive story it lost 5/7 (99.44 -> 97.68). The win is
+prompt-specific; fusion stays the default and `--no-fuse` stays an A/B flag.
+No code change.
