@@ -5454,3 +5454,13 @@ change. Two 24-pair batches: 16W/8L (+1.7%) then 12W/12L (-0.2%) — combined
 shows sample is only 0.7% of decode (0.07 ms/token), so the saved scan is
 below this box's noise floor. Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Paired-row Q8_0 GEMV (2026-11-21): creative structural lever — compute two
+output rows in lockstep so the activation vector is loaded once per block for
+both rows, removing ~25% of the inner loop's load uops. Each row keeps its own
+accumulator with the identical FMA/scale order, so all four id checks (Q8_0 and
+Q4_K_M, story and 300-token) were byte-identical; 187/187 with the change.
+24 interleaved decode pairs: **5 wins / 19 losses**, medians 85.93 -> 83.50
+t/s (-2.8%). The second accumulator set raises register pressure and the
+scheduler cannot hide the extra dependency chains; the saved activation loads
+(hot in L1) do not pay. Reverted in full, rebuilt, 187/187 green. No code ships.
