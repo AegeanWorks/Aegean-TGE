@@ -5231,3 +5231,12 @@ byte-identical greedy ids at both counts, 24 interleaved pairs (mem read
 30.27 t/s (+8.4%). With the earlier Q8_0-0.5B (56/16) and Q4_K_M-0.5B
 (23/1) results, the default is validated across all three local model
 sizes/formats. No code change.
+
+Skip Vulkan init when GPU is off (2026-11-21): `generate` always called
+`gpu::init()` even with the now-default `--gpu off`; tried skipping it in
+that case to avoid device init and background resources. Health gate passed
+(mem read 58.25 GB/s, x1/x4 clean); byte-identical ids on story and 300-token
+prompts; 187/187 with the change. 24 interleaved decode pairs: **12 wins /
+12 losses**, medians 90.42 -> 90.58 t/s (+0.2%). Vulkan init is a one-time
+startup cost with no lasting decode contention. Reverted in full, rebuilt,
+187/187 green. No code ships.
