@@ -5664,3 +5664,9 @@ Kept on 43/48 pairs (90%) with consistent medians. Tests 187/187, gates 4/4.
 This is the eleventh kept win. Both batch kernels now use group 8; the VNNI
 group-10 optimum was not tested (float 10 already spills, VNNI has a different
 register budget) — left as a future bracket if the opt-in path matters.
+
+VNNI group 10 (2026-11-21): closed that bracket — 10 is worse in VNNI too.
+Byte-identical ids under --vnni; 187/187 with the change. 24 interleaved
+prefill pairs: **5 wins / 19 losses**, medians 265.30 -> 255.55 t/s (-3.7%).
+Group 8 is now the measured optimum for both batch kernels. Reverted in full,
+rebuilt, 187/187 green. No code ships.
