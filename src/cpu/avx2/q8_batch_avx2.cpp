@@ -30,12 +30,12 @@ inline float horizontal_sum(__m256 values) {
 /// One output row against `kGroup` tokens at once.
 ///
 /// The weight block is widened once and then applied to every token in the
-/// group: six folds of the same 32 weights. That amortization is the whole
+/// group: eight folds of the same 32 weights. That amortization is the whole
 /// point of batching, so the token loop is inside the block loop on purpose.
-/// Six is a register-budget choice: six accumulators plus four weight vectors
-/// plus the per-token temporaries fit the sixteen YMM registers without
-/// spilling, and eight does not.
-constexpr int kGroup = 6;
+/// Eight was measured against six on this compiler/CPU (+6-7% prefill tok/s,
+/// 46/48 pairs); the old claim that eight spills the YMM registers did not
+/// hold. See the 2026-11-21 measurement-log entry.
+constexpr int kGroup = 8;
 
 }  // namespace
 

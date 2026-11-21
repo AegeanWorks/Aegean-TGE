@@ -5613,3 +5613,27 @@ clean). 24 interleaved decode pairs: **10 wins / 14 losses**, medians 66.91 ->
 65.96 t/s (-1.4%). At this context the stride-4 gather saves little attention
 work and its gather path costs more; sparse stays off by default. Flag-only
 test, no code change.
+
+## 2026-11-21 - Prefill token group 6 -> 8 (KEPT, +6% on Q8_0)
+
+The Q8_0 batch GEMV widens one weight block and folds it across `kGroup`
+tokens. The code comment claimed 8 accumulators would spill the 16 YMM
+registers — tested empirically and the claim is false on this compiler/CPU.
+
+Health gate passed (mem read 52.30 GB/s, x1/x4 clean). Byte-identical ids at
+2048 tokens; 187/187 with the change. Prefill tok/s at 2048 prompt tokens
+(two 24-pair batches):
+
+| batch | wins/losses | median group-6 | median group-8 |
+|---|---|---|---|
+| 1 | 24 / 0 | 278.25 t/s | 296.55 t/s (+6.6%) |
+| 2 | 22 / 2 | 291.50 t/s | 312.35 t/s (+7.2%) |
+
+Shorter Q8_0 prompts also gain (300 tok +4%, 600 tok +6%). Q4_K_M, whose
+dequant batch kernel does not use kGroup, was neutral on a fresh 24-pair run
+(10/14, 276.6 -> 277.7). Kept on 46/48 Q8_0 pairs with strong medians.
+Tests 187/187, gates 4/4. This is the tenth kept win. The register-budget
+comment in q8_batch_avx2.cpp is now stale.
+
+Note: the paired VNNI kernel (`q8_batch_vnni.cpp`) still uses its own
+`kGroup = 6` and was not part of this change (VNNI is opt-in).
