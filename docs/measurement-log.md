@@ -5788,3 +5788,14 @@ softmax and breaks the scalar-parity contract. This is exactly why this path
 kept std::exp while the batched paths (which have a looser fidelity test) use
 exp_avx2. Reverted in full, rebuilt, 187/187 green. No code ships. No speed A/B
 was run — a failing correctness gate outranks it (PRINCIPLE-000 R6).
+
+Parallel GQA chunk merge (2026-11-21): the 14-head merge loop was serial even
+though each head writes its own out slice. Enlarged reduction_acc_ to per-head
+scratch and spread the merges over the decode pool (byte-identical by
+construction — elementwise, unchanged exp values). Health gate passed (mem read
+54.60 GB/s, x1/x4 clean); byte-identical ids on Q8/Q4KM 2048 and Q8 story;
+187/187 with the change. 24 interleaved decode pairs at 2048 context:
+**13 wins / 11 losses**, medians 71.36 -> 71.44 t/s (flat, +0.1%). The pool
+round-trip costs what the parallel merge saves — same pattern as the earlier
+parallel-argmax test. Reverted in full (two coordinated files), rebuilt, 187/187
+green. No code ships.
