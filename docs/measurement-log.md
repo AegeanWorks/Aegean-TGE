@@ -5271,3 +5271,11 @@ original pre-win binary vs current HEAD: **24 wins / 0 losses**, medians
 23.81 -> 33.08 t/s (+38.9%). With Q8_0-0.5B (+67%) and Q4_K_M-0.5B
 (+57.5%), the seven wins are now cumulatively verified on all three local
 models. No code change.
+
+Smaller allocated KV context for locality (2026-11-21): on a 2048-token
+prompt, compared `--context 2200` (near actual usage) against the 4096
+default — byte-identical ids. Health gate passed (mem read 56.46 GB/s,
+x1/x4 clean). Two 24-pair batches: 16W/8L (+1.3% median) then 12W/12L
+(+0.7%) — combined 28W/20L, medians barely positive and no sign
+consistency. Also not actionable as a default: the right value depends on
+the prompt length, which is not known at KV-allocation time. No code change.
