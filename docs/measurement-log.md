@@ -5777,3 +5777,14 @@ gate passed (mem read 42.06 GB/s, x1/x4 clean). Byte-identical ids on three
 positive medians but below the ~78% win bar. The gapped stride lets the
 hardware prefetcher cover most of it; the 8 extra uops/token are not paid back.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Vectorised exp in attention_group_avx2 online softmax (2026-11-21): the online
+softmax still used scalar std::exp per token (2 call sites) while the other
+attention paths in the same TU already use exp_avx2. Replaced both with a
+single-lane exp_avx2 wrapper. Rejected at the correctness gate before any A/B:
+`attention_group_avx2_matches_scalar` failed 4 assertions (scalar_sums vs
+vector_sums) — the ~1e-6 Cephes polynomial error accumulates over the running
+softmax and breaks the scalar-parity contract. This is exactly why this path
+kept std::exp while the batched paths (which have a looser fidelity test) use
+exp_avx2. Reverted in full, rebuilt, 187/187 green. No code ships. No speed A/B
+was run — a failing correctness gate outranks it (PRINCIPLE-000 R6).
