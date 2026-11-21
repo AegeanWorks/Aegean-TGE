@@ -5357,3 +5357,9 @@ positive. Short context (GQA inactive) was 4W/8L (-0.6%) — noise. Rejected:
 69% sign consistency does not clear the bar the kept wins met (78-96%), and
 the earlier cap-6 test already showed chunk counts are noisy. Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+SKIP-locked fast path (`--no-skip` A/B, 2026-11-21): on a period-2 prompt,
+ids byte-identical and acceptance identical (10 steps, 5.10/step) with the
+path on or off — the prompt-lookup path finds the same matches. 24 interleaved
+pairs: **9 wins / 15 losses for no-skip**, medians 306.17 -> 299.24 t/s
+(-2.3%). No win; SKIP stays default. No code change.
