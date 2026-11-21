@@ -5637,3 +5637,10 @@ comment in q8_batch_avx2.cpp is now stale.
 
 Note: the paired VNNI kernel (`q8_batch_vnni.cpp`) still uses its own
 `kGroup = 6` and was not part of this change (VNNI is opt-in).
+
+Group 10 in the Q8_0 batch GEMV (2026-11-21): after group 8 beat 6, tested
+whether the optimum is higher. Byte-identical ids at 2048 tokens; 187/187 with
+the change. 24 interleaved prefill pairs: **8 wins / 16 losses**, medians 299.7
+-> 295.7 t/s (-1.3%). Ten accumulators plus four weight vectors finally do
+spill, so 8 is the measured optimum (6 loses to 8, 8 beats 10). Reverted in
+full, rebuilt, 187/187 green. No code ships.
