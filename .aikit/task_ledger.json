@@ -22,17 +22,6 @@
   },
   "checkpoints": [
     {
-      "task_id": "chore-1795253609",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the strided-rows experiment in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795253609.1520274,
-      "timestamp_str": "2026-11-21 12:33:29",
-      "agent": "opencode"
-    },
-    {
       "task_id": "TGE-PREFILL-SPLIT2048",
       "phase": "phase 2",
       "phase_num": 2,
@@ -347,6 +336,17 @@
       "chore": true,
       "timestamp": 1795263306.2176247,
       "timestamp_str": "2026-11-21 15:15:06",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795263916",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the group-7 experiment in the measurement log",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795263916.6085746,
+      "timestamp_str": "2026-11-21 15:25:16",
       "agent": "opencode"
     }
   ]
