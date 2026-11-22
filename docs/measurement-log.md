@@ -6567,3 +6567,93 @@ neither is this exact 6P+4E consumer Windows box with a Q8_0 GGUF. They are
 used as mechanism explanations, not as direct performance comparisons. All
 performance numbers above are ours and were measured under the health gate
 (mem read >=26 GB/s, clean x1>x4 tripwire).
+
+## 2026-11-22 - The one result the literature appears to get backwards: SMT siblings help decode
+
+This is the finding we believe is genuinely absent from the published and
+community guidance: **for memory-bound, single-stream CPU decode, using both
+SMT siblings of each P-core is optimal, and using only the physical-core count
+is measurably worse.** We searched for prior statements of this and found the
+opposite advice everywhere. It is a negative result about a default, with a
+sharp bracket and byte-identical ids — not a new kernel.
+
+### What the sources say
+
+The standard advice for llama.cpp CPU inference is to set `-t` to the physical
+core count and avoid hyperthreads:
+
+- llama.cpp tuning notes: "Lower `-t` to the physical core count (not the
+  logical thread count), and drop it by another 1-2 if needed."
+- A CPU-only homelab guide: "Threads = physical cores, with `--cpu-strict 1`.
+  Don't use hyperthreading; it doesn't help."
+- An unsloth PR pinning `--threads` to physical cores explains why: passing
+  `-1` delegates to hardware concurrency, so "every hyperthread ... contends
+  on the memory bus and slows CPU / hybrid decode."
+- llama.cpp PR #27033 (cited above) explicitly finds P-core logical processors
+  "skipping hyperthreads" for its auto-pinning.
+
+On this 6P+4E box, "physical cores" means 10 and "P physical cores" means 6.
+Both are worse than 12 in our measurements.
+
+### What we measured instead
+
+All Decode pool threads are pinned to the 12 P-core *logical* processors
+(both SMT siblings of each of 6 P-cores); E-cores are excluded. Pairwise A/B
+under the health gate, greedy ids byte-identical at every count:
+
+| comparison | pairs | median |
+|---|---:|---:|
+| 6 (P-physical count) vs 10 | 0 / 24 for 6 | 67.24 vs 77.96 t/s (-14%) |
+| 10 (all-physical count) vs 12 | 56 / 16 (78%) for 12 | +4.9%, +6.1%, +2.1% across three batches |
+| 11 vs 12 | 0 / 24 for 11 | -4.1% |
+| 13 vs 12 | 2 / 22 for 13 | -5.3% |
+| 14 vs 12 | 10 / 14 for 14 | -3.2% |
+| 16 vs 12 | 0 / 24 for 16 | -9% |
+
+The 12 default is also validated cross-model: +9.5% (23/1) on 0.5B Q4_K_M and
++8.4% (24/0) on coder-1.5b Q8_0. So this is a sharp optimum at exactly the
+P-core logical-thread count, bracketed on both sides, not a "more threads is
+better" trend.
+
+### Why the two positions differ
+
+The guidance assumes SMT siblings steal issue slots and contend for the memory
+bus. That is correct for *compute-bound* work, where two siblings share one
+core's execution units and cannot both run FMA at full rate. Single-stream
+decode is different: it is memory-bound, and each matvec streams hundreds of
+MB of weights. The limiting resource is outstanding memory requests, not FMA
+throughput. A sibling whose scalar work stalls on a load can keep issuing
+loads for a different band, so the pair sustains more memory-level parallelism
+on the same core. This is why the second sibling helps here while E-cores
+hurt: the E-core is a genuinely slower straggler for the whole `parallel_for`,
+whereas the SMT sibling is a peer on the same fast core.
+
+The published hybrid-CPU work is consistent with this mechanism but does not
+state this conclusion. Yu et al. (arXiv:2411.19542) balance work dynamically
+across hybrid cores and reach >90% of bandwidth; our result adds the specific
+claim that the *thread count* should equal the fast cores' logical count, not
+their physical count, when decode is bandwidth-bound — and that the usual
+"skip hyperthreads" rule inverts.
+
+### Scope and what would falsify it
+
+This is measured on one Windows consumer box (i5-14400F, 6P+4E, AVX2/VNNI),
+one quantisation (Q8_0, with a Q4_K_M cross-check), single-stream greedy
+decode. It is not a claim about GPU offload, batch serving, or compute-bound
+prefill — there, one-thread-per-physical-core may well be right, and the
+sources above are probably correct. The claim is narrow: for bandwidth-bound
+single-stream decode on a hybrid CPU, test the logical P-core count before
+assuming the physical count is optimal. A machine where decode is compute-bound
+or where the two SMT siblings do not share the path to memory would falsify it.
+
+### Sources
+
+1. llama.cpp tuning-notes and homelab guides recommending `-t` = physical
+   cores and no hyperthreading; unsloth PR #5894 pinning `--threads` to
+   physical cores with the memory-bus-contention rationale.
+2. ggml-org/llama.cpp PR #27033, Win32 hybrid affinity, "skipping hyperthreads".
+3. L. Yu, Y. Liu, H. Shen, arXiv:2411.19542, dynamic hybrid-CPU load balancing.
+4. This log: "Decode default 10 -> 12 threads", "Decode thread count re-check
+   after the priority wins", the 11/13/14/16 ceiling checks, and the two
+   cross-model validation entries. All pairs interleaved, health-gated,
+   byte-identical ids, 187/187 tests and 4/4 gates throughout.
