@@ -6280,3 +6280,14 @@ change. 24-pair prefill at 4080 --kv f16: base 5W/19L (-3.9%), SmolLM2 17W/7L
 (+0.4%) — not a win on both; base clearly worse. The store is a tiny slice of
 prefill; the extra helper call per token/layer costs more than the saved scalar
 conversions. Reverted in full (3 files), rebuilt, 187/187 green. No code ships.
+
+Wide output pool band factor 4 -> 6 (96 bands, 6 per 16 workers) (2026-11-22):
+only factors 2/3/4/8 had been tested; 6 was a finer load-balance candidate.
+Two server restarts interrupted the first A/B runs; state was verified and the
+test re-run in smaller batches (no work lost). Health gate passed (mem read
+53-56 GB/s, x1/x4 clean); byte-identical ids; 187/187 with the change. Decode
+A/B: base 12/24 (flat medians 70.01 -> 70.36 in the clean batch; the first batch
+had a transient load spike to 12 t/s but was still 6/6), coder-1.5b 12/16 (+0.75%).
+Both below the ~78% two-model bar. Factor 4 (64 bands) confirmed optimal for the
+wide pool; factor 6 joins 2/3/8 as rejected. Reverted in full, rebuilt, 187/187
+green. No code ships.
