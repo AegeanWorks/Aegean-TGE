@@ -6106,3 +6106,12 @@ The different-architecture models (Llama 24/8 group-3, Phi 32/32 no-GQA) are all
 Q4_K_M, so Q8_0-only batch wins (group-8, scale-hoist, unroll) cannot be tested
 on them; the cached-detect win was used because it applies to every model.
 No code change — these validate existing kept wins. 187/187 tests, 4/4 gates.
+
+rms_norm sum-of-squares accumulators 1 -> 4 (2026-11-22): model-agnostic lever
+(norm runs on every model); the single __m256 serial FMAdd chain over dim was
+split into four accumulators to hide FMA latency. Health gate passed (mem read
+40.45 GB/s, x1/x4 clean); byte-identical ids on base Q8_0 and SmolLM2-Q4_K_M;
+187/187 with the change (fidelity tolerance). 24-pair decode each model: base
+11W/13L (flat), SmolLM2 10W/14L (-27%, partly load but clearly no win). The norm
+reduction is short (dim 896-4864) and already fast; latency hiding does not pay.
+Reverted in full, rebuilt, 187/187 green. No code ships.
