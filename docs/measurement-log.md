@@ -6115,3 +6115,12 @@ split into four accumulators to hide FMA latency. Health gate passed (mem read
 11W/13L (flat), SmolLM2 10W/14L (-27%, partly load but clearly no win). The norm
 reduction is short (dim 896-4864) and already fast; latency hiding does not pay.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+SiLU gate vdivps -> rcp+2 Newton steps (2026-11-22): model-agnostic FFN lever
+(norm_rope_avx2.cpp silu_gated_avx2). Replaced the full vector divide g/denom with
+a reciprocal estimate plus two Newton refinements (~float precision). Health gate
+passed (mem read 37.35 GB/s, x1/x4 clean); byte-identical ids on base Q8_0 and
+SmolLM2-Q4_K_M; 187/187 with the change. 24-pair decode each model: base 12W/12L
+(flat), SmolLM2 9W/15L (the -62% is mostly a load anomaly but clearly not a win).
+The SiLU divide is a small slice of decode and vdivps throughput is not the
+bottleneck. Reverted in full, rebuilt, 187/187 green. No code ships.
