@@ -6310,3 +6310,11 @@ change. 12-pair decode batches x2 on base: 8/12 then 7/12 (combined 15/24,
 medians +1.7%/+1.1%); SmolLM2 7/9 (flat/slightly worse). Both below the ~78%
 two-model rule — the small matrices are a tiny slice and 8-row bands reduce load
 balance granularity. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Wide output pool parallel_for grain 1 -> 2 (2026-11-22): the 16-wide pool has 64
+bands; grain 2 halves its atomic claims. Grain 2 was tested on the 12-thread
+decode pool (rejected) but not the wide pool specifically. Byte-identical ids;
+health gate passed (mem read 58.71 GB/s, x1/x4 clean); 187/187 with the change.
+12-pair decode on base: 2W/10L (median 71.88 -> 70.41) — clearly worse, grain 2
+hurts load balance on the wide pool too. Reverted in full, rebuilt, 187/187 green.
+No code ships.
