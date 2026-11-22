@@ -6157,3 +6157,20 @@ on retry); byte-identical ids; 187/187 with the change. Two 24-pair decode
 batches on base Q8_0: 10W/14L and 10W/14L, flat medians (70.67->70.54, 69.01->
 68.71). The output-pool workers at +1 do not measurably contend with decode.
 Reverted in full (3 coordination files), rebuilt, 187/187 green. No code ships.
+
+## 2026-11-22 - Cumulative cross-model validation of the full 15-win stack
+
+Per-user request for morning results on model generalization: built a pre-wins
+baseline from c35e6e8 (parent of the first kept win f712453) in a temporary
+worktree and compared to current HEAD on two genuinely different models. The
+whole 15-win stack is byte-identical to the baseline (1500-tok ids), a strong
+correctness confirmation. Health gate passed (mem read 60.25 GB/s, x1/x4 clean).
+
+| model | type | wins/losses | median pre-wins -> current |
+|---|---|---|---|
+| SmolLM2-135M-Q4_K_M | 30L/576/9-3, Q4_K_M, vocab 49152 | 24 / 0 (100%) | 69.38 -> 124.62 t/s (+80%) |
+| qwen2.5-coder-1.5b-Q8_0 | 28L/1536/12-2, Q8_0 | 24 / 0 (100%) | 22.38 -> 26.82 t/s (+20%) |
+
+Both 24/0. The accumulated wins generalize strongly across size, architecture,
+and quantization. No code change — validates existing kept wins. Tests 187/187,
+gates 4/4.
