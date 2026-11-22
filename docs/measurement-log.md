@@ -6234,3 +6234,14 @@ worse. The cvtph conversions are cheap; re-traversing heads per token plus a
 score array costs more. Together with the pre-convert and f32 token-outer tests,
 the head-outer layout of attention_group is confirmed as the right one. Reverted
 in full, rebuilt, 187/187 green. No code ships.
+
+Batch GEMV 16-byte int8 widen loads (2026-11-22): the batch kernel widened each
+32-value block with four 8-byte loads; decode already tested 8/16/32-byte loads
+(null) but the batch site is separate and widens 8x more often per chunk. Two
+16-byte loads + _mm_srli_si128 replaced the four 8-byte loads, byte-identical.
+Health gate passed (mem read 61.62 GB/s, x1/x4 clean); byte-identical ids on base
+and coder-1.5b; 187/187 with the change. Two 24-pair prefill batches each: base
+17W/7L then 14W/10L (combined 31/48, +0.5%); c15 16W/8L then 13W/11L (combined
+29/48, +0.3%) — below the ~78% bar with marginal medians. The saved loads are
+offset by the extra shifts, matching the decode null. Reverted in full, rebuilt,
+187/187 green. No code ships.
