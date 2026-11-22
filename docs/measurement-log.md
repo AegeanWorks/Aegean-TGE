@@ -6362,3 +6362,39 @@ was 187/187. Two 12-pair decode batches on base Q8_0: 6/12 then 6/12 (combined
 No consistent win — the hot kernels are straight-line SIMD with few unpredictable
 branches, so profile data has nothing to reorder. PGO build dirs and profile data
 removed; no source or tracked build config changed. No code ships.
+
+## 2026-11-22 - Fast cross-engine snapshot vs llama.cpp cd8427d (current 15-win stack)
+
+Asked for a small comparison rather than a full paired matrix. Same GGUF files,
+128-token id prompt, 32 generated tokens, CPU-only (`-ngl 0`), both MinGW-GCC
+builds. llama.cpp is `.llama-bench/build-release/bin/llama-bench.exe` (0.8.0-dev,
+commit cd8427d); TGE is `build/release/bin/tge.exe` at b878970. Not interleaved;
+directional only.
+
+| model | engine (setting) | pp128 t/s | tg32 t/s |
+|---|---|---:|---:|
+| Qwen2.5-0.5B Q8_0 | llama t=6 | 244.33 | **24.00** |
+| | llama t=12 | 129.64 | 7.52 |
+| | llama t=16 | **304.84** | 10.15 |
+| | TGE (16/12 defaults) | 343.9 | **79.5** |
+| | TGE / best llama | 1.13x | **3.31x** |
+| Qwen2.5-Coder-1.5B Q8_0 | llama t=6 | **146.75** | **14.78** |
+| | llama t=16 | 46.65 | 5.33 |
+| | TGE (16/12 defaults) | 85.5 | **25.3** |
+| | TGE / best llama | 0.58x | **1.71x** |
+
+Decode leads on both models (3.3x / 1.7x over the best llama tg32 observed).
+Prefill is mixed: +13% on 0.5B, -42% on 1.5B. The prefill gap is directional,
+not a precise ratio — see caveats.
+
+The useful finding is llama.cpp's thread cliff on this 6P+4E hybrid box: the
+same binary and file drop from tg32 24.0 at `-t 6` to 7.5 at `-t 12` and 10.2
+at `-t 16` on 0.5B (14.8 -> 5.3 on the 1.5B). TGE's fixed 12-thread
+P-core-pinned, priority-nudged decode pool has no such cliff; that is the
+structural reason for the decode lead, not a different quantizer or KV format.
+
+Caveats stated for honesty: not interleaved paired A/B; llama defaults to f16 KV
+while TGE defaults to f32 (TGE's f16 is opt-in); TGE splits 16 prefill / 12
+decode threads while llama uses one uniform `-t`; box noise is large (llama's
+own +-8-38%, and repeated identical configs disagreed by up to 3x). No code
+change; this is a snapshot, not a new win. Gates 4/4, tests 187/187.
