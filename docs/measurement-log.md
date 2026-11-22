@@ -6174,3 +6174,12 @@ correctness confirmation. Health gate passed (mem read 60.25 GB/s, x1/x4 clean).
 Both 24/0. The accumulated wins generalize strongly across size, architecture,
 and quantization. No code change — validates existing kept wins. Tests 187/187,
 gates 4/4.
+
+dot_q4k_row_avx2 accumulators 4 -> 8 (2026-11-22): the fused Q4_K decode dot is
+ALU-bound (unlike bandwidth-bound Q8), so hiding FMA latency had a mechanism.
+Split its four accumulators into two 4-lane groups alternating per 64-wide chunk
+and reduced eight ways. Rejected at the correctness gate: dequant_q4k_fused_row_matches_batch
+memcmp failed (2 assertions) — the fused dot must be BIT-identical to the
+dequantise-then-dot path, and the changed reduction order breaks that contract
+(same gate that blocked dot_f32 4->8). Reverted in full, rebuilt, 187/187 green.
+No code ships. No speed A/B run — a failing correctness gate outranks it.
