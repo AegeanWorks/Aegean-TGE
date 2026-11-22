@@ -6301,3 +6301,12 @@ confirmation was 14W/10L with a flat median — the +3% did not reproduce. Combi
 base 27/40, SmolLM2 9/16, both below the ~78% rule. The adds are a tiny fraction
 of the bandwidth-bound decode. Reverted in full (3 files), rebuilt, 187/187 green.
 No code ships.
+
+Minimum GEMV band size of 8 rows (2026-11-22): for small KV projections (128 rows
+/ 12 threads) the default rows/(threads*4) gives 2-row bands => 64 atomic claims
+per matvec; a floor of 8 rows would cut that ~4x. Byte-identical ids (partitioning
+only); health gate passed (mem read 64.61 GB/s, x1/x4 clean); 187/187 with the
+change. 12-pair decode batches x2 on base: 8/12 then 7/12 (combined 15/24,
+medians +1.7%/+1.1%); SmolLM2 7/9 (flat/slightly worse). Both below the ~78%
+two-model rule — the small matrices are a tiny slice and 8-row bands reduce load
+balance granularity. Reverted in full, rebuilt, 187/187 green. No code ships.
