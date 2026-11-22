@@ -6269,3 +6269,14 @@ was tested earlier but not this one. Byte-identical ids on base Q8_0 and SmolLM2
 14W/10L (-2.8%) — flat/worse. The reduction is ~5 ops once per row against ~28
 FMAs in the dot, so its op mix cannot move a bandwidth-bound matvec (matches the
 f32 GEMV reduction null). Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Prefill f16 KV store vectorisation via _mm256_cvtps_ph (2026-11-22): the earlier
+triage was only for the DECODE store (~3072 conversions/token); the PREFILL
+store (qwen2.cpp ~2475) handles 4080 tokens x 24 layers x kv_dim and was never
+tested. Added a float_to_half_batch AVX2 helper (bit-exact, scalar tail) and used
+it for K/V stores. Health gate passed (mem read 62.37 GB/s, x1/x4 clean);
+byte-identical ids at 2048 with --kv f16 on base and SmolLM2; 187/187 with the
+change. 24-pair prefill at 4080 --kv f16: base 5W/19L (-3.9%), SmolLM2 17W/7L
+(+0.4%) — not a win on both; base clearly worse. The store is a tiny slice of
+prefill; the extra helper call per token/layer costs more than the saved scalar
+conversions. Reverted in full (3 files), rebuilt, 187/187 green. No code ships.
