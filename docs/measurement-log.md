@@ -6202,3 +6202,13 @@ pushed past the 16-chunk near-miss to finer load balance. Health gate passed
 187/187 with the change. 24-pair decode each: base 14W/10L (+0.6%), SmolLM2
 10W/14L (-0.5%) — flat/worse. 18 chunks is past the useful point; the 12-chunk
 default stays. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Third prefill chunk tier: 32 rows for count>2048 (2026-11-22): only 128 (<=1024)
+and 64 (>1024) had been tested, with the threshold heavily swept but no tier
+below 64. At 4080 attention is ~32% of prefill, so smaller chunks might tighten
+the working set. Health gate passed (mem read 46.07 GB/s, x1/x4 clean); byte-identical
+ids at 4080 on base Q8_0 and SmolLM2; 187/187 with the change. 24-pair prefill:
+base 2W/22L (-5.5%), SmolLM2 1W/23L (-10.6%) — decisively worse on both. Smaller
+chunks add more attention recompute/overhead than the tighter working set saves.
+The two-tier 128/64 split is confirmed; reverted in full, rebuilt, 187/187 green.
+No code ships.
