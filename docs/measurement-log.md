@@ -6339,3 +6339,13 @@ exactly the hybrid straggler failure the header predicted. Scoped static to the
 12-thread pinned pool only: still 0W/12L (-10%) — the 12 "P-core" threads are 6
 physical cores x2 SMT, so effective throughput is unequal and dynamic claiming
 still wins. Reverted in full (4 files), rebuilt, 187/187 green. No code ships.
+
+K-quant decode band factor 4 -> 6 (2026-11-22): the fused Q4_K/Q6_K decode
+kernels had factors 2 (rejected) and 8 (null) tested around the default 4; 6 was
+the untested midpoint. A server restart interrupted the first A/B; state was
+verified and it was re-run in smaller batches (no work lost). Health gate passed
+(mem read 41.83 GB/s, x1/x4 clean); byte-identical Q4_K_M ids; 187/187 with the
+change. Two 8-pair decode batches on qwen2.5-0.5b-Q4_K_M: 1/8 then 3/8 (combined
+4/16, medians 55.44 -> 54.56 and 54.94 -> 53.05) — decisively worse. Factor 4
+remains optimal for the K-quant decode kernels. Reverted in full (2 sites),
+rebuilt, 187/187 green. No code ships.
