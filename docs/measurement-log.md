@@ -6261,3 +6261,11 @@ Health gate passed (mem read 56.38 GB/s, x1/x4 clean); byte-identical ids.
 24-pair decode each: base 7W/17L (median 78.89 -> 78.44), coder-1.5b 10W/14L
 (29.45 -> 29.47) — flat/worse on both. 16 logical threads confirmed optimal for
 the wide pool (10/12/14 all lose). No code change.
+
+Q8 GEMV horizontal reduction via two _mm256_hadd_ps (2026-11-22): the Q8 decode
+matvec's final 8-lane reduction used extract/movehl/shuffle; the f32 GEMV site
+was tested earlier but not this one. Byte-identical ids on base Q8_0 and SmolLM2;
+187/187 with the change. 24-pair decode each: base 13W/11L (+0.35%), coder-1.5b
+14W/10L (-2.8%) — flat/worse. The reduction is ~5 ops once per row against ~28
+FMAs in the dot, so its op mix cannot move a bandwidth-bound matvec (matches the
+f32 GEMV reduction null). Reverted in full, rebuilt, 187/187 green. No code ships.
