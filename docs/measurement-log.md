@@ -6147,3 +6147,13 @@ been tested; 12 was untested. Health gate passed (mem read 43.45 GB/s); byte-ide
 ids. 24-pair decode on base Q8_0: 9W/15L (median 71.74 -> 71.06, flat/slightly
 worse). 16 confirmed optimal for the output pool (12 and 14 both lose).
 No code change.
+
+Decode-only thread priority scoping (2026-11-22): the kept +1 thread priority
+applies to ALL pools, so during decode the 16 spinning wide-output-pool workers
+run at the same +1 as the 12 decode workers. Flagged as unbuilt at line ~4914.
+Added a per-pool high_priority flag (default true; prefill pool false) so decode
+workers alone keep +1. Health gate passed (mem read 51.16 GB/s; tripwire clean
+on retry); byte-identical ids; 187/187 with the change. Two 24-pair decode
+batches on base Q8_0: 10W/14L and 10W/14L, flat medians (70.67->70.54, 69.01->
+68.71). The output-pool workers at +1 do not measurably contend with decode.
+Reverted in full (3 coordination files), rebuilt, 187/187 green. No code ships.

@@ -22,17 +22,6 @@
   },
   "checkpoints": [
     {
-      "task_id": "chore-1795283317",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the dot_avx2 accumulator re-test at 4080 in the measurement log",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795283317.349597,
-      "timestamp_str": "2026-11-21 20:48:37",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795285229",
       "phase": "chore",
       "phase_num": 1,
@@ -265,6 +254,17 @@
       "chore": true,
       "timestamp": 1795311796.8993762,
       "timestamp_str": "2026-11-22 04:43:16",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795313247",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the decode-only priority scoping experiment",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795313247.4925609,
+      "timestamp_str": "2026-11-22 05:07:27",
       "agent": "opencode"
     }
   ]
