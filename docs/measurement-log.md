@@ -6212,3 +6212,14 @@ base 2W/22L (-5.5%), SmolLM2 1W/23L (-10.6%) — decisively worse on both. Small
 chunks add more attention recompute/overhead than the tighter working set saves.
 The two-tier 128/64 split is confirmed; reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Token-outer f32 attention in attention_group_avx2 (2026-11-22): creative structural
+rewrite — the online softmax was head-outer/token-inner, loading each shared K/V
+row once per grouped head (7x for Qwen, 3x for SmolLM2). Flipped to token-outer so
+each K/V row loads once and is reused across heads; per-head operation order in
+token sequence unchanged => byte-identical. Health gate passed (mem read 52.59
+GB/s, x1/x4 clean); byte-identical ids on base Q8_0 and SmolLM2-Q4_K_M (f32 path);
+187/187 with the change. 24-pair decode: base 8W/16L (-1.9%), SmolLM2 1W/23L
+(-9.6%) — both worse. The f32 K/V loads are L1-resident and cheap; re-traversing
+heads per token plus a separate score array costs more than the saved loads.
+Reverted in full, rebuilt, 187/187 green. No code ships.
