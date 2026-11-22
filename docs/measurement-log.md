@@ -6183,3 +6183,15 @@ memcmp failed (2 assertions) — the fused dot must be BIT-identical to the
 dequantise-then-dot path, and the changed reduction order breaks that contract
 (same gate that blocked dot_f32 4->8). Reverted in full, rebuilt, 187/187 green.
 No code ships. No speed A/B run — a failing correctness gate outranks it.
+
+GQA chunks threads*2 -> threads*3 (16 vs 12), re-tested at 4040 context (2026-11-22):
+the 16-chunk direction was a 69% near-miss at 2048 where attention is ~20%;
+re-tested at 4040 where decode attention is ~32%. Health gate passed (mem read
+55.35 GB/s, x1/x4 clean); byte-identical ids at 4040 on base Q8_0 and SmolLM2;
+187/187 with the change. 24-pair decode end-to-end: SmolLM2 23W/1L (+4.7%), base
+18W/6L (+3.0%) then 15W/9L (-0.3%) — combined base 33/48 (69%), cancelling
+medians. Direct decode attention-phase measurement at 4040: 15/16 faster, median
+37.05 -> 33.90 ms (-8.5%) — the kernel-level gain is real but attention is only
+32% of decode and the long prefill dominates the end-to-end number. Under the
+two-model rule both models must clear ~78%; base at 69% does not. Reverted in
+full, rebuilt, 187/187 green. No code ships.
