@@ -6253,3 +6253,11 @@ ids; 187/187 with the change. Two 24-pair decode batches on base Q8_0: 14W/10L
 (+0.9%) then 13W/11L (-1.2%) — combined 27/48 (56%), cancelling medians. Factor
 3 joins 2 and 8 as rejected; factor 4 (64 bands) confirmed optimal for the wide
 pool. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Wide output pool width 16 -> 10 physical cores (2026-11-22): flag-only A/B via
+--prefill-threads; only 12/14/16 had been tested, 10 (physical core count,
+reducing SMT contention on the bandwidth-bound output matvec) was untested.
+Health gate passed (mem read 56.38 GB/s, x1/x4 clean); byte-identical ids.
+24-pair decode each: base 7W/17L (median 78.89 -> 78.44), coder-1.5b 10W/14L
+(29.45 -> 29.47) — flat/worse on both. 16 logical threads confirmed optimal for
+the wide pool (10/12/14 all lose). No code change.
