@@ -6223,3 +6223,14 @@ GB/s, x1/x4 clean); byte-identical ids on base Q8_0 and SmolLM2-Q4_K_M (f32 path
 (-9.6%) — both worse. The f32 K/V loads are L1-resident and cheap; re-traversing
 heads per token plus a separate score array costs more than the saved loads.
 Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Token-outer f16 attention in attention_group_avx2 (2026-11-22): the half path
+converted each K/V row once per grouped head (7x Qwen, 3x SmolLM2). Flipped to
+token-outer — convert each row once into a small thread_local buffer and reuse
+across heads (distinct from the earlier up-front pre-convert that wrote a big
+buffer). Byte-identical ids on base Q8_0 and SmolLM2 with --kv f16; 187/187 with
+the change. 24-pair decode: base 6W/18L (-2.9%), SmolLM2 1W/23L (-11.1%) — both
+worse. The cvtph conversions are cheap; re-traversing heads per token plus a
+score array costs more. Together with the pre-convert and f32 token-outer tests,
+the head-outer layout of attention_group is confirmed as the right one. Reverted
+in full, rebuilt, 187/187 green. No code ships.
