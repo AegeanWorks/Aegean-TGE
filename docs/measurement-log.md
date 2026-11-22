@@ -6349,3 +6349,16 @@ change. Two 8-pair decode batches on qwen2.5-0.5b-Q4_K_M: 1/8 then 3/8 (combined
 4/16, medians 55.44 -> 54.56 and 54.94 -> 53.05) — decisively worse. Factor 4
 remains optimal for the K-quant decode kernels. Reverted in full (2 sites),
 rebuilt, 187/187 green. No code ships.
+
+Profile-guided optimization (PGO) build (2026-11-22): the last major untested
+build-level lever — qualitatively different from the tested LTO/mtune/gc-sections/
+unroll flags, since PGO reorders branches and inlining from real execution counts.
+Built a -fprofile-generate binary in a separate dir, trained it on 9 runs across
+the three A/B models at 2048 tokens (35 .gcda files), rebuilt with -fprofile-use
+-fprofile-correction. Health gate passed (mem read 41.37 GB/s; tripwire clean on
+retry — the box was noisy); byte-identical ids on base and SmolLM2; the PGO build
+was 187/187. Two 12-pair decode batches on base Q8_0: 6/12 then 6/12 (combined
+12/24, medians 69.35->69.93 then 74.12->73.87, cancelling); coder-1.5b 4/8 flat.
+No consistent win — the hot kernels are straight-line SIMD with few unpredictable
+branches, so profile data has nothing to reorder. PGO build dirs and profile data
+removed; no source or tracked build config changed. No code ships.
