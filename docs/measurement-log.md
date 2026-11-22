@@ -6398,3 +6398,79 @@ while TGE defaults to f32 (TGE's f16 is opt-in); TGE splits 16 prefill / 12
 decode threads while llama uses one uniform `-t`; box noise is large (llama's
 own +-8-38%, and repeated identical configs disagreed by up to 3x). No code
 change; this is a snapshot, not a new win. Gates 4/4, tests 187/187.
+
+## 2026-11-22 - What we changed: synthesis of the 15 kept wins
+
+The log records every individual A/B. This section answers the different
+question: what did the campaign actually change, and why did it work. All 15
+wins are A/B-verified, byte-identical on greedy ids, and shipped. The baseline
+for the whole stack is c35e6e8 (parent of the first win, f712453).
+
+### Dispatch, placement and scheduling (7 wins)
+
+| Win | Commit | Mechanism | Measured |
+|---|---|---|---|
+| Cache CPU detection | f712453 | `cpu::detect()` ran CPUID + topology at every dispatch site (~200x/token); cached once | decode +8-18% |
+| GPU offload default off | 6407640 | `--gpu auto` requested offload on a backend with a 3110 us Vulkan noop roundtrip | decode +26-28% |
+| Wide pool for output matvec | ae5376b | the 151936-row output projection moved off the small-matvec pool to the 16-thread wide pool | +6-17% |
+| Worker priority +1 | c8e1974 | pool workers set ABOVE_NORMAL once at startup; ~169 back-to-back parallel_for calls/token no longer preempted | +5-11% |
+| Calling thread priority +1 | 7c47fef | the caller is itself a chunk claimant; raised it alongside the workers | +3-9% on top |
+| Process priority class +1 | ccffe79 | ABOVE_NORMAL relative priorities were still tripped by peer processes; raised the class too | +7-10% |
+| 12-thread decode | ca7bae2 | decode pool = physical cores + 2 (10 -> 12) | +8-9% across three model sizes/formats |
+
+These are the largest wins because they remove work that is not inference:
+repeated detection, a futile GPU roundtrip, thread preemptions, and a
+thread-count mismatch on the one tall matvec.
+
+### Prefill kernels (7 wins)
+
+| Win | Commit | Mechanism | Measured |
+|---|---|---|---|
+| Prefill split 4096 -> 2048 | 342960e | 128-row chunks cost more attention work than they save in weight amortization above 2048 tokens | +4% |
+| Prefill split 2048 -> 1024 | 791c10d | same crossover, lower still | +2.5% |
+| Q8 token group 6 -> 8 | 741db2e | fold 8 tokens per weight-block widening; 8 named accumulators do not spill on this compiler | +6% |
+| VNNI token group 6 -> 8 | b13729f | same for the opt-in VNNI batch kernel | +3% on opt-in path |
+| Batch band factor 4 -> 8 | d4cea2d | larger contiguous bands for the tall output projection | +1% |
+| Unrolled full-group fold | 45dfaae | compile-time-unrolled path keeps 8 YMM accumulators in registers instead of a stack array | +2% |
+| Hoist Q8 scale conversion | fadd95f | branchy half_to_float re-ran on the same scales once per token group (8x); converted once per row | +3-4% |
+
+Each prefill win is small on its own because attention and non-batch phases
+dilute it; they accumulate. All are byte-identical (same FMA order per token).
+
+### Attention (1 win)
+
+| Win | Commit | Mechanism | Measured |
+|---|---|---|---|
+| f16 block-attention QK^T accumulators 2 -> 4 | d049118 | four independent FMA chains hide latency in the widened-row dot; only pays at long context where attention is ~32% of prefill | +1.2% at 4080 |
+
+Earlier rejected at 2048, where attention is only ~20% and the gain was diluted.
+Re-tested at long context where it is visible.
+
+### Cumulative validation
+
+Pre-wins baseline c35e6e8 vs the full stack, byte-identical at 1500 tokens:
+
+| model | pairs | median |
+|---|---|---|
+| SmolLM2-135M-Q4_K_M (30L/576/9-3, different arch + quant) | 24 / 0 | 69.38 -> 124.62 t/s (+80%) |
+| qwen2.5-coder-1.5b-Q8_0 (28L/1536/12-2) | 24 / 0 | 22.38 -> 26.82 t/s (+20%) |
+
+The wins generalize across size, architecture and quantization; none is a
+shape-specific accident. A fresh cross-engine snapshot against llama.cpp
+cd8427d appears at the top of this section's predecessor entry.
+
+### What the rejections taught us
+
+The campaign rejected far more than it kept, and the pattern is the real
+result. Decode is at the memory roof (~644 MB/token at ~52 GB/s against a
+~60 GB/s wall), so anything that does not change bytes read or thread
+placement is null. That is why: matvec accumulator/reduction/prefetch/load-width
+variants are all null; every band, grain, chunk, tile and thread knob is
+bracketed on both sides with the current value optimal; static partitioning
+loses because the 12 "P-core" threads are 6 physical cores x2 SMT.
+
+Build-level levers are also exhausted: LTO, mtune, gc-sections, unroll and PGO
+all measured null — the hot kernels are straight-line SIMD with few branches
+for profile data to reorder. The reusable lesson is recorded in
+[benchmarks.md](benchmarks.md): measure every shape, pair interleaved, and
+ablate before attributing a whole-system number.
