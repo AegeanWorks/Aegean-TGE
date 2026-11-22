@@ -6318,3 +6318,11 @@ health gate passed (mem read 58.71 GB/s, x1/x4 clean); 187/187 with the change.
 12-pair decode on base: 2W/10L (median 71.88 -> 70.41) — clearly worse, grain 2
 hurts load balance on the wide pool too. Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Batch kernel band factor 8 -> 6 (2026-11-22): the prefill batch kernel band factors
+4 (baseline), 8 (kept), 16 (rejected) had been swept; 6, the untested midpoint,
+was tried. Byte-identical ids at 2048; health gate passed (mem read 36.31 GB/s,
+x1/x4 clean); 187/187 with the change. Prefill tok/s at 2048, two 12-pair batches:
+5/12 (326.45 -> 324.3) then 8/12 (323.85 -> 324.7) — combined 13/24, flat medians.
+Factor 8 remains optimal across 4/6/8/16. Reverted in full, rebuilt, 187/187 green.
+No code ships.
