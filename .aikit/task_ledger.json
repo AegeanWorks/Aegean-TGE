@@ -81,17 +81,6 @@
       }
     },
     {
-      "task_id": "chore-1795315387",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the cumulative cross-model validation of the full win stack",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795315387.6208024,
-      "timestamp_str": "2026-11-22 05:43:07",
-      "agent": "opencode"
-    },
-    {
       "task_id": "chore-1795315726",
       "phase": "chore",
       "phase_num": 1,
@@ -265,6 +254,17 @@
       "chore": true,
       "timestamp": 1795341928.9162838,
       "timestamp_str": "2026-11-22 13:05:28",
+      "agent": "opencode"
+    },
+    {
+      "task_id": "chore-1795342991",
+      "phase": "chore",
+      "phase_num": 1,
+      "description": "record the static band partitioning experiment",
+      "status": "completed",
+      "chore": true,
+      "timestamp": 1795342991.1907492,
+      "timestamp_str": "2026-11-22 13:23:11",
       "agent": "opencode"
     }
   ]

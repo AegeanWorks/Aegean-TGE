@@ -6326,3 +6326,16 @@ x1/x4 clean); 187/187 with the change. Prefill tok/s at 2048, two 12-pair batche
 5/12 (326.45 -> 324.3) then 8/12 (323.85 -> 324.7) — combined 13/24, flat medians.
 Factor 8 remains optimal across 4/6/8/16. Reverted in full, rebuilt, 187/187 green.
 No code ships.
+
+Atomic-free static band partitioning in the decode GEMV (2026-11-22): creative
+structural lever — replace ~60 dynamic atomic `fetch_add` claims per matvec
+(~168 matvecs/token) with fixed equal slices per participant. The ThreadPool
+header explicitly rejected static splits for hybrid cores, but the 12-thread
+decode pool is pinned to P-cores, so it was a plausible untested exception.
+Health gate passed (mem read 56.23 GB/s, x1/x4 clean); byte-identical ids on base
+and SmolLM2; 187/187 with the change. First A/B (static on ALL pools, including
+the 16-wide output matvec with E-cores): 0W/12L, median 67.26 -> 57.73 (-14%),
+exactly the hybrid straggler failure the header predicted. Scoped static to the
+12-thread pinned pool only: still 0W/12L (-10%) — the 12 "P-core" threads are 6
+physical cores x2 SMT, so effective throughput is unequal and dynamic claiming
+still wins. Reverted in full (4 files), rebuilt, 187/187 green. No code ships.
