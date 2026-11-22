@@ -6140,3 +6140,10 @@ x1/x4 clean); byte-identical ids for all counts. 24-pair decode each on the base
 Q8_0: 13-vs-12 = 2W/22L (median 68.82 -> 65.18, -5.3%); 11-vs-12 = 0W/24L
 (median 71.30 -> 68.40, -4.1%). 12 is a sharp optimum, now bracketed at
 10/11/12/13/14/16. No code change (the default stays 12).
+
+Wide output pool width 16 -> 12 (2026-11-22): flag-only A/B via --prefill-threads
+(during decode only the output matvec uses the prefill pool). Only 14-vs-16 had
+been tested; 12 was untested. Health gate passed (mem read 43.45 GB/s); byte-identical
+ids. 24-pair decode on base Q8_0: 9W/15L (median 71.74 -> 71.06, flat/slightly
+worse). 16 confirmed optimal for the output pool (12 and 14 both lose).
+No code change.
