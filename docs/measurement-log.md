@@ -6195,3 +6195,10 @@ medians. Direct decode attention-phase measurement at 4040: 15/16 faster, median
 32% of decode and the long prefill dominates the end-to-end number. Under the
 two-model rule both models must clear ~78%; base at 69% does not. Reverted in
 full, rebuilt, 187/187 green. No code ships.
+
+GQA cap 16 -> 24 (18 chunks at 12 threads with threads*3) at 4040 (2026-11-22):
+pushed past the 16-chunk near-miss to finer load balance. Health gate passed
+(mem read 59.46 GB/s, x1/x4 clean); byte-identical ids at 4040 on base and SmolLM2;
+187/187 with the change. 24-pair decode each: base 14W/10L (+0.6%), SmolLM2
+10W/14L (-0.5%) — flat/worse. 18 chunks is past the useful point; the 12-chunk
+default stays. Reverted in full, rebuilt, 187/187 green. No code ships.
