@@ -6474,3 +6474,96 @@ all measured null — the hot kernels are straight-line SIMD with few branches
 for profile data to reorder. The reusable lesson is recorded in
 [benchmarks.md](benchmarks.md): measure every shape, pair interleaved, and
 ablate before attributing a whole-system number.
+
+## 2026-11-22 - Literature context: why scheduling, not kernels, won on a hybrid CPU
+
+A short article connecting our measured results to the published literature.
+The measurement log above records *what* we changed; this records *why the
+field predicts it*, and what our numbers add that the literature does not
+already state. No new code — this is interpretation with citations.
+
+### The thesis
+
+On a hybrid CPU, single-client LLM decode is memory-bound (arithmetic
+intensity ~1, against ~1000 for prefill), so the highest-leverage changes are
+not arithmetic optimizations but removing non-inference overhead and matching
+threads to the hardware. Our seven largest wins are all of that kind: cached
+CPU detection (+8-18%), GPU offload default off (+26-28%), a wide pool for the
+tall output matvec (+6-17%), three priority rungs (+5-11%, +3-9%, +7-10%) and
+12 decode threads (+8-9%). The seven prefill kernel wins are each 1-6%.
+
+This matches the roofline survey of Yuan et al. (arXiv:2402.16363), whose
+per-layer table for Llama-2-7b at batch 1 shows every decode projection
+memory-bound at intensity ~1 while every prefill projection is compute-bound
+at 1024-1215. A decode-side FMA variant cannot move a memory roof — exactly
+what our null matvec micro-benchmarks found.
+
+### The obvious alternative fails, and the literature says why
+
+The natural instinct on a "pinned P-core" pool is to remove the ~60 atomic
+band claims per matvec and give each worker a fixed slice. We implemented
+that and it lost decisively: 0/12 at -14% on all pools, and 0/12 at -10% even
+scoped to the 12-thread pinned pool. The reason is that those 12 threads are
+6 physical cores x 2 SMT siblings; effective throughput is unequal, so a
+fixed slice makes the slow sibling decide.
+
+Yu, Liu and Shen (arXiv:2411.19542, "A dynamic parallel method for performance
+optimization on hybrid CPUs") reach the same conclusion from the opposite
+direction: they balance the workload *dynamically* per core before parallel
+work starts and report >90% of peak memory bandwidth on two hybrid Intel
+CPUs. Our dynamic atomic claimant is the simplest form of that policy, and our
+~52 GB/s against a ~60 GB/s `bench mem` wall (~87%) sits close to their
+reported ceiling. Our result is a clean falsification of the static shortcut
+on the same class of hardware.
+
+### Independent confirmation from llama.cpp itself
+
+Our cross-engine snapshot found llama-bench cd8427d dropping from tg32 24.0
+t/s at `-t 6` to 7.5 at `-t 12` and 10.2 at `-t 16` on the same 0.5B Q8_0 file
+(14.8 -> 5.3 on coder-1.5B). That upstream instability is not an isolated
+observation: llama.cpp PR #27033 ("feat(win32): optimize thread scheduling and
+core affinity on hybrid CPUs", opened 2026-08-13, still open with two reviews
+required) proposes filtering E-cores from the default physical-core count and
+auto-pinning compute threads to P-cores. A commenter on that PR reports the
+same shape of effect — 14-15 t/s with all threads versus 17-19 t/s pinned to
+physical cores, reverting when a browser tab competes. A maintainer's reply
+("this seems like something that should be controlled by a policy external to
+ggml") explains why this remains a user-side concern rather than a shipped
+upstream default.
+
+That is the practical contribution of our record: it supplies the matched
+A/B numbers and the negative control (static partitioning) behind a policy
+that upstream has discussed but not merged, with byte-identical ids and a
+two-model generalization check.
+
+### What we add that the sources do not state
+
+- The 12-thread optimum is a sharp bracket (10/11/12/13/14/16 all measured),
+  with +8-9% generalized across three model sizes and quant formats.
+- A *priority series* — worker notch, caller notch, process class — each
+  independently measured, where +2 (HIGHEST) on either thread or process class
+  is worse than +1. Published hybrid-CPU work usually treats affinity and
+  priority as one knob.
+- A falsification of static partitioning with paired 24-run evidence, which
+  the dynamic-scheduling paper argues for but does not present as a
+  user-reproducible A/B on a consumer box.
+
+### Sources
+
+1. Z. Yuan et al., "LLM Inference Unveiled: Survey and Roofline Model Insights",
+   arXiv:2402.16363v5 — roofline table: decode memory-bound, prefill compute-bound.
+2. L. Yu, Y. Liu, H. Shen, "A dynamic parallel method for performance
+   optimization on hybrid CPUs", arXiv:2411.19542 — dynamic per-core load
+   balancing, >90% memory bandwidth on hybrid CPUs.
+3. ggml-org/llama.cpp PR #27033, "feat(win32): optimize thread scheduling and
+   core affinity on hybrid CPUs" — open PR and maintainer discussion,
+   https://github.com/ggml-org/llama.cpp/pull/27033.
+4. Our own paired data: this log, sections on cached detection, GPU default
+   off, the priority series, the 12-thread default, static band partitioning,
+   and the 2026-11-22 cross-engine snapshot.
+
+Scope note: source 1 studies datacenter GPUs and source 2 Intel hybrid CPUs;
+neither is this exact 6P+4E consumer Windows box with a Q8_0 GGUF. They are
+used as mechanism explanations, not as direct performance comparisons. All
+performance numbers above are ours and were measured under the health gate
+(mem read >=26 GB/s, clean x1>x4 tripwire).
