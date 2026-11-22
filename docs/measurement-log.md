@@ -6088,3 +6088,21 @@ Both byte-identical ids (1500-tok prompts). The win generalizes across all three
 Q8_0 models tested (the original 0.5B instruct plus these two). No code change —
 this validates an existing kept win and records the two-model rule for future
 changes. 187/187 tests, 4/4 gates.
+
+Further cross-model validation (2026-11-22), per reviewer request for genuinely
+different model types — the two coder models above are the same Q8_0 Qwen family:
+
+- Scale-hoist on train-run16a-Q8_0 (28L/1536/12-2, a different Q8_0 shape):
+  byte-identical ids; 20W/4L (83%), median 88.55 -> 91.30 t/s (+3.1%). Win holds.
+- Cached-detect (f712453, model-agnostic core win) on SmolLM2-135M-Q4_K_M
+  (30L/576/9-3, different architecture, quantization, and vocab 49152). Built a
+  before binary from f712453~1 (those two files unchanged since, clean revert)
+  vs current. Byte-identical ids; 24-pair decode: 23W/1L (96%), median 74.11 ->
+  122.30 t/s (+65%). The win is much larger on a small model where the repeated
+  detect() calls dominate a fast decode. Confirms the model-agnostic win on a
+  genuinely different architecture/quantization.
+
+The different-architecture models (Llama 24/8 group-3, Phi 32/32 no-GQA) are all
+Q4_K_M, so Q8_0-only batch wins (group-8, scale-hoist, unroll) cannot be tested
+on them; the cached-detect win was used because it applies to every model.
+No code change — these validate existing kept wins. 187/187 tests, 4/4 gates.
