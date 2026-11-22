@@ -6124,3 +6124,11 @@ SmolLM2-Q4_K_M; 187/187 with the change. 24-pair decode each model: base 12W/12L
 (flat), SmolLM2 9W/15L (the -62% is mostly a load anomaly but clearly not a win).
 The SiLU divide is a small slice of decode and vdivps throughput is not the
 bottleneck. Reverted in full, rebuilt, 187/187 green. No code ships.
+
+Pre-broadcast scales in the batch GEMV (2026-11-22): after the scale hoist, the
+8 token groups walking a row each re-ran _mm256_set1_ps on the identical scale.
+Stored pre-broadcast __m256 scales once per row instead. Byte-identical ids on
+base Q8_0 and coder-1.5b-Q8_0; 187/187 with the change. 24-pair prefill each:
+base 8W/16L (-7.1%), coder-1.5b 4W/20L (-1.5%) — both reject. The memory load
+per block costs more than the cheap scalar-broadcast uop it replaces. Reverted
+in full, rebuilt, 187/187 green. No code ships.
