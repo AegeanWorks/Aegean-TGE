@@ -6291,3 +6291,13 @@ had a transient load spike to 12 t/s but was still 6/6), coder-1.5b 12/16 (+0.75
 Both below the ~78% two-model bar. Factor 4 (64 bands) confirmed optimal for the
 wide pool; factor 6 joins 2/3/8 as rejected. Reverted in full, rebuilt, 187/187
 green. No code ships.
+
+Vectorised bias/residual adds in forward (2026-11-22): the per-layer q/k/v bias
+adds and two residual `x_ += h_` loops (scalar, ~120 passes/token) were replaced
+with AVX2 helpers (bit-identical per-element adds). Health gate passed (mem read
+55.62 GB/s, x1/x4 clean); byte-identical ids on base and SmolLM2; 187/187 with the
+change. 16-pair decode: base 13W/3L (+3%), SmolLM2 9W/7L (flat). A 24-pair base
+confirmation was 14W/10L with a flat median — the +3% did not reproduce. Combined
+base 27/40, SmolLM2 9/16, both below the ~78% rule. The adds are a tiny fraction
+of the bandwidth-bound decode. Reverted in full (3 files), rebuilt, 187/187 green.
+No code ships.
