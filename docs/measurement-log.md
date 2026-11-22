@@ -6245,3 +6245,11 @@ and coder-1.5b; 187/187 with the change. Two 24-pair prefill batches each: base
 29/48, +0.3%) — below the ~78% bar with marginal medians. The saved loads are
 offset by the extra shifts, matching the decode null. Reverted in full, rebuilt,
 187/187 green. No code ships.
+
+Wide output pool band factor 4 -> 3 (48 bands, exactly 3 per 16 workers)
+(2026-11-22): only factors 2/4/8 had been tested; 3 was a load-balance candidate.
+Scoped to threads>=16. Health gate passed (tripwire clean on retry); byte-identical
+ids; 187/187 with the change. Two 24-pair decode batches on base Q8_0: 14W/10L
+(+0.9%) then 13W/11L (-1.2%) — combined 27/48 (56%), cancelling medians. Factor
+3 joins 2 and 8 as rejected; factor 4 (64 bands) confirmed optimal for the wide
+pool. Reverted in full, rebuilt, 187/187 green. No code ships.
