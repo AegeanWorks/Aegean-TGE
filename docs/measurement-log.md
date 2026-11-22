@@ -6132,3 +6132,11 @@ base Q8_0 and coder-1.5b-Q8_0; 187/187 with the change. 24-pair prefill each:
 base 8W/16L (-7.1%), coder-1.5b 4W/20L (-1.5%) — both reject. The memory load
 per block costs more than the cheap scalar-broadcast uop it replaces. Reverted
 in full, rebuilt, 187/187 green. No code ships.
+
+Decode thread count 11 and 13 vs the 12 default (2026-11-22): flag-only A/B on
+one binary (no code change). The 12-thread default had only been bracketed at
+10/14/16; 11 and 13 were untested. Health gate passed (mem read 39.71 GB/s,
+x1/x4 clean); byte-identical ids for all counts. 24-pair decode each on the base
+Q8_0: 13-vs-12 = 2W/22L (median 68.82 -> 65.18, -5.3%); 11-vs-12 = 0W/24L
+(median 71.30 -> 68.40, -4.1%). 12 is a sharp optimum, now bracketed at
+10/11/12/13/14/16. No code change (the default stays 12).
