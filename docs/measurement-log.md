@@ -6657,3 +6657,14 @@ or where the two SMT siblings do not share the path to memory would falsify it.
    after the priority wins", the 11/13/14/16 ceiling checks, and the two
    cross-model validation entries. All pairs interleaved, health-gated,
    byte-identical ids, 187/187 tests and 4/4 gates throughout.
+
+Static half->float lookup table in the Q8_0 decode kernel (2026-11-23): the
+branchy `half_to_float` runs ~28x/row on the decode hot path; a 65536-entry
+table generated from the same function (bit-identical by construction) replaces
+the branch/shift chain with one load. Health gate passed (mem read 55.97 GB/s,
+tripwire clean on retry); byte-identical ids at 2048; 187/187 with the change.
+Two 12-pair decode batches on base Q8_0: 8/12 (75.54->75.91) then 6/12
+(69.16->68.15) — combined 14/24, flat/slightly negative; coder-1.5b 5/12.
+Below the ~78% two-model bar. The branchy converter is not a bottleneck at the
+memory roof; a table load costs about what the shifts do. Reverted in full,
+rebuilt, 187/187 green. No code ships.

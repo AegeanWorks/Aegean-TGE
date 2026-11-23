@@ -22,22 +22,22 @@
   },
   "checkpoints": [
     {
-      "task_id": "TGE-SCALEHOIST",
-      "phase": "phase 2",
-      "phase_num": 2,
+      "agent": "opencode:session",
       "description": "[1/2] Plan + hoist Q8 scale conversion out of the batch token loop",
       "files_affected": [],
+      "impact_assessment": {
+        "benefits": "+3-4% prefill, byte-identical ids",
+        "mitigation": "byte-identical ids 2048/600/2050, 58/72 pairs, 187/187 tests, 4/4 gates",
+        "risks": "contract: internal kernel buffer; dependency: none; concurrency: per-worker thread_local inside lambda; state: none",
+        "why": "each weight row is walked 8x per chunk, re-running branchy half_to_float on identical scales 8x"
+      },
+      "phase": "phase 2",
+      "phase_num": 2,
+      "plan_digest": "891166e7c80a3c530bd0b404b153f7f4758076ce600fe5b5bbb51226a245e799",
       "status": "in_progress",
+      "task_id": "TGE-SCALEHOIST",
       "timestamp": 1795290536.0308554,
       "timestamp_str": "2026-11-21 22:48:56",
-      "agent": "opencode:session",
-      "impact_assessment": {
-        "why": "each weight row is walked 8x per chunk, re-running branchy half_to_float on identical scales 8x",
-        "benefits": "+3-4% prefill, byte-identical ids",
-        "risks": "contract: internal kernel buffer; dependency: none; concurrency: per-worker thread_local inside lambda; state: none",
-        "mitigation": "byte-identical ids 2048/600/2050, 58/72 pairs, 187/187 tests, 4/4 gates"
-      },
-      "plan_digest": "891166e7c80a3c530bd0b404b153f7f4758076ce600fe5b5bbb51226a245e799",
       "workspaces": [
         {
           "name": "aegean-tge",
@@ -46,16 +46,16 @@
       ]
     },
     {
-      "task_id": "TGE-SCALEHOIST",
-      "phase": "phase 4",
-      "phase_num": 4,
-      "description": "[2/2] Scale hoist: prefill 58/72 pairs, clean-box +2.8% median, ids byte-identical incl. tail, 187/187 tests, 4/4 gates",
-      "files_affected": [],
-      "status": "in_progress",
-      "timestamp": 1795290536.514955,
-      "timestamp_str": "2026-11-21 22:48:56",
       "agent": "opencode:session",
       "checklists": "passed",
+      "description": "[2/2] Scale hoist: prefill 58/72 pairs, clean-box +2.8% median, ids byte-identical incl. tail, 187/187 tests, 4/4 gates",
+      "files_affected": [],
+      "phase": "phase 4",
+      "phase_num": 4,
+      "status": "in_progress",
+      "task_id": "TGE-SCALEHOIST",
+      "timestamp": 1795290536.514955,
+      "timestamp_str": "2026-11-21 22:48:56",
       "workspaces": [
         {
           "name": "aegean-tge",
@@ -64,208 +64,208 @@
       ]
     },
     {
-      "task_id": "TGE-SCALEHOIST",
-      "phase": "completed",
-      "phase_num": 5,
-      "description": "Task 'TGE-SCALEHOIST' completed successfully.",
-      "status": "completed",
-      "timestamp": 1795290572.162139,
-      "timestamp_str": "2026-11-21 22:49:32",
       "agent": "opencode:session",
-      "head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
       "delivery": {
+        "forced": false,
         "roots": [
           "."
-        ],
-        "forced": false
-      }
-    },
-    {
-      "task_id": "chore-1795325924",
-      "phase": "chore",
-      "phase_num": 1,
-      "description": "record the batch 16-byte widen experiment",
+        ]
+      },
+      "description": "Task 'TGE-SCALEHOIST' completed successfully.",
+      "head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
+      "phase": "completed",
+      "phase_num": 5,
       "status": "completed",
-      "chore": true,
-      "timestamp": 1795325924.028191,
-      "timestamp_str": "2026-11-22 08:38:44",
-      "agent": "opencode"
+      "task_id": "TGE-SCALEHOIST",
+      "timestamp": 1795290572.162139,
+      "timestamp_str": "2026-11-21 22:49:32"
     },
     {
-      "task_id": "chore-1795326874",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the wide-output band-3 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795326874",
       "timestamp": 1795326874.9101796,
-      "timestamp_str": "2026-11-22 08:54:34",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 08:54:34"
     },
     {
-      "task_id": "chore-1795328675",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the output pool width-10 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795328675",
       "timestamp": 1795328675.2199025,
-      "timestamp_str": "2026-11-22 09:24:35",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 09:24:35"
     },
     {
-      "task_id": "chore-1795330558",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the Q8 GEMV hadd reduction experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795330558",
       "timestamp": 1795330558.552719,
-      "timestamp_str": "2026-11-22 09:55:58",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 09:55:58"
     },
     {
-      "task_id": "chore-1795332333",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the prefill KV store vectorisation experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795332333",
       "timestamp": 1795332333.065423,
-      "timestamp_str": "2026-11-22 10:25:33",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 10:25:33"
     },
     {
-      "task_id": "chore-1795337323",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the wide-output band-6 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795337323",
       "timestamp": 1795337323.6151085,
-      "timestamp_str": "2026-11-22 11:48:43",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 11:48:43"
     },
     {
-      "task_id": "chore-1795340150",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the vectorised adds experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795340150",
       "timestamp": 1795340150.1545124,
-      "timestamp_str": "2026-11-22 12:35:50",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 12:35:50"
     },
     {
-      "task_id": "chore-1795341052",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the minimum GEMV band-size experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795341052",
       "timestamp": 1795341052.9680755,
-      "timestamp_str": "2026-11-22 12:50:52",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 12:50:52"
     },
     {
-      "task_id": "chore-1795341412",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the wide-pool grain-2 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795341412",
       "timestamp": 1795341412.6875076,
-      "timestamp_str": "2026-11-22 12:56:52",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 12:56:52"
     },
     {
-      "task_id": "chore-1795341928",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the batch band-6 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795341928",
       "timestamp": 1795341928.9162838,
-      "timestamp_str": "2026-11-22 13:05:28",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 13:05:28"
     },
     {
-      "task_id": "chore-1795342991",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the static band partitioning experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795342991",
       "timestamp": 1795342991.1907492,
-      "timestamp_str": "2026-11-22 13:23:11",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 13:23:11"
     },
     {
-      "task_id": "chore-1795344158",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the K-quant band-6 experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795344158",
       "timestamp": 1795344158.3910804,
-      "timestamp_str": "2026-11-22 13:42:38",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 13:42:38"
     },
     {
-      "task_id": "chore-1795346243",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the PGO build experiment",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795346243",
       "timestamp": 1795346243.716259,
-      "timestamp_str": "2026-11-22 14:17:23",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 14:17:23"
     },
     {
-      "task_id": "chore-1795346864",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "record the llama.cpp cross-engine snapshot",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795346864",
       "timestamp": 1795346864.6640394,
-      "timestamp_str": "2026-11-22 14:27:44",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 14:27:44"
     },
     {
-      "task_id": "chore-1795347129",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "write the synthesis of the kept wins",
+      "phase": "chore",
+      "phase_num": 1,
       "status": "completed",
-      "chore": true,
+      "task_id": "chore-1795347129",
       "timestamp": 1795347129.2226152,
-      "timestamp_str": "2026-11-22 14:32:09",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 14:32:09"
     },
     {
-      "task_id": "chore-1795347320",
-      "phase": "chore",
-      "phase_num": 1,
+      "agent": "opencode",
+      "chore": true,
       "description": "write the literature-context article on hybrid scheduling",
-      "status": "completed",
-      "chore": true,
-      "timestamp": 1795347320.4868705,
-      "timestamp_str": "2026-11-22 14:35:20",
-      "agent": "opencode"
-    },
-    {
-      "task_id": "chore-1795347583",
       "phase": "chore",
       "phase_num": 1,
-      "description": "write the unique SMT-sibling decode finding",
       "status": "completed",
+      "task_id": "chore-1795347320",
+      "timestamp": 1795347320.4868703,
+      "timestamp_str": "2026-11-22 14:35:20"
+    },
+    {
+      "agent": "opencode",
       "chore": true,
+      "description": "write the unique SMT-sibling decode finding",
+      "phase": "chore",
+      "phase_num": 1,
+      "status": "completed",
+      "task_id": "chore-1795347583",
       "timestamp": 1795347583.5836785,
-      "timestamp_str": "2026-11-22 14:39:43",
-      "agent": "opencode"
+      "timestamp_str": "2026-11-22 14:39:43"
+    },
+    {
+      "agent": "opencode",
+      "chore": true,
+      "description": "record the half-to-float LUT experiment",
+      "phase": "chore",
+      "phase_num": 1,
+      "status": "completed",
+      "task_id": "chore-1795429512",
+      "timestamp": 1795429512.4081397,
+      "timestamp_str": "2026-11-23 13:25:12"
     }
   ]
 }
