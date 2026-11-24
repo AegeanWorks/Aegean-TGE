@@ -6756,3 +6756,40 @@ code ships. The likely reason the row reduction does not pay is that sampled
 acceptance is low (0.19-0.28 drafts/step): the fixed six-row pass is already
 rare, and changing its length perturbs the RNG/acceptance trajectory enough to
 erase the small arithmetic saving.
+
+## 2026-11-24 - Repetition-triggered auto speculation: rejected on quality
+
+Flag-only baseline on the then-current binary showed why an auto default was
+worth testing: explicit `--speculative` beat plain greedy by **194.3%** on a
+period-3 prompt (12/12) and **119.0%** on a 400-token repeated prose prompt
+(6/6), with identical ids. It was not a general default: natural prose was
+-1.8% (14/24), 1.5B -0.4% (3/12), SmolLM2 -1.8% (4/12), story -0.2% (8/12),
+and non-repetitive `docs/architecture.md` long context was -4.5% (1/6).
+
+Prototype: default `auto` engaged only for greedy prompts with a recent period
+(1..6, two cycles) or an exact suffix match of at least four tokens; `--speculative`
+forced the existing mode and `--no-speculative` disabled it. Auto stayed off for
+sampling. The trigger test failed first (190 cases, 1 failure) before the exact
+fallback was added.
+
+Health gate: mem read 59.24 GB/s; q5_0 x1/x4 clean (27.91 -> 94.85 GFLOPS).
+Interleaved old-default-off vs prototype-default-auto, 64 greedy tokens:
+
+| prompt/model | pairs | wins | median old -> auto | trigger |
+|---|---:|---:|---:|---|
+| Qwen2.5-0.5B Q8_0 natural | 12 | 2 | 91.22 -> 90.06 t/s (-1.3%) | idle |
+| Qwen2.5-Coder-1.5B Q8_0 natural | 8 | 5 | 30.47 -> 30.58 (+0.3%) | idle |
+| SmolLM2-135M Q4_K_M natural | 8 | 2 | 193.44 -> 187.03 (-3.3%) | idle |
+| Qwen2.5-0.5B story | 8 | 5 | 86.92 -> 87.31 (+0.5%) | idle |
+| Qwen2.5-0.5B period-3 | 24 | 24 | 86.57 -> 201.77 t/s (+133.1%) | engaged |
+| Qwen2.5-Coder-1.5B period-3 | 8 | 4 | 30.44 -> 30.48 (+0.1%) | engaged |
+
+The SmolLM2 period-3 control then failed the quality gate: generated position 49
+changed `34 -> 33`, followed by flips at 53 (`33 -> 34`), 57 (`34 -> 33`) and 60
+(`33 -> 34`). The verifier's batched arithmetic can flip a near tie even though
+the acceptance rule is exact; the shipped README already documents this class of
+divergence. A default that changes model output cannot satisfy the no-quality-
+loss goal. The prototype was reverted in full; CLI, drafter and tests match HEAD,
+suite **189/189**. No auto/default code ships and `--speculative` remains opt-in.
+The speed result is retained as a trigger for future work only if a prompt
+family can be proven output-stable across models before delivery.
