@@ -3,8 +3,8 @@
   "active_task": {
     "task_id": "TGE-SPEC-AUTO",
     "last_phase": "phase 4",
-    "active_phase": 4,
-    "status": "in_progress",
+    "active_phase": 5,
+    "status": "completed",
     "updated_at": 1795552353.7109733,
     "owner": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
     "lease_until": 1795559553.7109733,
@@ -15,20 +15,12 @@
         "name": "aegean-tge",
         "path": "projects/aegean-tge"
       }
-    ]
+    ],
+    "completed_at": 1795552392.8224,
+    "completed_head": "de6c1e0cf948e140623520372a16ca21a4ccfe47",
+    "completed_tree": "cd812367d7a01ecfa7f98125fb36c727429d8308"
   },
   "checkpoints": [
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "record the PGO build experiment",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795346243",
-      "timestamp": 1795346243.716259,
-      "timestamp_str": "2026-11-22 14:17:23"
-    },
     {
       "agent": "opencode",
       "chore": true,
@@ -386,6 +378,37 @@
           "path": "projects/aegean-tge"
         }
       ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "delivery": {
+        "forced": false,
+        "ignore_reason": "pre-existing untracked Reforge state",
+        "ignored": [
+          ".aikit/reforge.json",
+          ".aikit/reforge.reviews/stage-run-1-1-283eff350137.md",
+          ".aikit/reforge.reviews/stage-run-1-10-44ddbfb1085a.md",
+          ".aikit/reforge.reviews/stage-run-1-2-5d6f02fcf6d8.md",
+          ".aikit/reforge.reviews/stage-run-1-3-3a2e4e35f471.md",
+          ".aikit/reforge.reviews/stage-run-1-4-eac2dc0d117a.md",
+          ".aikit/reforge.reviews/stage-run-1-5-0743d988586a.md",
+          ".aikit/reforge.reviews/stage-run-1-6-5e5fcae509b1.md",
+          ".aikit/reforge.reviews/stage-run-1-7-85be90ebdef3.md",
+          ".aikit/reforge.reviews/stage-run-1-8-c7c26acbaf8c.md",
+          ".aikit/reforge.reviews/stage-run-1-9-143ff8992588.md"
+        ],
+        "roots": [
+          "."
+        ]
+      },
+      "description": "Task 'TGE-SPEC-AUTO' completed successfully.",
+      "head": "de6c1e0cf948e140623520372a16ca21a4ccfe47",
+      "phase": "completed",
+      "phase_num": 5,
+      "status": "completed",
+      "task_id": "TGE-SPEC-AUTO",
+      "timestamp": 1795552392.961805,
+      "timestamp_str": "2026-11-24 23:33:12"
     }
   ]
 }
