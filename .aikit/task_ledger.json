@@ -1,107 +1,23 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-SCALEHOIST",
-    "last_phase": "phase 4",
+    "task_id": "TGE-STRUCTURAL",
+    "last_phase": "phase 5",
     "active_phase": 5,
-    "status": "completed",
-    "updated_at": 1795290536.514955,
-    "owner": "opencode:session",
-    "lease_until": 1795297736.514955,
-    "started_by": "opencode:session",
+    "status": "in_progress",
+    "updated_at": 1795550151.303978,
+    "owner": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+    "lease_until": 1795557351.303978,
+    "started_by": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
     "continuations": [],
     "workspaces": [
       {
         "name": "aegean-tge",
         "path": "projects/aegean-tge"
       }
-    ],
-    "completed_at": 1795290571.8741965,
-    "completed_head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
-    "completed_tree": "7a33faedb611e535c8bf5f1149a3b90007e19169"
+    ]
   },
   "checkpoints": [
-    {
-      "agent": "opencode:session",
-      "description": "[1/2] Plan + hoist Q8 scale conversion out of the batch token loop",
-      "files_affected": [],
-      "impact_assessment": {
-        "benefits": "+3-4% prefill, byte-identical ids",
-        "mitigation": "byte-identical ids 2048/600/2050, 58/72 pairs, 187/187 tests, 4/4 gates",
-        "risks": "contract: internal kernel buffer; dependency: none; concurrency: per-worker thread_local inside lambda; state: none",
-        "why": "each weight row is walked 8x per chunk, re-running branchy half_to_float on identical scales 8x"
-      },
-      "phase": "phase 2",
-      "phase_num": 2,
-      "plan_digest": "891166e7c80a3c530bd0b404b153f7f4758076ce600fe5b5bbb51226a245e799",
-      "status": "in_progress",
-      "task_id": "TGE-SCALEHOIST",
-      "timestamp": 1795290536.0308554,
-      "timestamp_str": "2026-11-21 22:48:56",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "agent": "opencode:session",
-      "checklists": "passed",
-      "description": "[2/2] Scale hoist: prefill 58/72 pairs, clean-box +2.8% median, ids byte-identical incl. tail, 187/187 tests, 4/4 gates",
-      "files_affected": [],
-      "phase": "phase 4",
-      "phase_num": 4,
-      "status": "in_progress",
-      "task_id": "TGE-SCALEHOIST",
-      "timestamp": 1795290536.514955,
-      "timestamp_str": "2026-11-21 22:48:56",
-      "workspaces": [
-        {
-          "name": "aegean-tge",
-          "path": "projects/aegean-tge"
-        }
-      ]
-    },
-    {
-      "agent": "opencode:session",
-      "delivery": {
-        "forced": false,
-        "roots": [
-          "."
-        ]
-      },
-      "description": "Task 'TGE-SCALEHOIST' completed successfully.",
-      "head": "fadd95f69c1d8f0c6ad1c9bad43d251f42a77662",
-      "phase": "completed",
-      "phase_num": 5,
-      "status": "completed",
-      "task_id": "TGE-SCALEHOIST",
-      "timestamp": 1795290572.162139,
-      "timestamp_str": "2026-11-21 22:49:32"
-    },
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "record the wide-output band-3 experiment",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795326874",
-      "timestamp": 1795326874.9101796,
-      "timestamp_str": "2026-11-22 08:54:34"
-    },
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "record the output pool width-10 experiment",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795328675",
-      "timestamp": 1795328675.2199025,
-      "timestamp_str": "2026-11-22 09:24:35"
-    },
     {
       "agent": "opencode",
       "chore": true,
@@ -266,6 +182,111 @@
       "task_id": "chore-1795429512",
       "timestamp": 1795429512.4081397,
       "timestamp_str": "2026-11-23 13:25:12"
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[1/4] Baseline and select a lossless structural token-generation optimization",
+      "files_affected": [],
+      "impact_assessment": {
+        "benefits": "Higher tokens/s with exact output parity and cross-model evidence",
+        "mitigation": "Measure first; failing-first differential tests; interleaved A/B on at least two models or model-shaped kernels; revert and log any non-win",
+        "risks": "contract: preserve greedy/sampled semantics and kernel parity; dependency: stdlib/C++20 only; concurrency: thread-pool synchronization; state: no persisted format change",
+        "why": "Decode is bandwidth-bound and prior ALU/scheduling/build variants are exhausted; the next gain must remove work or weight traffic without changing generated tokens"
+      },
+      "phase": "phase 2",
+      "phase_num": 2,
+      "plan_digest": "0cc2b32b3f221e76e7b54278a074ac986d4a0026d2d4c8ac8220b63003db4da1",
+      "status": "in_progress",
+      "task_id": "TGE-STRUCTURAL",
+      "timestamp": 1795547744.0377233,
+      "timestamp_str": "2026-11-24 22:15:44",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[2/4] Implement confidence-adaptive greedy draft verification with exact-output regression tests",
+      "files_affected": [],
+      "impact_assessment": {
+        "benefits": "Lower speculative decode cost without changing verifier arithmetic or accepted output",
+        "mitigation": "Pure drafter tests first; preserve six-row fused path; byte-identical ids across Q8_0/Q4_K_M and models; interleaved A/B; revert if no cross-model win",
+        "risks": "contract: variable verifier row count and fused-state invariants; dependency: none; concurrency: unchanged pools; state: no persisted format change",
+        "why": "Fixed six-row verification wastes batched work on weak one/two-token matches; real trace replay predicts 53% and 67% fewer verifier rows on two natural prompts"
+      },
+      "phase": "phase 2",
+      "phase_num": 2,
+      "status": "in_progress",
+      "task_id": "TGE-STRUCTURAL",
+      "timestamp": 1795548305.0202234,
+      "timestamp_str": "2026-11-24 22:25:05",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[1/4] Baseline and candidate triage; [2/4] implement conservative one-token adaptive verification; [3/4] interleaved cross-model A/B plus periodic/penalty controls; [4/4] record ADR, measurements, README, run gates and deliver",
+      "files_affected": [],
+      "impact_assessment": {
+        "benefits": "Fewer verifier rows and higher decode t/s with byte-identical ids",
+        "mitigation": "Two-token/bigram/gapped/periodic drafts stay six rows; short batches never enter fused state; revert any control regression",
+        "risks": "contract: optional verifier width and spec output; dependency: none; concurrency: unchanged; state: no persisted format change",
+        "why": "Aggressive two-token adaptation broke periodic fusion; only isolated one-token exact matches may shorten without disturbing long accepted chains"
+      },
+      "phase": "phase 2",
+      "phase_num": 2,
+      "plan_digest": "afe5bc5223602440cc0a6bd79d1295a366f1546343b3f111b6eebaade956c18b",
+      "status": "in_progress",
+      "task_id": "TGE-STRUCTURAL",
+      "timestamp": 1795549970.180421,
+      "timestamp_str": "2026-11-24 22:52:50",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[4/4] ADR-011, README and measurement log recorded; running final project gates",
+      "files_affected": [],
+      "phase": "phase 4",
+      "phase_num": 4,
+      "status": "in_progress",
+      "task_id": "TGE-STRUCTURAL",
+      "timestamp": 1795550075.3641434,
+      "timestamp_str": "2026-11-24 22:54:35",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "checklists: passed; 4/4 project gates, 189/189 tests, staged secret scan, diff check and cross-model id parity verified",
+      "files_affected": [],
+      "phase": "phase 5",
+      "phase_num": 5,
+      "status": "in_progress",
+      "task_id": "TGE-STRUCTURAL",
+      "timestamp": 1795550151.303978,
+      "timestamp_str": "2026-11-24 22:55:51",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     }
   ]
 }

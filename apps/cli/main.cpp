@@ -781,6 +781,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   long long spec_steps = 0;
   long long spec_accepted = 0;
   long long spec_output = 0;
+  long long spec_verify_rows = 0;
 
   const auto decode_start = Clock::now();
   double fwd_seconds = 0.0;
@@ -916,6 +917,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         ++spec_steps;
         spec_accepted += accepted;
         spec_output += accepted + (stopped ? 0 : 1);
+        spec_verify_rows += tge::models::Qwen2::kSpeculativeBatch;
         if (stopped || static_cast<int>(generated.size()) >= count) {
           break;
         }
@@ -939,10 +941,12 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
     }
     if (speculate && position + tge::models::Qwen2::kSpeculativeBatch <=
                          model->max_context()) {
-      // Six-deep greedy draft: the verifier's whole batch carries drafts,
-      // the padding slot is gone, and the five-deep form stays as the
-      // fallback inside prompt_lookup_draft for short histories.
+      // Greedy drafts always fill six slots, but an isolated one-token exact
+      // match justifies only two verifier rows. Two-token matches can anchor a
+      // long repetitive chain, so they and every other draft keep the full
+      // six-row batch and its fused steady-state fast path.
       int draft[6];
+      int verify_rows = tge::models::Qwen2::kSpeculativeBatch;
       bool first_ok = false;
       // Locked-repetition fast path first: period-1/period-2 cycles propose
       // along the cycle (verifier still decides, d0 pre-check unchanged);
@@ -969,7 +973,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
               draft[0];
         }
       }
-      if (!used_skip && prompt_lookup_draft(history, draft, 6)) {
+      if (!used_skip && prompt_lookup_draft(history, draft, 6, &verify_rows)) {
         if (no_penalty) {
           first_ok =
               tge::models::Qwen2::argmax(logits, vocab_size) == draft[0];
@@ -991,31 +995,30 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
       }
       if (first_ok) {
         int feed[tge::models::Qwen2::kSpeculativeBatch];
-        for (int index = 0; index < 6; ++index) {
+        for (int index = 0; index < verify_rows; ++index) {
           feed[index] = draft[index];
         }
         int predicted[tge::models::Qwen2::kSpeculativeBatch];
         const auto v0 = Clock::now();
         if (no_penalty) {
-          model->verify_draft(feed, tge::models::Qwen2::kSpeculativeBatch,
-                              position, predicted);
+          model->verify_draft(feed, verify_rows, position, predicted);
         } else {
           // Penalized rows: row i predicts draft[i + 1], and the penalty
           // for that decision sees history + feed[0..i], exactly as
           // single-token decoding would. Widened history is built
           // incrementally; the single-token path would see the same window.
           const float* rows = model->verify_draft_logits(
-              feed, tge::models::Qwen2::kSpeculativeBatch, position);
+              feed, verify_rows, position);
           if (static_cast<int>(scores.size()) < vocab_size) {
             scores.assign(static_cast<std::size_t>(vocab_size), 0.0F);
           }
           // Penalized rows: row i predicts draft[i + 1] with the history as
-          // of that position (history + feed[0..i]), and row 5 predicts the
-          // bonus token after the sixth draft. All six rows are penalized,
-          // so the bonus keeps the exact single-token penalty semantics.
+          // of that position (history + feed[0..i]). The final computed row
+          // predicts the bonus token, preserving single-token penalty semantics
+          // for both short and full verification batches.
           std::vector<int> widened = history;
           widened.reserve(history.size() + 6);
-          for (int index = 0; index < 6; ++index) {
+          for (int index = 0; index < verify_rows; ++index) {
             widened.push_back(feed[index]);
             std::memcpy(scores.data(),
                         rows +
@@ -1032,7 +1035,8 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         fwd_seconds += std::chrono::duration<double>(v1 - v0).count();
 
         int accepted = 1;
-        while (accepted < 6 && predicted[accepted - 1] == draft[accepted]) {
+        while (accepted < verify_rows &&
+               predicted[accepted - 1] == draft[accepted]) {
           ++accepted;
         }
         const int corrected = predicted[accepted - 1];
@@ -1059,8 +1063,9 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
         ++spec_steps;
         spec_accepted += accepted;
         spec_output += accepted + (stopped ? 0 : 1);
+        spec_verify_rows += verify_rows;
         if (!stopped && static_cast<int>(generated.size()) < count) {
-          if (accepted == 6 && !disable_fuse) {
+          if (accepted == tge::models::Qwen2::kSpeculativeBatch && !disable_fuse) {
             // Full accept, bonus id known (KV not yet written): skip the 1-row
             // correction forward and chain into the fused steady state. Next
             // first (= bonus) is a known argmax, no logits needed.
@@ -1175,6 +1180,7 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
           const auto v0 = Clock::now();
           const float* verify_logits = model->verify_draft_logits(
               feed, tge::models::Qwen2::kSpeculativeBatch, position);
+          spec_verify_rows += tge::models::Qwen2::kSpeculativeBatch;
           const auto v1 = Clock::now();
           fwd_seconds += std::chrono::duration<double>(v1 - v0).count();
 
@@ -1293,9 +1299,10 @@ int command_generate(const std::string& path, const std::vector<int>& prompt_ids
   if (spec_steps > 0) {
     std::printf(
         "spec     : %lld steps, %lld draft tokens accepted (%.2f/step), %lld "
-        "tokens emitted\n",
+        "tokens emitted, %lld verifier rows\n",
         spec_steps, spec_accepted,
-        static_cast<double>(spec_accepted) / spec_steps, spec_output);
+        static_cast<double>(spec_accepted) / spec_steps, spec_output,
+        spec_verify_rows);
   }
 
   if (print_ids) {

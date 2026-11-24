@@ -103,6 +103,51 @@ TGE_TEST(draft_fills_all_slots_on_five_deep_fallback) {
   TGE_CHECK(draft[5] == draft[4]);
 }
 
+TGE_TEST(draft_verification_rows_follow_match_confidence) {
+  // A one-token historical match is weak evidence: verify only the proposal
+  // plus the row that predicts its successor, not a full six-row batch.
+  const std::vector<int> weak = {2, 101, 102, 103, 104, 105, 106, 107,
+                                108, 109, 201, 202, 203, 204, 205, 2};
+  int draft[6] = {};
+  int rows = 6;
+  TGE_CHECK(tge::cli::prompt_lookup_draft(weak, draft, 6, &rows));
+  TGE_CHECK(rows == 2);
+  TGE_CHECK(draft[0] == 101 && draft[1] == 102);
+
+  // Two matching suffix tokens can still begin a long repetitive chain, so
+  // they keep the full verifier and fused steady-state path.
+  const std::vector<int> medium = {1, 2, 101, 102, 103, 104, 105, 106,
+                                   107, 108, 109, 201, 202, 203, 204,
+                                   205, 206, 207, 208, 1, 2};
+  rows = 6;
+  TGE_CHECK(tge::cli::prompt_lookup_draft(medium, draft, 6, &rows));
+  TGE_CHECK(rows == 6);
+  TGE_CHECK(draft[0] == 101 && draft[1] == 102 && draft[2] == 103);
+
+  // A three-token match keeps the full verifier: its continuation is strong
+  // enough that reducing rows would risk turning one pass into two.
+  const std::vector<int> strong = {1, 2, 3, 101, 102, 103, 104, 105, 106,
+                                   107, 108, 109, 201, 202, 203, 204,
+                                   205, 206, 207, 208, 209, 1, 2, 3};
+  rows = 6;
+  TGE_CHECK(tge::cli::prompt_lookup_draft(strong, draft, 6, &rows));
+  TGE_CHECK(rows == 6);
+}
+
+TGE_TEST(draft_verification_keeps_full_rows_for_period_three) {
+  // The adaptive verifier must not shorten a real periodic continuation just
+  // because its shortest exact span is only two tokens. This changes verifier
+  // width only; the historical exact-match proposal remains untouched.
+  const std::vector<int> history = {1, 2, 3, 1, 2, 3, 1, 2, 3};
+  int draft[6] = {};
+  int rows = 6;
+  TGE_CHECK(tge::cli::prompt_lookup_draft(history, draft, 6, &rows));
+  TGE_CHECK(rows == 6);
+  for (int index = 0; index < 6; ++index) {
+    TGE_CHECK(draft[index] == index % 3 + 1);
+  }
+}
+
 TGE_TEST(cli_kl_reports_infinite_divergence) {
   // Regression: the fidelity KL loop skipped any index where q <= 0, so a
   // candidate that put zero mass where the oracle has mass reported a small

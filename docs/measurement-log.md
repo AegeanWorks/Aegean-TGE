@@ -6668,3 +6668,62 @@ Two 12-pair decode batches on base Q8_0: 8/12 (75.54->75.91) then 6/12
 Below the ~78% two-model bar. The branchy converter is not a bottleneck at the
 memory roof; a table load costs about what the shifts do. Reverted in full,
 rebuilt, 187/187 green. No code ships.
+
+## 2026-11-24 - Confidence-adaptive greedy verification (KEPT, +5-10% natural decode)
+
+Target: token-generation speed without output changes. The fixed six-row
+prompt-lookup verifier was doing full batched work for isolated one-token exact
+matches. The final change shortens only that case to two rows: the proposed
+token plus the row that predicts its successor/correction. Two-token and longer
+exact matches, bigram/gapped drafts, period-1/2 locks, sampled speculation and
+fused steady state remain six rows. A short batch always materializes the
+correction forward and never enters fused state. `spec` now reports verifier
+rows, making the work reduction deterministic rather than inferred from t/s.
+
+Baseline was captured before the first edit with `scripts\measure.ps1` and the
+pre-change binary was saved for interleaved A/B. The standard snapshot's
+selected kernels were unchanged (`avx2-fma`/`avx2`, 12 decode threads). Its
+absolute kernel numbers moved with box load (memory read 24.34 -> 51.72 GB/s),
+so they are not the evidence for this change; same-window model pairs are.
+
+Final health gate: `bench mem` read 50.36 then 52.41 GB/s; the q5_0 x1/x4
+tripwire was clean (31.10 -> 91.25 GFLOPS). Each A/B pair ran OLD/NEW or
+NEW/OLD alternately, greedy `--speculative --print-ids --threads 12`, 64
+output tokens, prompt `The capital of France is` unless stated. Every compared
+id sequence was identical.
+
+| model / control | pairs | wins | median old -> new | verdict |
+|---|---:|---:|---:|---|
+| Qwen2.5-0.5B Q8_0, natural prose | 24 | 22 | 83.06 -> 91.12 t/s (+9.7%) | kept |
+| Qwen2.5-Coder-1.5B Q8_0, natural prose | 12 | 12 | 29.01 -> 30.48 t/s (+5.1%) | kept |
+| SmolLM2-135M Q4_K_M, natural prose | 12 | 9 | 147.04 -> 156.48 t/s (+6.4%) | positive, below 78% alone |
+| Qwen2.5-0.5B Q8_0, period-3 control | 12 | 11 | 197.45 -> 213.53 t/s (+8.1%) | no regression; rows unchanged |
+| Qwen2.5-0.5B Q8_0, repeat-penalty 1.1 | 12 | 7 | 85.55 -> 85.86 t/s (+0.4%) | neutral, ids identical |
+
+Deterministic verifier-row counters on the same traces:
+
+| trace | before | after |
+|---|---:|---:|
+| Qwen2.5-0.5B natural | 12 steps x 6 = 72 | 44 (-39%) |
+| Qwen2.5-Coder-1.5B natural | 3 x 6 = 18 | 6 (-67%) |
+| SmolLM2-135M natural | 8 x 6 = 48 | 24 (-50%) |
+| period-3 control | 11 x 6 = 66 | 66 (unchanged) |
+
+Tests were written first. The corrected fixtures failed on the old behavior:
+**189 cases, 2 failed, 9 assertions failed** (one-token rows and period-3
+protection). Final suite: **189 cases, 0 failed**. Penalized greedy ids also
+matched the saved baseline byte-for-byte; its single speculative step dropped
+from six to two verifier rows.
+
+### Rejected aggressive variant: two-token/bigram/gapped shortening
+
+Before the final policy, two-token exact matches used three rows and
+bigram/gapped fallbacks used two. It looked better on natural prose (0.5B
+24/24, +11.6%; 1.5B 11/12, +3.4%; SmolLM2 9/12, +9.3%) and reduced rows to
+37/6/17. The periodic control falsified it: **0 wins / 12 losses, median
+206.45 -> 169.12 t/s (-18.1%)**. One shortened match broke the full-accept
+fused chain (66 -> 63 rows, accepted drafts 56 -> 54), forcing correction
+forwards. Penalized greedy was also slightly negative (5/12, -1.3%). A generic
+period-3 proposal extension was reverted at the same time; the final patch uses
+periodic history only to protect verifier width and leaves every historical
+proposal unchanged. No aggressive code ships.

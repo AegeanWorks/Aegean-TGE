@@ -71,6 +71,43 @@ inline bool bigram_chain_draft(const std::vector<int>& history, int* draft,
   return true;
 }
 
+/// Verifier rows justified by an exact suffix match. Only an isolated
+/// one-token match is weak enough to shorten: verify the proposal plus the row
+/// that predicts its successor. Two-token matches can still anchor a long
+/// repetitive chain, so they and every longer match keep the full batch.
+inline int exact_match_verify_rows(int span, int need) {
+  if (span >= 2) {
+    return 6;
+  }
+  return std::min(2, need);
+}
+
+/// Returns the shortest recent period (1..6) supported by three cycles, or 0.
+/// This affects verifier width only: a periodic history can turn a weak exact
+/// suffix match into a full six-token continuation, but the proposal itself
+/// still comes from the unchanged exact/bigram/gapped chain.
+inline int recent_period(const std::vector<int>& history) {
+  const int length = static_cast<int>(history.size());
+  for (int period = 1; period <= 6; ++period) {
+    const int evidence = std::min(length, std::max(12, period * 3));
+    if (evidence < period * 3) {
+      continue;
+    }
+    bool locked = true;
+    for (int offset = 0; offset < evidence; ++offset) {
+      if (history[static_cast<std::size_t>(length - 1 - offset)] !=
+          history[static_cast<std::size_t>(length - 1 - offset % period)]) {
+        locked = false;
+        break;
+      }
+    }
+    if (locked) {
+      return period;
+    }
+  }
+  return 0;
+}
+
 /// Drafts the continuation of a near-match of the last two to six tokens with
 /// exactly one substitution. Last resort after exact spans and bigram chain.
 inline bool gapped_draft(const std::vector<int>& history, int* draft, int need) {
@@ -154,8 +191,13 @@ inline bool skip_locked_draft(const std::vector<int>& history, int* draft,
 /// 5 on the sampled path. Greedy tries the deep draft first and falls back to
 /// the historical five-deep form. On success ALL `need` slots are written --
 /// the five-deep fallback fills the sixth slot via complete_draft_tail.
+/// `verify_rows`, when supplied, receives the confidence-adaptive greedy batch
+/// size (2 or 6); existing callers that omit it keep the full batch.
 inline bool prompt_lookup_draft(const std::vector<int>& history, int* draft,
-                                int need) {
+                                int need, int* verify_rows = nullptr) {
+  if (verify_rows != nullptr) {
+    *verify_rows = 6;
+  }
   if (need < 1 || need > 6) {
     return false;
   }
@@ -180,15 +222,20 @@ inline bool prompt_lookup_draft(const std::vector<int>& history, int* draft,
           draft[index] = history[static_cast<std::size_t>(end + 1 + index)];
         }
         complete_draft_tail(draft, want, need);
+        if (verify_rows != nullptr) {
+          *verify_rows = (span < 2 && recent_period(history) != 0)
+                             ? 6
+                             : exact_match_verify_rows(span, need);
+        }
         return true;
       }
     }
     if (bigram_chain_draft(history, draft, want)) {
-        complete_draft_tail(draft, want, need);
+      complete_draft_tail(draft, want, need);
       return true;
     }
     if (gapped_draft(history, draft, want)) {
-        complete_draft_tail(draft, want, need);
+      complete_draft_tail(draft, want, need);
       return true;
     }
   }

@@ -79,3 +79,10 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 - **Context**: The 12k-token prose speculation cell could not be measured because a prompt that long exceeds the Windows command-line limit (about 32k characters) when passed through `--prompt`.
 - **Decision**: Add `generate --prompt-file PATH`. The file is read whole, in binary mode, into the same text that `--prompt` sets. A missing, unreadable or empty file, or combining it with `--prompt` or `--tokens`, exits 2 with a `generate:` message. `load_prompt_file` and `prompt_source_conflict` live in `apps/cli/cli_options.hpp` so unit tests can cover them without loading a model.
 - **Consequences**: Prompts of any length can be used. The flag is opt-in, so default behaviour is unchanged. Three CLI option tests pin load, rejection and usage text.
+
+### ADR-011: Adaptive greedy verification for isolated one-token drafts
+- **Date**: 2026-11-24
+- **Status**: Accepted
+- **Context**: Greedy prompt-lookup speculation always verified six rows, even when an isolated one-token exact match offered little evidence for a long continuation. Shortening two-token, bigram or gapped matches broke the fused repetitive chain and measured -18.1 percent on the periodic control.
+- **Decision**: Only a non-periodic one-token exact match uses a two-row greedy verifier; the second row predicts the successor/correction token. Two-token and longer exact matches, bigram/gapped drafts, period-1/2 locks, sampled speculation and fused steady state keep six rows. Short batches always materialize the correction forward and never enter fused state. The spec summary reports total verifier rows.
+- **Consequences**: Generated ids remain byte-identical in interleaved A/B on Q8_0 0.5B/1.5B and Q4_K_M SmolLM2, including periodic and repeat-penalty controls. Natural-prompt decode medians improved 9.7 percent (22/24), 5.1 percent (12/12) and 6.4 percent (9/12); verifier rows fell 72->44, 18->6 and 48->24. Non-speculative and sampled paths are unchanged; weak proposals still pay one correction forward.
