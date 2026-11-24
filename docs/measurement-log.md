@@ -6727,3 +6727,32 @@ forwards. Penalized greedy was also slightly negative (5/12, -1.3%). A generic
 period-3 proposal extension was reverted at the same time; the final patch uses
 periodic history only to protect verifier width and leaves every historical
 proposal unchanged. No aggressive code ships.
+
+## 2026-11-24 - Sampled adaptive verification: reverted (no speed win)
+
+Extended the conservative exact-one width policy to sampled speculation. The
+per-row softmax, cuts, repeat penalty and `speculative_accept` rule were
+unchanged; a short batch simply emitted its bonus earlier and resumed with the
+ordinary one-row forward. This preserves the target distribution by the same
+induction as the shipped six-row path, but speed did not improve.
+
+Health gate: mem read 32.59 GB/s; q5_0 x1/x4 clean (28.01 -> 90.35 GFLOPS).
+Interleaved OLD/NEW pairs, `--temp 0.8 --top-p 0.9 --seed 7`, 64 tokens,
+`--threads 12 --speculative`. Sampled ids are not an equality oracle because
+RNG consumption changes; verifier rows are deterministic and reported.
+
+| model / control | pairs | wins | median old -> new | verifier rows |
+|---|---:|---:|---:|---:|
+| Qwen2.5-0.5B Q8_0 natural | 16 | 3 | 76.29 -> 73.28 t/s (-3.9%) | 24 -> 22 |
+| Qwen2.5-Coder-1.5B Q8_0 natural | 12 | 6 | 28.15 -> 28.24 t/s (+0.3%) | 24 -> 14 |
+| SmolLM2-135M Q4_K_M natural | 12 | 6 | 172.31 -> 169.10 t/s (-1.9%) | 0 -> 0 |
+| Qwen2.5-0.5B period-3 control | 12 | 6 | 158.77 -> 157.76 t/s (-0.6%) | 54 -> 54 |
+| Qwen2.5-0.5B repeat-penalty 1.1 | 12 | 1 | 90.19 -> 86.12 t/s (-4.5%) | 6 -> 14 |
+
+Verdict: **reverted in full**. The 0.5B and penalized controls regressed, the
+1.5B result was flat despite fewer rows, and SmolLM2 never entered a verifier
+pass. Main and test files match HEAD again; rebuilt suite **189/189**. No sampled
+code ships. The likely reason the row reduction does not pay is that sampled
+acceptance is low (0.19-0.28 drafts/step): the fixed six-row pass is already
+rare, and changing its length perturbs the RNG/acceptance trajectory enough to
+erase the small arithmetic saving.
