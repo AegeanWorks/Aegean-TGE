@@ -7015,3 +7015,36 @@ The kernel-level win did not generalize across prompt lengths and both models;
 Coder was flat and train was flat at 512. Verdict: **reverted in full**. The band
 parameter and shape policy were removed; source matches HEAD and the suite is
 back to **191/191**. The proven factor-8 layer tile is unchanged.
+
+## 2026-11-25 - Paired-row K-quant prefill (KEPT, +11.0-41.7%)
+
+Target: Q4_K_M/Q5_K_M prompt processing without changing output. The float
+dequant prefill kernel expanded one weight row, then reloaded every activation
+vector for each output row. The new paired kernel expands two rows into
+per-worker scratch and computes both exact four-accumulator dots with one set
+of activation loads. Dequantization, FMA order, reduction order and scalar tail
+are unchanged. Integer KQ8 prefill, fused decode, scalar and odd-row paths keep
+their existing kernels.
+
+The bitwise differential covers Q4_K/Q6_K, columns 512/3072, tokens 7/64 and
+both paired and odd-row fallback shapes. Standalone microbenchmarks were
+load-sensitive and mixed by shape, so dispatch was intentionally simple and the
+real model A/B became the decision gate.
+
+Baseline `measure.ps1`: memory read 37.55 GB/s; q5_0 gate batch 29.16 GFLOPS.
+Final health gate: memory read 53.85 GB/s; q5_0 x1/x4 clean
+(27.62 -> 68.04 GFLOPS). Interleaved old/new prefill A/B used deterministic id
+prompts, `--n 1`, 12 decode threads, and checked the generated token:
+
+| model / prompt | pairs | wins | median old -> paired | throughput |
+|---|---:|---:|---:|---:|
+| Qwen2.5-0.5B Q4_K_M, 512 | 8 | 8 | 1861.8 -> 1593.4 ms | **+16.8%** |
+| Qwen2.5-0.5B Q4_K_M, 2048 | 8 | 8 | 7981.6 -> 6916.3 ms | **+15.4%** |
+| SmolLM2-135M Q4_K_M, 512 | 8 | 6 | 819.0 -> 719.5 ms | **+13.8%** |
+| SmolLM2-135M Q4_K_M, 2048 | 8 | 8 | 4303.1 -> 3876.2 ms | **+11.0%** |
+| Qwen2.5-0.5B Q5_K_M, 512 | 8 | 8 | 2152.9 -> 1519.6 ms | **+41.7%** |
+| Qwen2.5-0.5B Q5_K_M, 2048 | 8 | 8 | 8036.0 -> 6780.5 ms | **+18.5%** |
+
+Generated tokens were identical in every pair. Tests **192/192**, including
+`dequant_batch_tiled_matches_shipped_bitwise`. ADR-015 records the contract and
+scope.

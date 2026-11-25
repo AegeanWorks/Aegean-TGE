@@ -196,6 +196,11 @@ using DequantBatchFn = void (*)(const DequantBatchArgs& args,
 void gemv_dequant_batch_avx2(const DequantBatchArgs& args,
                               const GemvConfig& config);
 
+/// Two-row register-blocked dequantize-then-dot prefill. Each activation load
+/// feeds both rows; each row keeps the shipped four-accumulator reduction order.
+void gemv_dequant_batch_tiled_avx2(const DequantBatchArgs& args,
+                                   const GemvConfig& config);
+
 /// Single-row fused K-quant decode dots: dequantise in registers and FMA with
 /// the activation immediately, bit-identical to dequantise-then-dot. Decode
 /// only; `gemv_*_fused_avx2` falls back to the batch kernel for tokens > 1.

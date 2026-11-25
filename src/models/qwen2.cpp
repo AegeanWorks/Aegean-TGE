@@ -1155,6 +1155,10 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     if (kq8_effective() && !scalar_kernels_ && !float_only && tokens > 1 &&
         (kind == cpu::QuantKind::Q4_K || kind == cpu::QuantKind::Q6_K)) {
       cpu::gemv_dequant_batch_kq8_avx2(args, config);
+    } else if (!scalar_kernels_ && cpu::detect().features.avx2 &&
+               cpu::detect().features.fma && weight.rows % 2 == 0 &&
+               tokens > 1) {
+      cpu::gemv_dequant_batch_tiled_avx2(args, config);
     } else {
       kernels().gemv_dequant_batch(args, config);
     }

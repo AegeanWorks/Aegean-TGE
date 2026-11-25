@@ -508,6 +508,45 @@ TGE_TEST(dequant_batch_matches_scalar_reference) {
   }
 }
 
+TGE_TEST(dequant_batch_tiled_matches_shipped_bitwise) {
+  for (tge::cpu::QuantKind kind : {tge::cpu::QuantKind::Q4_K,
+                                   tge::cpu::QuantKind::Q6_K}) {
+    for (int rows : {4, 5}) {
+      for (int cols : {512, 3072}) {
+        for (int tokens : {7, 64}) {
+          const std::vector<std::uint8_t> matrix =
+              kind == tge::cpu::QuantKind::Q4_K
+                  ? make_q4_k_matrix(rows * cols / kBlockElements, 0x47110000u)
+                  : make_q6_k_matrix(rows * cols / kBlockElements, 0x47120000u);
+          std::vector<float> input(static_cast<std::size_t>(tokens) * cols);
+          std::uint32_t state = 0x12345678u;
+          for (float& value : input) {
+            state = state * 1664525u + 1013904223u;
+            value = (static_cast<float>((state >> 8) & 0xFFFFu) / 32768.0F) - 1.0F;
+          }
+          std::vector<float> reference(static_cast<std::size_t>(tokens) * rows);
+          std::vector<float> tiled(reference.size());
+          tge::cpu::DequantBatchArgs args;
+          args.data = matrix.data();
+          args.kind = kind;
+          args.rows = rows;
+          args.cols = cols;
+          args.input = input.data();
+          args.tokens = tokens;
+          args.out = reference.data();
+          tge::core::ThreadPool pool(4, false);
+          const tge::cpu::GemvConfig config{4, &pool};
+          tge::cpu::gemv_dequant_batch_avx2(args, config);
+          args.out = tiled.data();
+          tge::cpu::gemv_dequant_batch_tiled_avx2(args, config);
+          TGE_CHECK(std::memcmp(reference.data(), tiled.data(),
+                                reference.size() * sizeof(float)) == 0);
+        }
+      }
+    }
+  }
+}
+
 TGE_TEST(dequant_q4k_fused_row_matches_batch) {
   // The fused decode dot must equal dequantise-then-dot bit for bit, not
   // merely closely: the only delta is the scratch round trip it removes.
