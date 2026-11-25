@@ -6993,3 +6993,25 @@ or negative. Verdict: **reverted in full**. The public band parameter, factor
 loop tests and output policy were removed; source matches HEAD and the suite is
 back to **191/191**. Factor 8 remains the layer default and the output projection
 remains on the original one-row kernel.
+
+## 2026-11-25 - Large-FFN tiled band factor 16: rejected
+
+The same sweep showed the 8960x1536 tiled FFN at 10655.417 us with factor 16
+versus 11535.243 us at factor 8 (-7.6%). A narrow policy used factor 16 only for
+8193-16384-row Q8_0 prefill matrices, affecting the Coder-1.5B and train-run16a
+FFNs while leaving every smaller layer and the output projection unchanged.
+The factor differential remained bitwise and the invalid-factor guard passed.
+
+Interleaved old/new A/B, deterministic id prompts, `--n 1`, tokens identical:
+
+| model / prompt | pairs | wins | median old -> factor16 | throughput |
+|---|---:|---:|---:|---:|
+| Coder-1.5B, 512 | 8 | 5 | 4156.9 -> 4130.5 ms | +0.6% |
+| Coder-1.5B, 2048 | 8 | 4 | 20031.1 -> 20050.2 ms | -0.1% |
+| train-run16a, 512 | 8 | 4 | 4239.9 -> 4245.2 ms | -0.1% |
+| train-run16a, 2048 | 8 | 8 | 20254.2 -> 19810.7 ms | +2.2% |
+
+The kernel-level win did not generalize across prompt lengths and both models;
+Coder was flat and train was flat at 512. Verdict: **reverted in full**. The band
+parameter and shape policy were removed; source matches HEAD and the suite is
+back to **191/191**. The proven factor-8 layer tile is unchanged.
