@@ -99,6 +99,13 @@ using Q8GemvFn = void (*)(const Q8GemvArgs& args, const GemvConfig& config);
 void gemv_q8_0_avx2(const Q8GemvArgs& args, const GemvConfig& config);
 void gemv_q8_0_scalar(const Q8GemvArgs& args, const GemvConfig& config);
 
+/// Evaluates independent Q8_0 matrix-vector products in one pool dispatch.
+/// Each matrix keeps the same row arithmetic and band factor as
+/// `gemv_q8_0_avx2`; only the fork/join boundary is shared. This is used for
+/// same-input projections such as Q/K/V and gate/up during decode.
+void gemv_q8_0_group_avx2(const Q8GemvArgs* args, std::size_t count,
+                          const GemvConfig& config);
+
 /// Batched Q8_0 projection: out[tokens][rows] = input[tokens][cols] * W[rows][cols]^T.
 ///
 /// This is prompt processing, and it is why prefill is not the same problem as

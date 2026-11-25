@@ -388,6 +388,8 @@ class Qwen2 {
 
   Qwen2() = default;
 
+  template <bool Grouped>
+  const float* forward_impl(int sequence, int token, int position);
   Matrix matrix(const char* name) const;
   /// Row-range view over one tensor's rows: the same bytes, the same type,
   /// `rows` rows starting at `row_begin`. Fused tensors (`attn_qkv`,
@@ -404,6 +406,8 @@ class Qwen2 {
               // different pool width. Null/0 keeps the decode defaults.
               core::ThreadPool* pool_override = nullptr,
               int threads_override = 0) const;
+  bool grouped_q8_matvec(const Matrix* const* matrices, const float* input,
+                        float* const* outputs, int count) const;
   void batch_matvec(const Matrix& weight, const float* input, float* output,
                     int tokens, const cpu::Q8Quantized* quantized = nullptr,
                     bool float_only = false) const;

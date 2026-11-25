@@ -1,13 +1,13 @@
 {
   "version": 1,
   "active_task": {
-    "task_id": "TGE-SPEC-AUTO",
+    "task_id": "TGE-MULTIMV",
     "last_phase": "phase 4",
-    "active_phase": 5,
-    "status": "completed",
-    "updated_at": 1795552353.7109733,
+    "active_phase": 4,
+    "status": "in_progress",
+    "updated_at": 1795566849.0979426,
     "owner": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
-    "lease_until": 1795559553.7109733,
+    "lease_until": 1795574049.0979426,
     "started_by": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
     "continuations": [],
     "workspaces": [
@@ -15,56 +15,9 @@
         "name": "aegean-tge",
         "path": "projects/aegean-tge"
       }
-    ],
-    "completed_at": 1795552392.8224,
-    "completed_head": "de6c1e0cf948e140623520372a16ca21a4ccfe47",
-    "completed_tree": "cd812367d7a01ecfa7f98125fb36c727429d8308"
+    ]
   },
   "checkpoints": [
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "record the llama.cpp cross-engine snapshot",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795346864",
-      "timestamp": 1795346864.6640394,
-      "timestamp_str": "2026-11-22 14:27:44"
-    },
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "write the synthesis of the kept wins",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795347129",
-      "timestamp": 1795347129.2226152,
-      "timestamp_str": "2026-11-22 14:32:09"
-    },
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "write the literature-context article on hybrid scheduling",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795347320",
-      "timestamp": 1795347320.4868703,
-      "timestamp_str": "2026-11-22 14:35:20"
-    },
-    {
-      "agent": "opencode",
-      "chore": true,
-      "description": "write the unique SMT-sibling decode finding",
-      "phase": "chore",
-      "phase_num": 1,
-      "status": "completed",
-      "task_id": "chore-1795347583",
-      "timestamp": 1795347583.5836785,
-      "timestamp_str": "2026-11-22 14:39:43"
-    },
     {
       "agent": "opencode",
       "chore": true,
@@ -409,6 +362,82 @@
       "task_id": "TGE-SPEC-AUTO",
       "timestamp": 1795552392.961805,
       "timestamp_str": "2026-11-24 23:33:12"
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[1/3] Measure fork/join overhead and prototype grouped Q8 matvec; [2/3] wire Q/K/V and gate/up groups if differential and microbench pass; [3/3] interleaved model A/B, docs/ADR/gates",
+      "files_affected": [],
+      "impact_assessment": {
+        "benefits": "Potential ~0.33 ms/token lower synchronization cost with bit-identical outputs",
+        "mitigation": "Differential tests against individual kernels; Q8-only runtime gate with sequential fallback; microbench first; two-model A/B and revert on no win",
+        "risks": "contract: new grouped kernel API; dependency: none; concurrency: one shared pool region and dynamic bands; state: none",
+        "why": "Decode makes 169 pool dispatches per token at 4.62 us each; grouping independent projections can remove 72 joins without changing arithmetic"
+      },
+      "phase": "phase 2",
+      "phase_num": 2,
+      "plan_digest": "9ba9b4361f01308ae966177cd860b8e3b50724128a8934f7e3662ef540a52b9c",
+      "status": "in_progress",
+      "task_id": "TGE-MULTIMV",
+      "timestamp": 1795553711.7229488,
+      "timestamp_str": "2026-11-24 23:55:11",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "[3/3] Grouped Q8 decode kept for embedding width >=1024; final Coder 12/12 +2.8%, train 11/12 +3.0%, small neutral, ids identical",
+      "files_affected": [],
+      "phase": "phase 3",
+      "phase_num": 3,
+      "status": "in_progress",
+      "task_id": "TGE-MULTIMV",
+      "timestamp": 1795565746.8264954,
+      "timestamp_str": "2026-11-25 03:15:46",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "description": "Final grouped/sequential implementation verified: 190/190 tests, wide-model A/B and fallback controls recorded, ADR-012/013 and README updated",
+      "files_affected": [],
+      "phase": "phase 4",
+      "phase_num": 4,
+      "status": "in_progress",
+      "task_id": "TGE-MULTIMV",
+      "timestamp": 1795566806.7695403,
+      "timestamp_str": "2026-11-25 03:33:26",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
+    },
+    {
+      "agent": "opencode:ses_df107ab86ffes34EBVrRgCNvuV",
+      "checklists": "passed",
+      "description": "checklists: passed; 4/4 gates, 190/190 tests, staged review ready; final snapshot mem 57.65 GB/s",
+      "files_affected": [],
+      "phase": "phase 4",
+      "phase_num": 4,
+      "status": "in_progress",
+      "task_id": "TGE-MULTIMV",
+      "timestamp": 1795566849.0979426,
+      "timestamp_str": "2026-11-25 03:34:09",
+      "workspaces": [
+        {
+          "name": "aegean-tge",
+          "path": "projects/aegean-tge"
+        }
+      ]
     }
   ]
 }

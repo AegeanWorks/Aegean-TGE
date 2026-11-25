@@ -86,3 +86,17 @@ contract, a dependency, a data format or the architecture; IDs are consecutive a
 - **Context**: Greedy prompt-lookup speculation always verified six rows, even when an isolated one-token exact match offered little evidence for a long continuation. Shortening two-token, bigram or gapped matches broke the fused repetitive chain and measured -18.1 percent on the periodic control.
 - **Decision**: Only a non-periodic one-token exact match uses a two-row greedy verifier; the second row predicts the successor/correction token. Two-token and longer exact matches, bigram/gapped drafts, period-1/2 locks, sampled speculation and fused steady state keep six rows. Short batches always materialize the correction forward and never enter fused state. The spec summary reports total verifier rows.
 - **Consequences**: Generated ids remain byte-identical in interleaved A/B on Q8_0 0.5B/1.5B and Q4_K_M SmolLM2, including periodic and repeat-penalty controls. Natural-prompt decode medians improved 9.7 percent (22/24), 5.1 percent (12/12) and 6.4 percent (9/12); verifier rows fell 72->44, 18->6 and 48->24. Non-speculative and sampled paths are unchanged; weak proposals still pay one correction forward.
+
+### ADR-012: Grouped Q8_0 decode projections for wide models
+- **Date**: 2026-11-25
+- **Status**: Accepted
+- **Context**: Decode performs 169 thread-pool dispatches per token; an empty dispatch measures 4.62 us. Independent same-input Q8_0 projections currently pay separate joins. Grouping improved large Q8_0 models but not the 0.5B model, and inlining the group machinery perturbed fallback paths.
+- **Decision**: Add a grouped Q8_0 GEMV kernel that keeps each matrix's row arithmetic and band factor but shares one dynamic-work pool dispatch. Use it for Q/K/V and gate/up only when embedding width is at least 1024, AVX2/FMA is present, and neither scalar kernels nor VNNI is active. Keep the helper out of line, use a stack task fast path with heap fallback, and retain sequential matvec for every other case.
+- **Consequences**: Final interleaved decode medians improved 2.8 percent on Qwen2.5-Coder-1.5B Q8_0 (12/12 pairs) and 3.0 percent on train-run16a Q8_0 (11/12), with byte-identical ids. The 0.5B control was neutral at -0.1 percent and the unchanged Q4_K_M control was inside noise at -1.6 percent. Tests increased from 189 to 190 with a bitwise grouped-vs-individual differential and partial-block rejection coverage.
+
+### ADR-013: Separate grouped and sequential decode forward loops
+- **Date**: 2026-11-25
+- **Status**: Accepted
+- **Context**: After grouped Q8_0 dispatch was wired into the shared forward loop, unchanged small/Q4_K_M fallback models showed code-layout and per-layer branch penalties even though their kernels were not called. Moving only the group helper out of line reduced but did not eliminate the effect.
+- **Decision**: Select grouped versus sequential decode once at the public forward boundary and instantiate two noinline forward_impl template specializations. The sequential specialization contains no grouping branches, task arrays or group calls; per-layer tensor checks remain only in the grouped specialization.
+- **Consequences**: Fallback controls returned inside the noise band: Qwen2.5-0.5B +0.6 percent (6/12) and SmolLM2 Q4_K_M -1.3 percent (6/12), all ids identical. Wide Q8_0 gains remained: Coder-1.5B +2.7 percent (11/12) and train-run16a +3.4 percent (20/24). The source loop stays single-sourced while the generated hot paths are isolated.

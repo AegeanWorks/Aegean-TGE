@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <vector>
 
 #include "harness.hpp"
@@ -138,6 +139,48 @@ TGE_TEST(q8_batch_matches_scalar_reference) {
   expect_q8_batch_matches(64, 896, 16, 15u);
 }
 
+TGE_TEST(q8_group_matches_individual_bitwise) {
+  constexpr int kCols = 896;
+  std::vector<float> input(static_cast<std::size_t>(kCols));
+  for (int index = 0; index < kCols; ++index) {
+    input[static_cast<std::size_t>(index)] =
+        static_cast<float>(index % 31 - 15) / 15.0F;
+  }
+  const auto check = [&](const int* rows, int threads) {
+    std::vector<std::uint8_t> matrices[3];
+    tge::cpu::Q8GemvArgs args[3];
+    std::vector<float> reference[3];
+    std::vector<float> grouped[3];
+    for (int matrix = 0; matrix < 3; ++matrix) {
+      matrices[matrix] = make_q8_matrix(rows[matrix], kCols, 71u + matrix);
+      reference[matrix].resize(static_cast<std::size_t>(rows[matrix]));
+      grouped[matrix].resize(static_cast<std::size_t>(rows[matrix]));
+      args[matrix].data = matrices[matrix].data();
+      args[matrix].rows = rows[matrix];
+      args[matrix].cols = kCols;
+      args[matrix].vector = input.data();
+      args[matrix].out = reference[matrix].data();
+    }
+    tge::core::ThreadPool pool(threads, false);
+    const tge::cpu::GemvConfig config{threads, &pool};
+    for (int matrix = 0; matrix < 3; ++matrix) {
+      tge::cpu::gemv_q8_0_avx2(args[matrix], config);
+      args[matrix].out = grouped[matrix].data();
+    }
+    tge::cpu::gemv_q8_0_group_avx2(args, 3, config);
+    for (int matrix = 0; matrix < 3; ++matrix) {
+      TGE_CHECK(std::memcmp(reference[matrix].data(), grouped[matrix].data(),
+                            reference[matrix].size() * sizeof(float)) == 0);
+    }
+  };
+  const int normal[3] = {896, 128, 896};
+  check(normal, 4);
+  // 95 rows at 12 threads produce 95 one-row bands per matrix: 285 tasks,
+  // forcing the checked stack-to-heap migration rather than overflowing.
+  const int overflow[3] = {95, 95, 95};
+  check(overflow, 12);
+}
+
 TGE_TEST(q8_rejects_partial_block) {
   // Regression: cols%32 tails were silently dropped while the prefix
   // benchmarked as exact. Both ISAs must fail loudly instead.
@@ -164,6 +207,13 @@ TGE_TEST(q8_rejects_partial_block) {
     threw_dispatched = true;
   }
   TGE_CHECK(threw_dispatched);
+  bool threw_grouped = false;
+  try {
+    tge::cpu::gemv_q8_0_group_avx2(&args, 1, tge::cpu::GemvConfig{1});
+  } catch (...) {
+    threw_grouped = true;
+  }
+  TGE_CHECK(threw_grouped);
 
   tge::cpu::Q8BatchArgs bargs;
   std::vector<float> input(48, 0.5F);

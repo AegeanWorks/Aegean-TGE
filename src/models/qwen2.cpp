@@ -2157,11 +2157,61 @@ bool Qwen2::prime_cache_from_table(int sequence, const int* tokens,
   return true;
 }
 
+#if defined(_MSC_VER)
+#define TGE_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__)
+#define TGE_NOINLINE __attribute__((noinline))
+#else
+#define TGE_NOINLINE
+#endif
+
+TGE_NOINLINE bool Qwen2::grouped_q8_matvec(const Matrix* const* matrices,
+                                           const float* input,
+                                           float* const* outputs,
+                                           int count) const {
+  if (count < 2 || count > 3) {
+    return false;
+  }
+  cpu::Q8GemvArgs args[3];
+  for (int item = 0; item < count; ++item) {
+    if (matrices[item]->type != gguf::TensorType::Q8_0) {
+      return false;
+    }
+    args[item] = {matrices[item]->data, matrices[item]->rows,
+                  matrices[item]->cols, input, outputs[item]};
+  }
+  const cpu::GemvConfig config{decode_threads(), &decode_pool()};
+  const std::uint64_t start = clock_ns();
+  cpu::gemv_q8_0_group_avx2(args, static_cast<std::size_t>(count), config);
+  phase_matvec_ns_ += clock_ns() - start;
+  return true;
+}
+
+#undef TGE_NOINLINE
+
+#if defined(_MSC_VER)
+#define TGE_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__)
+#define TGE_NOINLINE __attribute__((noinline))
+#else
+#define TGE_NOINLINE
+#endif
+
 const float* Qwen2::forward(int token, int position) {
   return forward(0, token, position);
 }
 
 const float* Qwen2::forward(int sequence, int token, int position) {
+  const bool grouped = config_.embedding_length >= 1024 && !scalar_kernels_ &&
+                        !vnni_ && cpu::detect().features.avx2 &&
+                        cpu::detect().features.fma;
+  return grouped ? forward_impl<true>(sequence, token, position)
+                 : forward_impl<false>(sequence, token, position);
+}
+
+template <bool Grouped>
+TGE_NOINLINE const float* Qwen2::forward_impl(int sequence, int token,
+                                              int position) {
   // Guard the public entry point: an out-of-range position would write past the
   // KV cache, an out-of-range token would read past the embedding table, and an
   // out-of-range sequence would address another slot's rows.
@@ -2181,6 +2231,10 @@ const float* Qwen2::forward(int sequence, int token, int position) {
 
   dequant_row(token_embd_, token, x_.data());
 
+  // Grouped and sequential decode are separate template specializations, so
+  // fallback models contain no grouping branches or temporary arrays in their
+  // hot layer loop. Per-layer tensor types still select the exact fallback.
+
   for (int index = 0; index < config_.block_count; ++index) {
     const Layer& layer = layers_[static_cast<std::size_t>(index)];
 
@@ -2188,9 +2242,17 @@ const float* Qwen2::forward(int sequence, int token, int position) {
     const cpu::Q8Quantized q_attn_in =
         vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
     const cpu::Q8Quantized* q_attn_in_ptr = vnni_ ? &q_attn_in : nullptr;
-    matvec(layer.wq, h_.data(), q_.data(), q_attn_in_ptr, kq8d_attn_);
-    matvec(layer.wk, h_.data(), k_.data(), q_attn_in_ptr, kq8d_attn_);
-    matvec(layer.wv, h_.data(), v_.data(), q_attn_in_ptr, kq8d_attn_);
+    bool grouped = false;
+    if constexpr (Grouped) {
+      const Matrix* qkv_matrices[] = {&layer.wq, &layer.wk, &layer.wv};
+      float* qkv_outputs[] = {q_.data(), k_.data(), v_.data()};
+      grouped = grouped_q8_matvec(qkv_matrices, h_.data(), qkv_outputs, 3);
+    }
+    if (!grouped) {
+      matvec(layer.wq, h_.data(), q_.data(), q_attn_in_ptr, kq8d_attn_);
+      matvec(layer.wk, h_.data(), k_.data(), q_attn_in_ptr, kq8d_attn_);
+      matvec(layer.wv, h_.data(), v_.data(), q_attn_in_ptr, kq8d_attn_);
+    }
     for (int axis = 0; axis < dim; ++axis) {
       q_[static_cast<std::size_t>(axis)] += layer.q_bias[axis];
     }
@@ -2238,8 +2300,17 @@ const float* Qwen2::forward(int sequence, int token, int position) {
     const cpu::Q8Quantized q_ffn =
         vnni_ ? quantize_activations(h_.data(), 1, dim) : cpu::Q8Quantized{};
     const cpu::Q8Quantized* q_ffn_ptr = vnni_ ? &q_ffn : nullptr;
-    matvec(layer.w_gate, h_.data(), gate_.data(), q_ffn_ptr);
-    matvec(layer.w_up, h_.data(), up_.data(), q_ffn_ptr);
+    grouped = false;
+    if constexpr (Grouped) {
+      const Matrix* gate_up_matrices[] = {&layer.w_gate, &layer.w_up};
+      float* gate_up_outputs[] = {gate_.data(), up_.data()};
+      grouped =
+          grouped_q8_matvec(gate_up_matrices, h_.data(), gate_up_outputs, 2);
+    }
+    if (!grouped) {
+      matvec(layer.w_gate, h_.data(), gate_.data(), q_ffn_ptr);
+      matvec(layer.w_up, h_.data(), up_.data(), q_ffn_ptr);
+    }
     silu_gated(gate_.data(), up_.data(), ffn);
     const cpu::Q8Quantized q_down =
         vnni_ ? quantize_activations(gate_.data(), 1, ffn) : cpu::Q8Quantized{};
@@ -2253,6 +2324,8 @@ const float* Qwen2::forward(int sequence, int token, int position) {
   rms_norm(h_.data(), x_.data(), output_norm_);
   return output_logits(h_.data());
 }
+
+#undef TGE_NOINLINE
 
 const float* Qwen2::prefill(const int* tokens, int count, int start_position,
                             int sequence) {

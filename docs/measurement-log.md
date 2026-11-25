@@ -6793,3 +6793,46 @@ loss goal. The prototype was reverted in full; CLI, drafter and tests match HEAD
 suite **189/189**. No auto/default code ships and `--speculative` remains opt-in.
 The speed result is retained as a trigger for future work only if a prompt
 family can be proven output-stable across models before delivery.
+
+## 2026-11-25 - Grouped Q8_0 decode projections (KEPT, +2.7-3.4% wide models)
+
+Target: remove synchronization work without changing a single dot product.
+`ThreadPool::parallel_for` measured **4.617 us** for an empty 64-band dispatch.
+Decode makes about 169 dispatches per token; Q/K/V and gate/up account for 72
+separate joins across 24 layers. The new grouped Q8_0 kernel keeps the existing
+row arithmetic and per-matrix `rows/(threads*4)` banding, but publishes all
+projection bands to one dynamic-work region.
+
+The final kernel uses a 256-task stack buffer (normal 12-thread groups need at
+most 144 tasks) with a checked heap fallback for larger configurations. The
+model helper is deliberately out of line. Grouped and sequential decode are
+separate `forward_impl<true/false>` template specializations, selected once per
+token, so fallback models contain no grouping branches or temporary arrays in
+the hot layer loop. Grouping is restricted to embedding width >=1024,
+AVX2+FMA, Q8_0 matrices, and non-VNNI/non-scalar decode. Q4_K, mixed-quant,
+0.5B, scalar and VNNI paths keep their existing kernels.
+
+Baseline `measure.ps1`: memory read 54.40 GB/s; batch output 456.49 GFLOPS.
+Final health gate: memory read 49.30 GB/s; q5_0 x1/x4 clean
+(19.19 -> 96.05 GFLOPS). Final interleaved old/new A/B, greedy natural prose,
+64 tokens, `--threads 12`:
+
+| model | pairs | wins | median old -> grouped | id parity |
+|---|---:|---:|---:|---|
+| Qwen2.5-Coder-1.5B Q8_0 | 12 | 11 | 30.99 -> 31.83 t/s (+2.7%) | identical |
+| train-run16a Q8_0 (1536 wide) | 24 | 20 | 30.84 -> 31.88 t/s (+3.4%) | identical |
+| Qwen2.5-0.5B Q8_0 (fallback) | 12 | 6 | 96.87 -> 97.47 t/s (+0.6%) | identical |
+| SmolLM2-135M Q4_K_M (fallback) | 12 | 6 | 184.42 -> 182.02 t/s (-1.3%) | identical |
+
+The two wide Q8_0 models clear the cross-model bar; the small and K-quant
+controls stay on the original path and sit inside the box's noise band. Earlier
+ungated 0.5B measurements were below the bar (12/24, +2.5% under load; 16/24,
++0.8% on retry), which is why the 1024-wide floor ships. An initial thread-local
+task buffer crashed in the standalone reproducer; it was replaced before any
+model A/B, first by a local vector and finally by the checked stack/heap storage.
+
+Differential coverage: `q8_group_matches_individual_bitwise` compares three
+projections with `memcmp` on both the normal stack path and a 285-task
+stack-to-heap migration; grouped partial-block input must throw like the
+individual kernel. Suite **190/190**, 0 failures. ADR-012 records the kernel
+contract and ADR-013 records the separate forward specializations.

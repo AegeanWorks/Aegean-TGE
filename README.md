@@ -128,6 +128,7 @@ aegean-tge/
 | Concurrent sessions, 0.5B Q8_0 | 2 × 6: 47.4 t/s aggregate; 4 × 6: 53.2 this run, tail forward removed; >1 thread/session safe |
 | Speculative decode, story prompt | 49.9-56.4 t/s vs 28.1-30.1 normal (1.66-2.00x); ids identical; pins per-head |
 | Adaptive greedy verifier | isolated one-token exact drafts use 2 rows; 0.5B 22/24 (+9.7%), 1.5B 12/12 (+5.1%), SmolLM2 Q4_K_M 9/12 (+6.4%); ids identical; periodic control 11/12 (+8.1%) |
+| Grouped Q8_0 decode projections | Q/K/V and gate/up share one pool dispatch on wide models; Coder-1.5B 11/12 (+2.7%), train-run16a 20/24 (+3.4%); ids identical; small/Q4_K_M paths unchanged |
 | VNNI prefill, `--vnni` | 510: 194.5 vs 163.1 t/s (+19%); 2048: +14% on the best run; KL 1.6e-3, top-1 485/497; opt-in |
 | f16 KV, `--kv f16` | 2048: 165.9 vs 145.7 t/s prefill, 35.4 vs 21.7 decode on the best run; KL 1.658e-6, top-1 497/497, ids identical; opt-in |
 | f16 block-prefill row hoist | 2048: attention 1.054x / prefill 1.068x (6 pairs); 4096: 1.123x / 1.109x (4 pairs); ids identical, fidelity unchanged |
@@ -150,7 +151,7 @@ aegean-tge/
 | kq8d opt-in, `--kq8d attn` | f32 KV: mean KL 1.000e-3, top-1 195/199 at 199 positions; 1,199-position top-1 97.83%; decode median 1.017x at 1.2k, not stackable with head+down |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 189 cases, all passing |
+| Tests | 190 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the
