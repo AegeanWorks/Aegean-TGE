@@ -6968,3 +6968,28 @@ id prompts, `--n 1`, 12 decode threads, and checked the generated token:
 
 Generated tokens were identical in every pair. Tests **191/191**, including
 `q8_batch_tiled_matches_shipped_bitwise`. ADR-014 records the contract and scope.
+
+## 2026-11-25 - Tiled-prefill band-factor sweep: output factor 2 rejected
+
+The paired-row kernel inherited band factor 8 from the one-row kernel. A
+temporary parameterized build stayed bit-identical for factors 2/4/8/16 and
+swept every live shape. Layer optima were not uniform: 0.5B FFN favored 8,
+1.5B FFN favored 16, and attention was flat to mixed. The 151936-row output
+shape looked dramatically faster at factor 2 in one standalone window
+(189915.617 -> 73910.367 us), so an output-only factor-2 policy was wired.
+
+Interleaved model A/B against the shipped factor-8 layer tile, deterministic
+id prompts, `--n 1`, all generated tokens identical:
+
+| model / prompt | pairs | wins | median old -> output-tiled | throughput |
+|---|---:|---:|---:|---:|
+| Qwen2.5-0.5B Q8_0, 512 | 12 | 7 | 1361.0 -> 1281.2 ms | +6.2% |
+| Qwen2.5-0.5B Q8_0, 2048 | 12 | 5 | 6247.0 -> 6267.0 ms | -0.3% |
+| Qwen2.5-Coder-1.5B Q8_0, 512 | 8 | 4 | 4098.1 -> 4109.8 ms | -0.3% |
+| Qwen2.5-Coder-1.5B Q8_0, 2048 | 8 | 4 | 20579.9 -> 20478.0 ms | +0.5% |
+
+The standalone output win did not reproduce end to end; three cells were flat
+or negative. Verdict: **reverted in full**. The public band parameter, factor
+loop tests and output policy were removed; source matches HEAD and the suite is
+back to **191/191**. Factor 8 remains the layer default and the output projection
+remains on the original one-row kernel.
