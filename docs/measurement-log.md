@@ -6836,3 +6836,45 @@ projections with `memcmp` on both the normal stack path and a 285-task
 stack-to-heap migration; grouped partial-block input must throw like the
 individual kernel. Suite **190/190**, 0 failures. ADR-012 records the kernel
 contract and ADR-013 records the separate forward specializations.
+
+## 2026-11-25 - Grouped mixed-quant projections: rejected on generalization
+
+Prototype: one dynamic-work dispatch for independent non-Q8 projections, with
+Q4_K/Q6_K fused row dots and exact dequantize-then-dot for Q5_0/Q5_1. Model
+wiring was narrowed twice: first to same-type Q/K plus non-fused gate/up, then
+to Q5_0 gate/up only. Every variant was bit-identical to the individual kernels
+and every compared generated-id sequence matched.
+
+Baseline `measure.ps1`: memory read 56.87 GB/s; q5_0 gate batch 27.44 GFLOPS.
+Microbenchmarks (12 threads, median) showed the mechanism but also its limits:
+
+| shape | individual | grouped |
+|---|---:|---:|
+| SmolLM2 Q5_0 Q/K, 576/192 x 576 | 14.860 us | 14.639 us |
+| SmolLM2 Q5_0 gate/up, 1536 x 576 | 57.031 us | 50.020 us |
+| Qwen Q5_0 Q/K, 896/128 x 896 | 27.238 us | 23.978 us |
+| Qwen Q5_0 gate/up, 4864 x 896 | 238.645 us | 216.017 us |
+| Llama Q4_K Q/K, 3072/1024 x 3072 | 206.466 us | 194.367 us |
+| Llama Q4_K gate/up, 3072 x 8192 | 747.919 us | 759.633 us |
+
+Q4_K gate/up was therefore never grouped. The broad prototype's interleaved
+A/B was positive but inconsistent: Qwen Q4_K_M 18/24 (+2.7%), SmolLM2 8/12
+(+12.5%), Llama 6/8 (+0.4%), Q5_1 Qwen 11/24 (+0.2%). A Qwen retry reached
+19/24 (+5.2%), but Smol reversed to 5/12 (-0.6%).
+
+The final Q5_0-gate/up-only prototype isolated the smallest reliable win:
+
+| model | pairs | wins | median old -> grouped |
+|---|---:|---:|---:|
+| Qwen2.5-0.5B Q4_K_M | 24 | 19 | 61.92 -> 66.21 t/s (+6.9%) |
+| SmolLM2-135M Q4_K_M | 12 | 6 | 129.09 -> 128.76 t/s (-0.3%) |
+| SmolLM2 expanded confirmation | 48 | 31 | 124.61 -> 125.56 t/s (+0.8%) |
+| Qwen2.5-0.5B Q8_0 fallback control | 12 | 4 | 68.03 -> 65.82 t/s (-3.2%) |
+
+Smol's combined Q5-only result was 37/60 (61.7%), far below the ~78% two-model
+bar, while the unchanged small-Q8 sequential control showed a repeatable
+code-layout/load penalty. Verdict: **reverted in full**. The grouped quant
+kernel, model wiring and tests were removed; source matches HEAD and the suite
+is back to **190/190**. No mixed-quant grouping ships. The result narrows the
+next search: synchronization removal helps the 0.5B Qwen Q4_K_M shape, but a
+second stable model is still required before it can be kept.
