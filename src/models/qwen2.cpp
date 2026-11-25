@@ -1123,7 +1123,15 @@ void Qwen2::batch_matvec(const Matrix& weight, const float* input,
     args.input = input;
     args.tokens = tokens;
     args.out = output;
-    kernels().gemv_q8_batch(args, config);
+    const bool tiled = !scalar_kernels_ && !vnni_ &&
+                       cpu::detect().features.avx2 &&
+                       cpu::detect().features.fma && weight.rows <= 16384 &&
+                       weight.rows % 2 == 0 && tokens % 8 == 0;
+    if (tiled) {
+      cpu::gemv_q8_batch_tiled_avx2(args, config);
+    } else {
+      kernels().gemv_q8_batch(args, config);
+    }
     phase_matvec_ns_ += clock_ns() - t0;
     return;
   }

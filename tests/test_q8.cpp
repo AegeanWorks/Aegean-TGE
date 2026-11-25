@@ -139,6 +139,36 @@ TGE_TEST(q8_batch_matches_scalar_reference) {
   expect_q8_batch_matches(64, 896, 16, 15u);
 }
 
+TGE_TEST(q8_batch_tiled_matches_shipped_bitwise) {
+  const int rows[] = {8, 33, 64};
+  const int cols[] = {32, 64, 896};
+  const int tokens[] = {8, 8, 64};
+  for (int shape = 0; shape < 3; ++shape) {
+    const std::vector<std::uint8_t> matrix =
+        make_q8_matrix(rows[shape], cols[shape], 201u + shape);
+    std::vector<float> input(static_cast<std::size_t>(tokens[shape]) * cols[shape]);
+    for (std::size_t index = 0; index < input.size(); ++index) {
+      input[index] = static_cast<float>(index % 29 - 14) / 14.0F;
+    }
+    std::vector<float> reference(input.size() * rows[shape] / cols[shape]);
+    std::vector<float> tiled(reference.size());
+    tge::cpu::Q8BatchArgs args;
+    args.data = matrix.data();
+    args.rows = rows[shape];
+    args.cols = cols[shape];
+    args.input = input.data();
+    args.tokens = tokens[shape];
+    args.out = reference.data();
+    tge::core::ThreadPool pool(4, false);
+    const tge::cpu::GemvConfig config{4, &pool};
+    tge::cpu::gemv_q8_batch_avx2(args, config);
+    args.out = tiled.data();
+    tge::cpu::gemv_q8_batch_tiled_avx2(args, config);
+    TGE_CHECK(std::memcmp(reference.data(), tiled.data(),
+                          reference.size() * sizeof(float)) == 0);
+  }
+}
+
 TGE_TEST(q8_group_matches_individual_bitwise) {
   constexpr int kCols = 896;
   std::vector<float> input(static_cast<std::size_t>(kCols));

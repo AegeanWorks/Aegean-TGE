@@ -6927,3 +6927,44 @@ usually below 1% of output work and even the oracle-seed ceiling saves only
 and a new argmax-only model path. Verdict: **no code written, no speed claim**.
 The experiment is recorded so exact output pruning is not reopened without a
 materially tighter bound or a demonstrated high-quality cheap seed.
+
+## 2026-11-25 - Two-row Q8_0 prefill tile (KEPT, +4.0-11.7%)
+
+Target: prefill throughput without changing any output value. The shipped
+one-row kernel reloads each activation vector for every output row. The new
+2-row x 8-token tile loads each activation vector once and applies it to both
+rows. Row 0 keeps eight named YMM accumulators; row 1 uses eight aligned L1
+scratch accumulators, staying within the 16-YMM register budget. The mul/FMA
+chain and block accumulation order are unchanged, so results are bit-identical.
+
+An initial 2x4 prototype failed the bitwise differential because it reused row
+0's weights for row 1; it was replaced before any model A/B. The final 2x8
+kernel passes tiled and fallback differentials. Standalone shape benchmark,
+16 threads, median:
+
+| shape | shipped | tiled |
+|---|---:|---:|
+| 0.5B attention 896x896x64 | 327.806 us | 252.068 us (-23.1%) |
+| 0.5B FFN 4864x896x64 | 1345.863 us | 1302.840 us (-3.2%) |
+| 0.5B output 151936x896x64 | 122678.420 us | 129653.760 us (+5.7%, rejected) |
+| 1.5B attention 1536x1536x64 | 1997.808 us | 1853.135 us (-7.2%) |
+| 1.5B FFN 8960x1536x64 | 16152.135 us | 14308.568 us (-11.4%) |
+
+The output regression is why tiling is limited to at most 16384 rows. Model
+selection also requires AVX2+FMA, Q8_0, non-VNNI/non-scalar, even rows and a
+token count divisible by eight; every other case keeps the shipped kernel.
+
+Baseline `measure.ps1`: memory read 54.25 GB/s, output batch 423.25 GFLOPS.
+Final health gate: memory read 56.70 GB/s; q5_0 x1/x4 clean
+(25.44 -> 104.11 GFLOPS). Final interleaved old/new prefill A/B used deterministic
+id prompts, `--n 1`, 12 decode threads, and checked the generated token:
+
+| model / prompt | pairs | wins | median prefill old -> tiled | throughput |
+|---|---:|---:|---:|---:|
+| Qwen2.5-0.5B Q8_0, 512 tokens | 12 | 11 | 1176.5 -> 1111.1 ms | **+5.9%** |
+| Qwen2.5-0.5B Q8_0, 2048 tokens | 12 | 11 | 6143.3 -> 5908.4 ms | **+4.0%** |
+| Qwen2.5-Coder-1.5B Q8_0, 512 tokens | 8 | 8 | 4519.3 -> 4047.1 ms | **+11.7%** |
+| Qwen2.5-Coder-1.5B Q8_0, 2048 tokens | 8 | 8 | 21144.9 -> 19401.3 ms | **+9.0%** |
+
+Generated tokens were identical in every pair. Tests **191/191**, including
+`q8_batch_tiled_matches_shipped_bitwise`. ADR-014 records the contract and scope.

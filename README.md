@@ -124,6 +124,7 @@ aegean-tge/
 | **Decode, Qwen2.5-0.5B Q8_0** | **45 t/s short context; 38-39 t/s at 2048 (llama.cpp build 11624: 45.1 / 46.9 t/s, 6 threads)** |
 | **Prompt, 510 tokens** | **166-254 t/s (machine-dependent; llama.cpp: 352.2 t/s, 6 threads)** |
 | **Prompt, 2048 tokens** | **170-200 t/s (this run; llama.cpp: 287.9 t/s, 6 threads)** |
+| 2x8 Q8_0 prefill tile | 0.5B: 512 +5.9%, 2048 +4.0%; 1.5B: 512 +11.7%, 2048 +9.0%; generated tokens identical |
 | Q4_K_M recipe, same window | prefill 88% and decode 80% of Q8_0; first 15 ids identical across models |
 | Concurrent sessions, 0.5B Q8_0 | 2 × 6: 47.4 t/s aggregate; 4 × 6: 53.2 this run, tail forward removed; >1 thread/session safe |
 | Speculative decode, story prompt | 49.9-56.4 t/s vs 28.1-30.1 normal (1.66-2.00x); ids identical; pins per-head |
@@ -151,7 +152,7 @@ aegean-tge/
 | kq8d opt-in, `--kq8d attn` | f32 KV: mean KL 1.000e-3, top-1 195/199 at 199 positions; 1,199-position top-1 97.83%; decode median 1.017x at 1.2k, not stackable with head+down |
 | Quantized formats | Q8_0, Q5_0, Q5_1, Q4_0, Q4_K, Q5_K, Q6_K |
 | Context | 4096 by default, `--context` up to 32768 |
-| Tests | 190 cases, all passing |
+| Tests | 191 cases, all passing |
 
 Greedy output matched llama.cpp token for token on the original arithmetic, on
 Q8_0 and on Q4_K_M (which mixes four quantized formats in one file). On the

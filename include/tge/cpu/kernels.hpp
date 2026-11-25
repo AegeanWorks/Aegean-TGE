@@ -139,6 +139,12 @@ struct Q8Quantized {
 void gemv_q8_batch_avx2(const Q8BatchArgs& args, const GemvConfig& config);
 void gemv_q8_batch_scalar(const Q8BatchArgs& args, const GemvConfig& config);
 
+/// Two-row by eight-token register-blocked Q8_0 prefill. Each activation load
+/// feeds both rows; row 0 keeps eight YMM accumulators while row 1 uses aligned
+/// L1 scratch. Per-token FMA order is identical to the shipped kernel.
+void gemv_q8_batch_tiled_avx2(const Q8BatchArgs& args,
+                              const GemvConfig& config);
+
 /// Quantizes activation rows exactly as `gemv_q8_batch_vnni` does, so a caller
 /// can reuse one conversion across several matrices.
 void quantize_q8_batch(const float* input, int tokens, int cols,
