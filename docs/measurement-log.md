@@ -6878,3 +6878,28 @@ kernel, model wiring and tests were removed; source matches HEAD and the suite
 is back to **190/190**. No mixed-quant grouping ships. The result narrows the
 next search: synchronization removal helps the 0.5B Qwen Q4_K_M shape, but a
 second stable model is still required before it can be kept.
+
+## 2026-11-25 - Zero-copy combined gate/up matvec: rejected
+
+Tensor offsets proved gate/up weights are exactly adjacent in both Qwen and
+SmolLM2 (for example Qwen layer 0 offsets 241814272 and 244810496, each
+2996224 bytes). Prototype: view the pair as one matrix with doubled rows, write
+one adjacent gate/up scratch buffer, and call the existing exact matvec once.
+The check required identical type/columns and exact pointer adjacency; every
+other case kept two calls. No weights were copied and no arithmetic changed.
+
+Interleaved old/new A/B, natural prose, 64 tokens, 12 threads, all ids identical:
+
+| model | pairs | wins | median old -> combined |
+|---|---:|---:|---:|
+| Qwen2.5-0.5B Q4_K_M | 24 | 10 | 65.96 -> 65.16 t/s (-1.2%) |
+| SmolLM2-135M Q4_K_M | 24 | 13 | 151.75 -> 159.77 t/s (+5.3%) |
+| Llama-3.2-3B Q4_K_M | 8 | 2 | 14.59 -> 14.50 t/s (-0.7%) |
+| Qwen2.5-0.5B Q5_K_M | 12 | 7 | 60.89 -> 61.39 t/s (+0.8%) |
+| Qwen2.5-Coder-1.5B Q8_0 | 12 | 4 | 29.88 -> 29.33 t/s (-1.8%) |
+| Qwen2.5-0.5B Q8_0 | 12 | 6 | 63.69 -> 68.04 t/s (+6.8%, noisy) |
+
+Verdict: **reverted in full**. Smol's median improved but only 13/24 pairs won;
+Qwen Q4_K_M, Llama and wide Q8 regressed. A single larger matvec changes band
+granularity and does not preserve the separate calls' load balance. Source
+matches HEAD again, suite **190/190**. No combined-view code ships.
