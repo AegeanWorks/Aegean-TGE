@@ -6903,3 +6903,27 @@ Verdict: **reverted in full**. Smol's median improved but only 13/24 pairs won;
 Qwen Q4_K_M, Llama and wide Q8 regressed. A single larger matvec changes band
 granularity and does not preserve the separate calls' load balance. Source
 matches HEAD again, suite **190/190**. No combined-view code ships.
+
+## 2026-11-25 - Exact output-argmax pruning: rejected before implementation
+
+The Q8_0 output projection is ~145 MiB of the ~639 MiB weight stream. A
+standalone simulator used the real Qwen2.5-0.5B output tensor (151936 rows,
+896 columns, 28 blocks) and eight deterministic normal activation vectors.
+For every row/block it precomputed the upward L2 bound
+`abs(scale) * sqrt(sum(q*q))`; at checkpoints 4/8/12/16/20/24/27 it added the
+remaining bound dotted with activation L2 energies plus a 1e-4 relative
+rounding margin. A row was skipped only when that upper bound could not beat
+the current best. The full exact dot remained the reference.
+
+| seed strategy | rows pruned | output blocks evaluated |
+|---|---:|---:|
+| exact best row precomputed (unrealistic ceiling) | 151773-151917 / 151935 | **87.61-93.14%** |
+| token-id row seed (realistic cheap seed) | 917-127634 / 151935 | **96.96-99.98%** |
+
+The explicit differential matched the full argmax in **16/16** cases, including
+first-index semantics. Correctness is feasible, but the realistic saving is
+usually below 1% of output work and even the oracle-seed ceiling saves only
+7-12%. That is far too small to repay bound-table memory, checkpoint arithmetic
+and a new argmax-only model path. Verdict: **no code written, no speed claim**.
+The experiment is recorded so exact output pruning is not reopened without a
+materially tighter bound or a demonstrated high-quality cheap seed.
